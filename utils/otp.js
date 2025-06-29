@@ -1,7 +1,7 @@
 const { Resend } = require('resend');
-require('dotenv').config();
 
-const resend = new Resend(process.env.RESEND_API_KEY);
+const resend = new Resend("re_4aaRiXH6_6juiyFHsJTBa3CujM6bU5qTP"); // kamu udah bilang OK tempel langsung
+
 const otpStore = {};
 
 function generateOtp(email) {
@@ -13,9 +13,9 @@ function generateOtp(email) {
 
   resend.emails
     .send({
-      from: process.env.RESEND_FROM_EMAIL,
+      from: "Your App <onboarding@resend.dev>",
       to: [email],
-      subject: 'Your OTP Code',
+      subject: "Your OTP Code",
       html: `
         <p>Your OTP code is:</p>
         <h2>${code}</h2>
