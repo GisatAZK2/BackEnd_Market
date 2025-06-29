@@ -1,38 +1,33 @@
-const nodemailer = require('nodemailer');
+const { Resend } = require('resend');
 require('dotenv').config();
 
+const resend = new Resend(process.env.RESEND_API_KEY);
 const otpStore = {};
-
-const transporter = nodemailer.createTransport({
-  service: 'gmail',
-  auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS,
-  },
-});
 
 function generateOtp(email) {
   const code = Math.floor(100000 + Math.random() * 900000).toString();
-  otpStore[email] = { code, expires: Date.now() + 5 * 60 * 1000 };
-
-  const mailOptions = {
-    from: `"OTP Service" <${process.env.EMAIL_USER}>`,
-    to: email,
-    subject: 'Your OTP Code',
-    html: `
-      <p>Your OTP code is:</p>
-      <h2>${code}</h2>
-      <p>This code will expire in 5 minutes.</p>
-    `,
+  otpStore[email] = {
+    code,
+    expires: Date.now() + 5 * 60 * 1000, // 5 menit
   };
 
-  transporter.sendMail(mailOptions, (error, info) => {
-    if (error) {
-      console.error('❌ Failed to send OTP email:', error);
-    } else {
-      console.log(`✅ OTP email sent to ${email} (${info.response})`);
-    }
-  });
+  resend.emails
+    .send({
+      from: process.env.RESEND_FROM_EMAIL,
+      to: [email],
+      subject: 'Your OTP Code',
+      html: `
+        <p>Your OTP code is:</p>
+        <h2>${code}</h2>
+        <p>This code will expire in 5 minutes.</p>
+      `,
+    })
+    .then(() => {
+      console.log(`✅ OTP sent to ${email}`);
+    })
+    .catch((error) => {
+      console.error('❌ Failed to send OTP:', error?.message || error);
+    });
 
   return code;
 }
@@ -40,8 +35,12 @@ function generateOtp(email) {
 function verifyOtp(email, code) {
   const record = otpStore[email];
   if (!record) return false;
+
   const isValid = record.code === code && Date.now() < record.expires;
-  if (isValid) delete otpStore[email];
+  if (isValid) {
+    delete otpStore[email];
+  }
+
   return isValid;
 }
 
