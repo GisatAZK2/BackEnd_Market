@@ -27,7 +27,9 @@
     "express": "^5.1.0",
     "firebase": "^11.9.1",
     "firebase-admin": "^13.4.0",
+    "imagekit": "^6.0.0",
     "install": "^0.13.0",
+    "multer": "^2.0.1",
     "nodemailer": "^7.0.3",
     "npm": "^11.4.2",
     "resend": "^4.6.0"
