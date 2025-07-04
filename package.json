@@ -30,7 +30,7 @@
     "imagekit": "^6.0.0",
     "install": "^0.13.0",
     "multer": "^2.0.1",
-    "node-fetch": "^3.3.2",
+    "node-fetch": "^2.7.0",
     "nodemailer": "^7.0.3",
     "npm": "^11.4.2",
     "redis": "^5.5.6",
