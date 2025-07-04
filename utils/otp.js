@@ -1,12 +1,10 @@
 const nodemailer = require('nodemailer');
 
-// Email dan password aplikasi
 const FROM_EMAIL = 'gisatazk2@gmail.com';
-const EMAIL_PASSWORD = 'kpld krrk ratp hbyl'; // Gunakan password aplikasi Gmail
+const EMAIL_PASSWORD = 'kpld krrk ratp hbyl'; // Password aplikasi Gmail
 
 const otpStore = {};
 
-// Setup nodemailer
 const transporter = nodemailer.createTransport({
   service: 'gmail',
   auth: {
@@ -20,53 +18,26 @@ function generateOtp(email) {
 
   otpStore[email] = {
     code,
-    expires: Date.now() + 5 * 60 * 1000,
+    expires: Date.now() + 5 * 60 * 1000, // 5 menit
   };
 
   const mailOptions = {
-  from: FROM_EMAIL,
-  to: email,
-  subject: '🕒 Your OTP Code - Expires in 5 Minutes',
-  html: `
-    <div style="font-family: Arial, sans-serif; background-color: #f9f9f9; padding: 30px; border-radius: 10px; max-width: 500px; margin: auto; box-shadow: 0 0 10px rgba(0,0,0,0.1);">
-      <h2 style="color: #333;">🔐 Your One-Time Password (OTP)</h2>
-      <p style="font-size: 16px; color: #555;">Use the code below to continue:</p>
-      <div style="font-size: 32px; font-weight: bold; color: #4CAF50; letter-spacing: 8px; margin: 20px 0; text-align: center;">
-        ${code}
+    from: FROM_EMAIL,
+    to: email,
+    subject: '🕒 Your OTP Code - Expires in 5 Minutes',
+    html: `
+      <div style="font-family: Arial; padding: 20px; background: #f9f9f9;">
+        <h2>🔐 Your OTP Code</h2>
+        <p>Use this code to verify:</p>
+        <div style="font-size: 32px; font-weight: bold;">${code}</div>
+        <p>This code expires in 5 minutes.</p>
       </div>
-      <p style="font-size: 14px; color: #999; text-align: center;">This code will expire in:</p>
-      
-      <!-- Gimmick: Simulated countdown bar -->
-      <div style="margin: 20px auto; background: #eee; border-radius: 20px; overflow: hidden; height: 10px; width: 100%;">
-        <div style="
-          width: 100%;
-          height: 100%;
-          background: linear-gradient(to right, #f44336, #ff9800);
-          animation: countdown 300s linear forwards;
-        "></div>
-      </div>
-      
-      <style>
-        @keyframes countdown {
-          from { width: 100%; }
-          to { width: 0%; }
-        }
-      </style>
-      
-      <p style="font-size: 12px; color: #aaa; text-align: center; margin-top: 30px;">
-        If you didn’t request this, you can safely ignore this email.
-      </p>
-    </div>
-  `
-};
+    `,
+  };
 
-
-  transporter.sendMail(mailOptions, (error, info) => {
-    if (error) {
-      console.error('❌ Failed to send OTP:', error.message);
-    } else {
-      console.log(`✅ OTP sent to ${email}: ${info.response}`);
-    }
+  transporter.sendMail(mailOptions, (err, info) => {
+    if (err) console.error('Send OTP failed:', err.message);
+    else console.log(`OTP sent to ${email}`);
   });
 
   return code;
@@ -77,8 +48,36 @@ function verifyOtp(email, code) {
   if (!record) return false;
 
   const isValid = record.code === code && Date.now() < record.expires;
-  if (isValid) delete otpStore[email];
+  if (isValid) delete otpStore[email]; // Hapus OTP setelah sukses
   return isValid;
 }
 
-module.exports = { generateOtp, verifyOtp };
+function sendPasswordResetEmail(email, resetLink) {
+  const mailOptions = {
+    from: FROM_EMAIL,
+    to: email,
+    subject: '🔁 Reset Your Password',
+    html: `
+      <div style="font-family: Arial; padding: 20px; background: #f9f9f9;">
+        <h2>Reset Password</h2>
+        <p>Click link below to reset:</p>
+        <a href="${resetLink}" style="color: white; background: #4CAF50; padding: 10px 15px; text-decoration: none; border-radius: 5px;">Reset Password</a>
+        <p>This link expires soon.</p>
+      </div>
+    `,
+  };
+
+  return new Promise((resolve, reject) => {
+    transporter.sendMail(mailOptions, (err, info) => {
+      if (err) {
+        console.error('Send reset link failed:', err.message);
+        reject(err);
+      } else {
+        console.log(`Reset link sent to ${email}`);
+        resolve(info);
+      }
+    });
+  });
+}
+
+module.exports = { generateOtp, verifyOtp, sendPasswordResetEmail };
