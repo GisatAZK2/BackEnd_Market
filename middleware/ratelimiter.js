@@ -11,28 +11,27 @@ module.exports = async function rateLimiter(req, res, next) {
   const apiKey = req.headers['x-api-key'];
   if (!apiKey) return res.status(401).json({ error: 'API key is required' });
 
-  
   const ip =
     req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.ip;
 
-  
   const key = `rate-limit:${apiKey}:${ip}`;
-  const now = Date.now();
+  const limit = 60; 
+  const windowSeconds = 60; 
 
   try {
-    const lastRequest = await redisClient.get(key);
+    const current = await redisClient.incr(key);
 
-    if (lastRequest) {
-      const secondsPassed = (now - parseInt(lastRequest)) / 1000;
-      if (secondsPassed < 30) {
-        return res.status(429).json({
-          error: `Rate limit exceeded. Please wait ${Math.ceil(30 - secondsPassed)} seconds.`,
-        });
-      }
+    
+    if (current === 1) {
+      await redisClient.expire(key, windowSeconds);
     }
 
-
-    await redisClient.set(key, now, { EX: 10 }); 
+    if (current > limit) {
+      const ttl = await redisClient.ttl(key);
+      return res.status(429).json({
+        error: `Too many requests. Try again in ${ttl} seconds.`,
+      });
+    }
 
     next();
   } catch (err) {
