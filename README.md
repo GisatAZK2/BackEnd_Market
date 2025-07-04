@@ -157,11 +157,9 @@ Verifikasi Firebase ID token + cek apakah user sudah verifikasi OTP.
 
 ---
 
-### 🗜️ Wilayah Indonesia
+### 🖜️ Wilayah Indonesia
 
 Ambil data provinsi, kabupaten, kecamatan, dan kelurahan dari EMSIFA API.
-
----
 
 #### GET `/wilayah/provinsi`
 
@@ -221,7 +219,37 @@ Ambil data provinsi, kabupaten, kecamatan, dan kelurahan dari EMSIFA API.
 
 ---
 
-### 🛙️ Seller
+### 🗹️ Seller
+
+---
+
+## 💡 Instruksi Frontend: Ambil Koordinat Lokasi
+
+Gunakan Geolocation API untuk mengisi latitude dan longitude:
+
+```js
+navigator.geolocation.getCurrentPosition(
+  (position) => {
+    const lat = position.coords.latitude;
+    const lng = position.coords.longitude;
+
+    formData.append("latitude", lat);
+    formData.append("longitude", lng);
+
+    // Lanjut kirim data ke backend
+    fetch('/seller', {
+      method: 'POST',
+      headers: {
+        'Authorization': 'Bearer ' + idToken
+      },
+      body: formData,
+    });
+  },
+  (error) => {
+    alert("Tidak bisa mengambil lokasi: " + error.message);
+  }
+);
+```
 
 ---
 
@@ -229,7 +257,7 @@ Ambil data provinsi, kabupaten, kecamatan, dan kelurahan dari EMSIFA API.
 
 Pendaftaran akun seller. Wajib kirim gambar toko (`multipart/form-data`).
 
-**Headers:**\
+**Headers:**
 `Content-Type: multipart/form-data`
 
 **Form Data:**
@@ -278,7 +306,6 @@ Pendaftaran akun seller. Wajib kirim gambar toko (`multipart/form-data`).
 
 ## 📌 Catatan
 
-- Semua email akan diverifikasi menggunakan OTP sebelum akun bisa digunakan.
-- Token JWT dari Firebase harus diverifikasi sebelum mengakses fitur protected (gunakan endpoint `/verify-token`).
-- Pastikan Anda menyimpan `serviceAccountKey.json` untuk Firebase di folder `./`.
-
+* Semua email akan diverifikasi menggunakan OTP sebelum akun bisa digunakan.
+* Token JWT dari Firebase harus diverifikasi sebelum mengakses fitur protected (gunakan endpoint `/verify-token`).
+* Pastikan Anda menyimpan `serviceAccountKey.json` untuk Firebase di folder `./`.
