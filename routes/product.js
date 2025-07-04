@@ -120,4 +120,68 @@ router.post('/upload', upload.single('productImage'), async (req, res) => {
   }
 });
 
+router.get('/products/nearby/:userId', async (req, res) => {
+  const { userId } = req.params;
+
+  if (!userId) {
+    return res.status(400).json({ message: '❌ userId wajib diisi' });
+  }
+
+  try {
+    // 🔍 Ambil user
+    const userRef = usersCollection.doc(userId);
+    const userSnap = await userRef.get();
+
+    if (!userSnap.exists) {
+      return res.status(404).json({ message: '❌ User tidak ditemukan' });
+    }
+
+    const userData = userSnap.data();
+    const userCity = userData.city;
+
+    if (!userCity) {
+      return res.status(400).json({ message: '❌ User tidak memiliki informasi kota' });
+    }
+
+    // 🔍 Cari semua seller di kota yang sama
+    const sellersSnap = await usersCollection
+      .where('role', '==', 'seller')
+      .where('city', '==', userCity)
+      .get();
+
+    const products = [];
+
+    for (const sellerDoc of sellersSnap.docs) {
+      const sellerId = sellerDoc.id;
+
+      // Ambil produk dari subcollection seller ini
+      const productSnap = await usersCollection
+        .doc(sellerId)
+        .collection('products')
+        .get();
+
+      productSnap.forEach((doc) => {
+        products.push({
+          id: doc.id,
+          sellerId,
+          sellerName: sellerDoc.data().storeName || sellerDoc.data().name,
+          ...doc.data()
+        });
+      });
+    }
+
+    return res.status(200).json({
+      message: `✅ Ditemukan ${products.length} produk di kota ${userCity}`,
+      city: userCity,
+      products
+    });
+  } catch (error) {
+    return res.status(500).json({
+      message: '❌ Gagal mengambil produk terdekat',
+      error: error.message
+    });
+  }
+});
+ 
+
 module.exports = router;
