@@ -1,4 +1,4 @@
-// server-config.js
+
 const firebaseConfig = {
   apiKey: "AIzaSyDq-9bikCBHU_kaFcT5XLUyVOjGkXowsOI",
   authDomain: "market-5fdfa.firebaseapp.com",
