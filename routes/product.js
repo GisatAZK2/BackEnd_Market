@@ -5,8 +5,10 @@ const ImageKit = require('imagekit');
 const multer = require('multer');
 
 const router = express.Router();
+
+// 🔒 Setup multer
 const upload = multer({
-  limits: { fileSize: 5 * 1024 * 1024 }, // Maks 5MB
+  limits: { fileSize: 5 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
     if (file.mimetype === 'image/jpeg' || file.mimetype === 'image/png') {
       cb(null, true);
@@ -16,7 +18,7 @@ const upload = multer({
   }
 });
 
-// Firebase init
+// 🔐 Firebase init
 if (!admin.apps.length) {
   const serviceAccount = require(path.join(__dirname, '../serviceAccountKey.json'));
   admin.initializeApp({
@@ -27,18 +29,18 @@ if (!admin.apps.length) {
 const db = admin.firestore();
 const usersCollection = db.collection('users');
 
-// ImageKit init
+// 🔑 ImageKit init
 const imagekit = new ImageKit({
   publicKey: 'public_VCP7UXW5lvwXDkeSZdRukwnwTRE=',
   privateKey: 'private_bX2cSUtxrbNhR5ebUqFKESLanSA=',
   urlEndpoint: 'https://ik.imagekit.io/nyjh7ps82',
 });
 
-// Helper untuk slugify nama produk jadi nama folder aman
+// Helper slugify
 const slugify = (str) =>
   str.toLowerCase().replace(/[^\w\s-]/g, '').replace(/\s+/g, '-');
 
-// 🔹 POST /product/upload
+// 🔹 Upload produk
 router.post('/upload', upload.single('productImage'), async (req, res) => {
   const {
     sellerId,
@@ -47,11 +49,9 @@ router.post('/upload', upload.single('productImage'), async (req, res) => {
     productPrice
   } = req.body;
 
-  // Validasi data
-  if (!sellerId) return res.status(400).json({ message: '❌ sellerId wajib diisi' });
-  if (!productName) return res.status(400).json({ message: '❌ Nama produk wajib diisi' });
-  if (!productDescription) return res.status(400).json({ message: '❌ Deskripsi produk wajib diisi' });
-  if (!productPrice) return res.status(400).json({ message: '❌ Harga produk wajib diisi' });
+  if (!sellerId || !productName || !productDescription || !productPrice) {
+    return res.status(400).json({ message: '❌ Semua field wajib diisi' });
+  }
 
   const priceNum = parseFloat(productPrice);
   if (isNaN(priceNum) || priceNum <= 0) {
@@ -59,11 +59,10 @@ router.post('/upload', upload.single('productImage'), async (req, res) => {
   }
 
   if (!req.file) {
-    return res.status(400).json({ message: '❌ Gambar produk wajib diunggah (JPEG/PNG maks 5MB)' });
+    return res.status(400).json({ message: '❌ Gambar produk wajib diunggah' });
   }
 
   try {
-    // 🔍 Ambil data seller dari Firestore
     const sellerRef = usersCollection.doc(sellerId);
     const sellerDoc = await sellerRef.get();
 
@@ -75,7 +74,6 @@ router.post('/upload', upload.single('productImage'), async (req, res) => {
     const sellerEmail = sellerData.email || 'unknown@email.com';
     const sellerName = sellerData.name || 'Unknown Seller';
 
-    // 🔁 Cek apakah produk dengan nama sama sudah ada
     const existingProducts = await sellerRef
       .collection('products')
       .where('productName', '==', productName)
@@ -86,18 +84,13 @@ router.post('/upload', upload.single('productImage'), async (req, res) => {
       return res.status(409).json({ message: '❌ Nama produk sudah terdaftar oleh seller ini' });
     }
 
-    // 🗂️ Buat folder unik per produk
-    const productFolderName = slugify(productName);
-    const productFolder = `/products/${sellerId}/${productFolderName}`;
-
-    // ⬆️ Upload ke ImageKit
+    const productFolder = `/products/${sellerId}/${slugify(productName)}`;
     const uploadResponse = await imagekit.upload({
       file: req.file.buffer,
       fileName: req.file.originalname,
       folder: productFolder,
     });
 
-    // 🔖 Data produk
     const productData = {
       productName,
       productDescription,
@@ -120,68 +113,99 @@ router.post('/upload', upload.single('productImage'), async (req, res) => {
   }
 });
 
-router.get('/products/nearby/:userId', async (req, res) => {
-  const { userId } = req.params;
 
-  if (!userId) {
-    return res.status(400).json({ message: '❌ userId wajib diisi' });
+const haversineDistance = (lat1, lon1, lat2, lon2) => {
+  const toRad = (value) => (value * Math.PI) / 180;
+  const R = 6371;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) *
+    Math.sin(dLon / 2) ** 2;
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+};
+
+
+let nearbyCache = null;
+let lastCacheTime = 0;
+const CACHE_TTL = 60 * 1000; // 60 detik
+
+router.get('/nearby-by-location', async (req, res) => {
+  const { lat, lng } = req.query;
+
+  if (!lat || !lng) {
+    return res.status(400).json({ message: '❌ lat dan lng wajib diisi di query parameter' });
+  }
+
+  const userLat = parseFloat(lat);
+  const userLng = parseFloat(lng);
+
+  if (isNaN(userLat) || isNaN(userLng)) {
+    return res.status(400).json({ message: '❌ Koordinat tidak valid' });
+  }
+
+  // Gunakan cache jika masih valid
+  if (nearbyCache && Date.now() - lastCacheTime < CACHE_TTL) {
+    return res.status(200).json(nearbyCache);
   }
 
   try {
-    // 🔍 Ambil user
-    const userRef = usersCollection.doc(userId);
-    const userSnap = await userRef.get();
-
-    if (!userSnap.exists) {
-      return res.status(404).json({ message: '❌ User tidak ditemukan' });
-    }
-
-    const userData = userSnap.data();
-    const userCity = userData.city;
-
-    if (!userCity) {
-      return res.status(400).json({ message: '❌ User tidak memiliki informasi kota' });
-    }
-
-    // 🔍 Cari semua seller di kota yang sama
-    const sellersSnap = await usersCollection
-      .where('role', '==', 'seller')
-      .where('city', '==', userCity)
-      .get();
-
+    const sellersSnap = await usersCollection.where('role', '==', 'seller').get();
     const products = [];
 
     for (const sellerDoc of sellersSnap.docs) {
-      const sellerId = sellerDoc.id;
+      const sellerData = sellerDoc.data();
+      const sellerLocation = sellerData.storeLocation;
 
-      // Ambil produk dari subcollection seller ini
-      const productSnap = await usersCollection
-        .doc(sellerId)
-        .collection('products')
-        .get();
+      if (!sellerLocation) continue;
 
-      productSnap.forEach((doc) => {
-        products.push({
-          id: doc.id,
-          sellerId,
-          sellerName: sellerDoc.data().storeName || sellerDoc.data().name,
-          ...doc.data()
-        });
-      });
+      const distance = haversineDistance(
+        userLat, userLng,
+        sellerLocation.latitude, sellerLocation.longitude
+      );
+
+      if (distance <= 40) {
+        const productSnap = await usersCollection
+          .doc(sellerDoc.id)
+          .collection('products')
+          .get();
+
+        productSnap.forEach((doc) => {
+  const data = doc.data();
+
+  delete data.distanceInKm; 
+
+  products.push({
+    id: doc.id,
+    sellerId: sellerDoc.id,
+    sellerName: sellerData.storeName || sellerData.name,
+    ...data,
+    distanceInKm: +distance.toFixed(2) 
+    
+  });
+});
+
+      }
     }
 
-    return res.status(200).json({
-      message: `✅ Ditemukan ${products.length} produk di kota ${userCity}`,
-      city: userCity,
+    const result = {
+      message: `✅ Ditemukan ${products.length} produk dalam radius 40 km`,
       products
-    });
+    };
+
+    // Simpan ke cache
+    nearbyCache = result;
+    lastCacheTime = Date.now();
+
+    return res.status(200).json(result);
   } catch (error) {
     return res.status(500).json({
-      message: '❌ Gagal mengambil produk terdekat',
+      message: '❌ Gagal mengambil produk berdasarkan lokasi',
       error: error.message
     });
   }
 });
- 
 
 module.exports = router;
