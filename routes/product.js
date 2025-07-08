@@ -113,7 +113,7 @@ router.post('/upload', upload.single('productImage'), async (req, res) => {
   }
 });
 
-
+// 🔍 Haversine untuk jarak
 const haversineDistance = (lat1, lon1, lat2, lon2) => {
   const toRad = (value) => (value * Math.PI) / 180;
   const R = 6371;
@@ -127,11 +127,12 @@ const haversineDistance = (lat1, lon1, lat2, lon2) => {
   return R * c;
 };
 
-
-let nearbyCache = null;
+// 🔁 Cache produk mentah
+let rawProductsCache = null;
 let lastCacheTime = 0;
 const CACHE_TTL = 60 * 1000; // 60 detik
 
+// 🔹 Produk terdekat
 router.get('/nearby-by-location', async (req, res) => {
   const { lat, lng } = req.query;
 
@@ -146,63 +147,108 @@ router.get('/nearby-by-location', async (req, res) => {
     return res.status(400).json({ message: '❌ Koordinat tidak valid' });
   }
 
-  // Gunakan cache jika masih valid
-  if (nearbyCache && Date.now() - lastCacheTime < CACHE_TTL) {
-    return res.status(200).json(nearbyCache);
-  }
-
   try {
-    const sellersSnap = await usersCollection.where('role', '==', 'seller').get();
-    const products = [];
+    // Ambil cache jika tidak valid
+    if (!rawProductsCache || Date.now() - lastCacheTime > CACHE_TTL) {
+      rawProductsCache = [];
+      const seenIds = new Set();
 
-    for (const sellerDoc of sellersSnap.docs) {
-      const sellerData = sellerDoc.data();
-      const sellerLocation = sellerData.storeLocation;
+      const sellersSnap = await usersCollection.where('role', '==', 'seller').get();
 
-      if (!sellerLocation) continue;
+      for (const sellerDoc of sellersSnap.docs) {
+        const sellerData = sellerDoc.data();
+        const sellerLocation = sellerData.storeLocation;
+        if (!sellerLocation) continue;
 
-      const distance = haversineDistance(
-        userLat, userLng,
-        sellerLocation.latitude, sellerLocation.longitude
-      );
-
-      if (distance <= 40) {
         const productSnap = await usersCollection
           .doc(sellerDoc.id)
           .collection('products')
           .get();
 
         productSnap.forEach((doc) => {
-  const data = doc.data();
+          if (seenIds.has(doc.id)) return; // ❌ Skip duplikat
+          seenIds.add(doc.id);
 
-  delete data.distanceInKm; 
-
-  products.push({
-    id: doc.id,
-    sellerId: sellerDoc.id,
-    sellerName: sellerData.storeName || sellerData.name,
-    ...data,
-    distanceInKm: +distance.toFixed(2) 
-    
-  });
-});
-
+          const data = doc.data();
+          rawProductsCache.push({
+            id: doc.id,
+            sellerId: sellerDoc.id,
+            sellerName: sellerData.storeName || sellerData.name,
+            sellerLocation,
+            ...data
+          });
+        });
       }
+
+      lastCacheTime = Date.now();
     }
 
-    const result = {
-      message: `✅ Ditemukan ${products.length} produk dalam radius 40 km`,
-      products
-    };
+    const nearbyProducts = rawProductsCache
+      .map((product) => {
+        const { sellerLocation } = product;
+        const distance = haversineDistance(
+          userLat,
+          userLng,
+          sellerLocation.latitude,
+          sellerLocation.longitude
+        );
+        return {
+          ...product,
+          distanceInKm: +distance.toFixed(2)
+        };
+      })
+      .filter((p) => p.distanceInKm <= 40);
 
-    // Simpan ke cache
-    nearbyCache = result;
-    lastCacheTime = Date.now();
-
-    return res.status(200).json(result);
+    return res.status(200).json({
+      message: `✅ Ditemukan ${nearbyProducts.length} produk dalam radius 40 km`,
+      products: nearbyProducts
+    });
   } catch (error) {
     return res.status(500).json({
       message: '❌ Gagal mengambil produk berdasarkan lokasi',
+      error: error.message
+    });
+  }
+});
+
+// 🔹 Semua produk (tanpa lokasi) + filter duplikat
+router.get('/allproduct', async (req, res) => {
+  try {
+    const sellersSnap = await usersCollection.where('role', '==', 'seller').get();
+
+    const allProducts = [];
+    const seenIds = new Set();
+
+    for (const sellerDoc of sellersSnap.docs) {
+      const sellerData = sellerDoc.data();
+
+      const productSnap = await usersCollection
+        .doc(sellerDoc.id)
+        .collection('products')
+        .get();
+
+      productSnap.forEach((doc) => {
+        if (seenIds.has(doc.id)) return;
+        seenIds.add(doc.id);
+
+        const data = doc.data();
+        allProducts.push({
+          id: doc.id,
+          sellerId: sellerDoc.id,
+          sellerName: sellerData.storeName || sellerData.name,
+          sellerLocation: sellerData.storeLocation || null,
+          ...data,
+        });
+      });
+    }
+
+    return res.status(200).json({
+      message: `✅ Ditemukan ${allProducts.length} produk`,
+      products: allProducts
+    });
+  } catch (error) {
+    return res.status(500).json({
+      message: '❌ Gagal mengambil semua produk',
       error: error.message
     });
   }
