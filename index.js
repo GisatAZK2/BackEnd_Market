@@ -6,6 +6,7 @@ const rateLimiter = require('./middleware/ratelimiter');
 const authRoutes = require('./routes/auth');
 const forumpendaftaran = require('./routes/forum-pendaftaran');
 const product = require('./routes/product');
+const utilities = require('./routes/utilities')
 require('dotenv').config();
 
 const app = express();
@@ -27,7 +28,8 @@ app.use((req, res, next) => {
 
 // Routes
 app.use('/auth', authRoutes);
-app.use('/forum-pendaftaran', forumpendaftaran); // 👈 Tanpa rateLimiter
+app.use('/forum-pendaftaran', forumpendaftaran); 
+app.use('/utilities',utilities);
 app.use('/product', product);
 
 // Start server
