@@ -1,9 +1,10 @@
+// 📦 REFACTOR: forum-pendaftaran.js dengan MongoDB
 const express = require('express');
-const admin = require('firebase-admin');
 const path = require('path');
 const ImageKit = require('imagekit');
 const multer = require('multer');
 const fetch = require('node-fetch');
+const Seller = require('../models/Seller'); // 👈 Mongoose model Seller
 
 const router = express.Router();
 
@@ -19,17 +20,6 @@ const upload = multer({
   }
 });
 
-// 🔒 Inisialisasi Firebase
-if (!admin.apps.length) {
-  const serviceAccount = require(path.join(__dirname, './serviceAccountKey.json'));
-  admin.initializeApp({
-    credential: admin.credential.cert(serviceAccount),
-  });
-}
-
-const db = admin.firestore();
-const usersCollection = db.collection('users');
-
 // 🔑 ImageKit config
 const imagekit = new ImageKit({
   publicKey: 'public_VCP7UXW5lvwXDkeSZdRukwnwTRE=',
@@ -37,7 +27,7 @@ const imagekit = new ImageKit({
   urlEndpoint: 'https://ik.imagekit.io/nyjh7ps82',
 });
 
-// 🔹 GET /wilayah/provinsi
+// 🌍 Wilayah API
 router.get('/wilayah/provinsi', async (req, res) => {
   try {
     const response = await fetch('https://www.emsifa.com/api-wilayah-indonesia/api/provinces.json');
@@ -48,11 +38,9 @@ router.get('/wilayah/provinsi', async (req, res) => {
   }
 });
 
-// 🔹 GET /wilayah/kabupaten/:provinsiId
 router.get('/wilayah/kabupaten/:provinsiId', async (req, res) => {
-  const { provinsiId } = req.params;
   try {
-    const response = await fetch(`https://www.emsifa.com/api-wilayah-indonesia/api/regencies/${provinsiId}.json`);
+    const response = await fetch(`https://www.emsifa.com/api-wilayah-indonesia/api/regencies/${req.params.provinsiId}.json`);
     const data = await response.json();
     res.json(data);
   } catch (err) {
@@ -60,11 +48,9 @@ router.get('/wilayah/kabupaten/:provinsiId', async (req, res) => {
   }
 });
 
-// 🔹 GET /wilayah/kecamatan/:kabupatenId
 router.get('/wilayah/kecamatan/:kabupatenId', async (req, res) => {
-  const { kabupatenId } = req.params;
   try {
-    const response = await fetch(`https://www.emsifa.com/api-wilayah-indonesia/api/districts/${kabupatenId}.json`);
+    const response = await fetch(`https://www.emsifa.com/api-wilayah-indonesia/api/districts/${req.params.kabupatenId}.json`);
     const data = await response.json();
     res.json(data);
   } catch (err) {
@@ -72,11 +58,9 @@ router.get('/wilayah/kecamatan/:kabupatenId', async (req, res) => {
   }
 });
 
-// 🔹 GET /wilayah/kelurahan/:kecamatanId
 router.get('/wilayah/kelurahan/:kecamatanId', async (req, res) => {
-  const { kecamatanId } = req.params;
   try {
-    const response = await fetch(`https://www.emsifa.com/api-wilayah-indonesia/api/villages/${kecamatanId}.json`);
+    const response = await fetch(`https://www.emsifa.com/api-wilayah-indonesia/api/villages/${req.params.kecamatanId}.json`);
     const data = await response.json();
     res.json(data);
   } catch (err) {
@@ -84,21 +68,11 @@ router.get('/wilayah/kelurahan/:kecamatanId', async (req, res) => {
   }
 });
 
-// 🔹 POST /forum-pendaftaran/seller
+// 🧾 POST /forum-pendaftaran/seller
 router.post('/seller', upload.single('storeImage'), async (req, res) => {
   const {
-    email,
-    name,
-    businessName,
-    phone,
-    storeName,
-    storeAddress,
-    kelurahan,
-    kecamatan,
-    kabupaten,
-    provinsi,
-    latitude,
-    longitude
+    email, name, businessName, phone, storeName, storeAddress,
+    kelurahan, kecamatan, kabupaten, provinsi, latitude, longitude
   } = req.body;
 
   if (!email || !name || !businessName || !phone || !storeName || !storeAddress ||
@@ -113,8 +87,8 @@ router.post('/seller', upload.single('storeImage'), async (req, res) => {
   }
 
   try {
-    const existing = await usersCollection.where('email', '==', email).limit(1).get();
-    if (!existing.empty) {
+    const existing = await Seller.findOne({ email });
+    if (existing) {
       return res.status(409).json({ message: '❌ Email sudah terdaftar sebagai seller' });
     }
 
@@ -125,31 +99,26 @@ router.post('/seller', upload.single('storeImage'), async (req, res) => {
       folder,
     });
 
-    const sellerData = {
+    const seller = new Seller({
       email,
       name,
       businessName,
       phone,
       storeName,
       storeAddress,
-      addressComponents: {
-        kelurahan,
-        kecamatan,
-        kabupaten,
-        provinsi
-      },
-      storeLocation: new admin.firestore.GeoPoint(lat, lng),
+      addressComponents: { kelurahan, kecamatan, kabupaten, provinsi },
+      storeLocation: { type: 'Point', coordinates: [lng, lat] },
       storeImageUrl: uploadResponse.url,
       role: 'seller',
       createdAt: new Date(),
-    };
+    });
 
-    await usersCollection.add(sellerData);
+    await seller.save();
 
     return res.status(201).json({
       message: '✅ Seller berhasil didaftarkan',
       imageUrl: uploadResponse.url,
-      seller: sellerData
+      seller
     });
   } catch (error) {
     return res.status(500).json({ message: '❌ Gagal simpan seller', error: error.message });

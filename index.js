@@ -3,6 +3,7 @@ const cors = require('cors');
 const bodyParser = require('body-parser');
 const requireApiKey = require('./middleware/requireApiKey');
 const rateLimiter = require('./middleware/ratelimiter');
+const connectDB = require('./config/db');
 const authRoutes = require('./routes/auth');
 const forumpendaftaran = require('./routes/forum-pendaftaran');
 const product = require('./routes/product');
@@ -10,6 +11,7 @@ const utilities = require('./routes/utilities')
 require('dotenv').config();
 
 const app = express();
+connectDB();
 
 // Middleware global
 app.use(cors());
