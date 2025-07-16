@@ -1,7 +1,7 @@
 const express = require('express');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
-const pool = require('../config/db');
+const pool = require('../config/supabase');
 const { generateOtp, sendPasswordResetEmail } = require('../utils/otp');
 const authMiddleware = require('../middleware/authMiddleware');
 
