@@ -4,17 +4,6 @@ const path = require('path');
 
 const router = express.Router();
 
-// 🔐 Firebase init (pastikan hanya sekali init)
-if (!admin.apps.length) {
-  const serviceAccount = require(path.join(__dirname, '../serviceAccountKey.json'));
-  admin.initializeApp({
-    credential: admin.credential.cert(serviceAccount),
-  });
-}
-
-const db = admin.firestore();
-const usersCollection = db.collection('users');
-
 
 // 🔎 Saran keyword produk
 router.get('/search-suggestions', async (req, res) => {

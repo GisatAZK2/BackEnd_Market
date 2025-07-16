@@ -1,17 +1,29 @@
+// 🔁 Tambahkan Realtime Support dengan Socket.IO
 const express = require('express');
 const cors = require('cors');
+const http = require('http');
+const { Server } = require('socket.io');
 const bodyParser = require('body-parser');
 const requireApiKey = require('./middleware/requireApiKey');
 const rateLimiter = require('./middleware/ratelimiter');
-const connectDB = require('./config/db');
+const connect = require('./config/db');
 const authRoutes = require('./routes/auth');
 const forumpendaftaran = require('./routes/forum-pendaftaran');
-const product = require('./routes/product');
-const utilities = require('./routes/utilities')
+const productRoutes = require('./routes/product');
+const utilities = require('./routes/utilities');
 require('dotenv').config();
 
 const app = express();
-connectDB();
+const server = http.createServer(app);
+const io = new Server(server, {
+  cors: {
+    origin: '*',
+    methods: ['GET', 'POST']
+  }
+});
+
+// 📡 Global access to io
+app.set('io', io);
 
 // Middleware global
 app.use(cors());
@@ -31,9 +43,18 @@ app.use((req, res, next) => {
 // Routes
 app.use('/auth', authRoutes);
 app.use('/forum-pendaftaran', forumpendaftaran); 
-app.use('/utilities',utilities);
-app.use('/product', product);
+app.use('/utilities', utilities);
+app.use('/product', productRoutes);
+
+// Socket.IO Connection
+io.on('connection', (socket) => {
+  console.log('🔌 User connected:', socket.id);
+
+  socket.on('disconnect', () => {
+    console.log('❌ User disconnected:', socket.id);
+  });
+});
 
 // Start server
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`API running on port ${PORT}`));
+server.listen(PORT, () => console.log(`🚀 API + Realtime running on port ${PORT}`));

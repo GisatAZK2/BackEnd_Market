@@ -1,119 +1,105 @@
+// 🔁 Migrasi Express Router Produk ke Supabase
 const express = require('express');
-const admin = require('firebase-admin');
 const path = require('path');
-const ImageKit = require('imagekit');
 const multer = require('multer');
+const { v4: uuidv4 } = require('uuid');
+const supabase = require('../config/supabase');
 
 const router = express.Router();
 
-// 🔒 Setup multer
+// 📦 Multer setup
 const upload = multer({
   limits: { fileSize: 5 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
     if (file.mimetype === 'image/jpeg' || file.mimetype === 'image/png') {
       cb(null, true);
     } else {
-      cb(new Error('❌ Gambar harus berupa JPEG atau PNG'));
+      cb(new Error('❌ Gambar harus JPEG atau PNG'));
     }
   }
 });
 
-// 🔐 Firebase init
-if (!admin.apps.length) {
-  const serviceAccount = require(path.join(__dirname, '../serviceAccountKey.json'));
-  admin.initializeApp({
-    credential: admin.credential.cert(serviceAccount),
-  });
-}
-
-const db = admin.firestore();
-const usersCollection = db.collection('users');
-
-// 🔑 ImageKit init
-const imagekit = new ImageKit({
-  publicKey: 'public_VCP7UXW5lvwXDkeSZdRukwnwTRE=',
-  privateKey: 'private_bX2cSUtxrbNhR5ebUqFKESLanSA=',
-  urlEndpoint: 'https://ik.imagekit.io/nyjh7ps82',
-});
-
-// Helper slugify
-const slugify = (str) =>
-  str.toLowerCase().replace(/[^\w\s-]/g, '').replace(/\s+/g, '-');
-
-// 🔹 Upload produk
+// 🧾 POST /upload (unggah produk baru)
 router.post('/upload', upload.single('productImage'), async (req, res) => {
   const {
-    sellerId,
+    seller_id,
     productName,
     productDescription,
     productPrice
   } = req.body;
 
-  if (!sellerId || !productName || !productDescription || !productPrice) {
-    return res.status(400).json({ message: '❌ Semua field wajib diisi' });
+  if (!seller_id || !productName || !productDescription || !productPrice || !req.file) {
+    return res.status(400).json({ message: '❌ Semua field wajib diisi termasuk gambar' });
   }
 
   const priceNum = parseFloat(productPrice);
   if (isNaN(priceNum) || priceNum <= 0) {
-    return res.status(400).json({ message: '❌ Harga harus berupa angka lebih dari 0' });
-  }
-
-  if (!req.file) {
-    return res.status(400).json({ message: '❌ Gambar produk wajib diunggah' });
+    return res.status(400).json({ message: '❌ Harga harus valid dan > 0' });
   }
 
   try {
-    const sellerRef = usersCollection.doc(sellerId);
-    const sellerDoc = await sellerRef.get();
+    // 🔍 Cari seller
+    const { data: seller, error: sellerError } = await supabase
+      .from('sellers')
+      .select('*')
+      .eq('id', seller_id)
+      .single();
 
-    if (!sellerDoc.exists) {
+    if (sellerError || !seller) {
       return res.status(404).json({ message: '❌ Seller tidak ditemukan' });
     }
 
-    const sellerData = sellerDoc.data();
-    const sellerEmail = sellerData.email || 'unknown@email.com';
-    const sellerName = sellerData.name || 'Unknown Seller';
+    // 📤 Upload ke Supabase Storage
+    const fileExt = path.extname(req.file.originalname);
+    const fileName = `${uuidv4()}${fileExt}`;
+    const filePath = `${seller_id}/${fileName}`;
 
-    const existingProducts = await sellerRef
-      .collection('products')
-      .where('productName', '==', productName)
-      .limit(1)
-      .get();
+    const { error: uploadError } = await supabase.storage
+      .from('product-images')
+      .upload(filePath, req.file.buffer, {
+        contentType: req.file.mimetype,
+        upsert: true
+      });
 
-    if (!existingProducts.empty) {
-      return res.status(409).json({ message: '❌ Nama produk sudah terdaftar oleh seller ini' });
+    if (uploadError) {
+      return res.status(500).json({ message: '❌ Gagal upload gambar', error: uploadError.message });
     }
 
-    const productFolder = `/products/${sellerId}/${slugify(productName)}`;
-    const uploadResponse = await imagekit.upload({
-      file: req.file.buffer,
-      fileName: req.file.originalname,
-      folder: productFolder,
-    });
+    // ✅ Buat signed URL (7 hari)
+    const { data: signedUrlData, error: signedUrlError } = await supabase.storage
+      .from('product-images')
+      .createSignedUrl(filePath, 60 * 60 * 24 * 7000000); // 7 hari
 
-    const productData = {
-      productName,
-      productDescription,
-      productPrice: priceNum,
-      productImageUrl: uploadResponse.url,
-      sellerId,
-      sellerName,
-      sellerEmail,
-      createdAt: new Date()
-    };
+    if (signedUrlError) {
+      return res.status(500).json({ message: '❌ Gagal generate signed URL', error: signedUrlError.message });
+    }
 
-    await sellerRef.collection('products').add(productData);
+    // 💾 Simpan ke tabel products
+    const { data: product, error: insertError } = await supabase
+      .from('products')
+      .insert([{
+        seller_id,
+        seller_name: seller.name,
+        seller_email: seller.email,
+        product_name: productName,
+        product_description: productDescription,
+        product_price: priceNum,
+        product_image_url: signedUrlData.signedUrl
+      }])
+      .select()
+      .single();
 
-    return res.status(201).json({ message: '✅ Produk berhasil diunggah', data: productData });
+    if (insertError) {
+      return res.status(500).json({ message: '❌ Gagal simpan produk', error: insertError.message });
+    }
+
+    return res.status(201).json({ message: '✅ Produk berhasil diunggah', data: product });
   } catch (error) {
-    return res.status(500).json({
-      message: '❌ Gagal unggah produk',
-      error: error.message
-    });
+    return res.status(500).json({ message: '❌ Terjadi error', error: error.message });
   }
 });
 
-// 🔍 Haversine untuk jarak
+// 🔎 Haversine Distance
 const haversineDistance = (lat1, lon1, lat2, lon2) => {
   const toRad = (value) => (value * Math.PI) / 180;
   const R = 6371;
@@ -121,24 +107,14 @@ const haversineDistance = (lat1, lon1, lat2, lon2) => {
   const dLon = toRad(lon2 - lon1);
   const a =
     Math.sin(dLat / 2) ** 2 +
-    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) *
-    Math.sin(dLon / 2) ** 2;
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   return R * c;
 };
 
-// 🔁 Cache produk mentah
-let rawProductsCache = null;
-let lastCacheTime = 0;
-const CACHE_TTL = 60 * 1000; // 60 detik
-
-// 🔹 Produk terdekat
+// 🔍 Produk terdekat
 router.get('/nearby-by-location', async (req, res) => {
   const { lat, lng } = req.query;
-
-  if (!lat || !lng) {
-    return res.status(400).json({ message: '❌ lat dan lng wajib diisi di query parameter' });
-  }
 
   const userLat = parseFloat(lat);
   const userLng = parseFloat(lng);
@@ -148,109 +124,57 @@ router.get('/nearby-by-location', async (req, res) => {
   }
 
   try {
-    // Ambil cache jika tidak valid
-    if (!rawProductsCache || Date.now() - lastCacheTime > CACHE_TTL) {
-      rawProductsCache = [];
-      const seenIds = new Set();
+    const { data: sellers, error: sellerErr } = await supabase
+      .from('sellers')
+      .select('id, name, latitude, longitude');
 
-      const sellersSnap = await usersCollection.where('role', '==', 'seller').get();
+    const { data: products, error: productErr } = await supabase
+      .from('products')
+      .select('*');
 
-      for (const sellerDoc of sellersSnap.docs) {
-        const sellerData = sellerDoc.data();
-        const sellerLocation = sellerData.storeLocation;
-        if (!sellerLocation) continue;
-
-        const productSnap = await usersCollection
-          .doc(sellerDoc.id)
-          .collection('products')
-          .get();
-
-        productSnap.forEach((doc) => {
-          if (seenIds.has(doc.id)) return; // ❌ Skip duplikat
-          seenIds.add(doc.id);
-
-          const data = doc.data();
-          rawProductsCache.push({
-            id: doc.id,
-            sellerId: sellerDoc.id,
-            sellerName: sellerData.storeName || sellerData.name,
-            sellerLocation,
-            ...data
-          });
-        });
-      }
-
-      lastCacheTime = Date.now();
+    if (sellerErr || productErr || !sellers || !products) {
+      return res.status(500).json({ message: '❌ Gagal ambil data dari Supabase' });
     }
 
-    const nearbyProducts = rawProductsCache
-      .map((product) => {
-        const { sellerLocation } = product;
-        const distance = haversineDistance(
-          userLat,
-          userLng,
-          sellerLocation.latitude,
-          sellerLocation.longitude
-        );
-        return {
-          ...product,
-          distanceInKm: +distance.toFixed(2)
-        };
-      })
-      .filter((p) => p.distanceInKm <= 40);
+    const merged = products.map((product) => {
+      const seller = sellers.find((s) => s.id === product.seller_id);
+      const distanceInKm =
+        seller && seller.latitude && seller.longitude
+          ? haversineDistance(userLat, userLng, seller.latitude, seller.longitude)
+          : Infinity;
+
+      return {
+        ...product,
+        sellerName: seller?.name,
+        distanceInKm: +distanceInKm.toFixed(2)
+      };
+    }).filter(p => p.distanceInKm <= 40);
 
     return res.status(200).json({
-      message: `✅ Ditemukan ${nearbyProducts.length} produk dalam radius 40 km`,
-      products: nearbyProducts
+      message: `✅ Ditemukan ${merged.length} produk dalam radius 40 km`,
+      products: merged
     });
   } catch (error) {
-    return res.status(500).json({
-      message: '❌ Gagal mengambil produk berdasarkan lokasi',
-      error: error.message
-    });
+    return res.status(500).json({ message: '❌ Gagal mengambil produk', error: error.message });
   }
 });
 
-// 🔹 Semua produk (tanpa lokasi) + filter duplikat
+
+// 📦 Semua produk
 router.get('/allproduct', async (req, res) => {
   try {
-    const sellersSnap = await usersCollection.where('role', '==', 'seller').get();
+    const { data: products, error } = await supabase
+      .from('products')
+      .select('*');
 
-    const allProducts = [];
-    const seenIds = new Set();
-
-    for (const sellerDoc of sellersSnap.docs) {
-      const sellerData = sellerDoc.data();
-
-      const productSnap = await usersCollection
-        .doc(sellerDoc.id)
-        .collection('products')
-        .get();
-
-      productSnap.forEach((doc) => {
-        if (seenIds.has(doc.id)) return;
-        seenIds.add(doc.id);
-
-        const data = doc.data();
-        allProducts.push({
-          id: doc.id,
-          sellerId: sellerDoc.id,
-          sellerName: sellerData.storeName || sellerData.name,
-          sellerLocation: sellerData.storeLocation || null,
-          ...data,
-        });
-      });
-    }
+    if (error) throw error;
 
     return res.status(200).json({
-      message: `✅ Ditemukan ${allProducts.length} produk`,
-      products: allProducts
+      message: `✅ Ditemukan ${products.length} produk`,
+      products
     });
   } catch (error) {
-    return res.status(500).json({
-      message: '❌ Gagal mengambil semua produk',
-      error: error.message
-    });
+    return res.status(500).json({ message: '❌ Gagal mengambil semua produk', error: error.message });
   }
 });
 

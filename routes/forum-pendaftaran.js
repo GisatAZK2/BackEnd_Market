@@ -1,14 +1,13 @@
-// 📦 REFACTOR: forum-pendaftaran.js dengan MongoDB
 const express = require('express');
 const path = require('path');
-const ImageKit = require('imagekit');
 const multer = require('multer');
 const fetch = require('node-fetch');
-const Seller = require('../models/Seller'); // 👈 Mongoose model Seller
+const { v4: uuidv4 } = require('uuid');
+const supabase = require('../config/supabase');
 
 const router = express.Router();
 
-// 🔒 Setup multer
+// Multer setup
 const upload = multer({
   limits: { fileSize: 5 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
@@ -20,14 +19,7 @@ const upload = multer({
   }
 });
 
-// 🔑 ImageKit config
-const imagekit = new ImageKit({
-  publicKey: 'public_VCP7UXW5lvwXDkeSZdRukwnwTRE=',
-  privateKey: 'private_bX2cSUtxrbNhR5ebUqFKESLanSA=',
-  urlEndpoint: 'https://ik.imagekit.io/nyjh7ps82',
-});
-
-// 🌍 Wilayah API
+// Wilayah API
 router.get('/wilayah/provinsi', async (req, res) => {
   try {
     const response = await fetch('https://www.emsifa.com/api-wilayah-indonesia/api/provinces.json');
@@ -68,7 +60,7 @@ router.get('/wilayah/kelurahan/:kecamatanId', async (req, res) => {
   }
 });
 
-// 🧾 POST /forum-pendaftaran/seller
+// POST /forum-pendaftaran/seller
 router.post('/seller', upload.single('storeImage'), async (req, res) => {
   const {
     email, name, businessName, phone, storeName, storeAddress,
@@ -76,7 +68,7 @@ router.post('/seller', upload.single('storeImage'), async (req, res) => {
   } = req.body;
 
   if (!email || !name || !businessName || !phone || !storeName || !storeAddress ||
-      !kelurahan || !kecamatan || !kabupaten || !provinsi || !latitude || !longitude || !req.file) {
+    !kelurahan || !kecamatan || !kabupaten || !provinsi || !latitude || !longitude || !req.file) {
     return res.status(400).json({ message: '❌ Semua field wajib diisi termasuk gambar dan koordinat' });
   }
 
@@ -87,41 +79,74 @@ router.post('/seller', upload.single('storeImage'), async (req, res) => {
   }
 
   try {
-    const existing = await Seller.findOne({ email });
+    // Cek email sudah ada
+    const { data: existing, error: checkError } = await supabase
+      .from('sellers')
+      .select('email')
+      .eq('email', email)
+      .single();
+
     if (existing) {
       return res.status(409).json({ message: '❌ Email sudah terdaftar sebagai seller' });
     }
 
-    const folder = `/store-photos/${email.replace(/[@.]/g, '_')}`;
-    const uploadResponse = await imagekit.upload({
-      file: req.file.buffer,
-      fileName: req.file.originalname,
-      folder,
-    });
+    // Upload gambar
+    const fileExt = path.extname(req.file.originalname);
+    const fileName = `${uuidv4()}${fileExt}`;
+    const bucketPath = `store-photos/${email.replace(/[@.]/g, '_')}/${fileName}`;
 
-    const seller = new Seller({
-      email,
-      name,
-      businessName,
-      phone,
-      storeName,
-      storeAddress,
-      addressComponents: { kelurahan, kecamatan, kabupaten, provinsi },
-      storeLocation: { type: 'Point', coordinates: [lng, lat] },
-      storeImageUrl: uploadResponse.url,
-      role: 'seller',
-      createdAt: new Date(),
-    });
+    const { error: uploadError } = await supabase.storage
+      .from('store-photos')
+      .upload(bucketPath, req.file.buffer, {
+        contentType: req.file.mimetype,
+        upsert: true
+      });
 
-    await seller.save();
+    if (uploadError) {
+      return res.status(500).json({ message: '❌ Gagal upload gambar ke Supabase', error: uploadError.message });
+    }
+
+    const { data: signedUrlData, error: signedError } = await supabase.storage
+  .from('store-photos')
+  .createSignedUrl(bucketPath, 60 * 60 * 24 * 700000); // 7 hari valid
+
+    if (signedError || !signedUrlData) {
+      return res.status(500).json({ message: '❌ Gagal buat signed URL', error: signedError?.message });
+    }
+
+
+    const { error: insertError, data: newSeller } = await supabase
+      .from('sellers')
+      .insert([{
+        email,
+        name,
+        business_name: businessName,
+        phone,
+        store_name: storeName,
+        store_address: storeAddress,
+        kelurahan,
+        kecamatan,
+        kabupaten,
+        provinsi,
+        latitude: lat,
+        longitude: lng,
+        store_image_url: signedUrlData.signedUrl,
+        role: 'seller'
+      }])
+      .select()
+      .single();
+
+    if (insertError) {
+      return res.status(500).json({ message: '❌ Gagal simpan seller ke Supabase', error: insertError.message });
+    }
 
     return res.status(201).json({
       message: '✅ Seller berhasil didaftarkan',
-      imageUrl: uploadResponse.url,
-      seller
+      imageUrl: signedUrlData.signedUrl,
+      seller: newSeller
     });
   } catch (error) {
-    return res.status(500).json({ message: '❌ Gagal simpan seller', error: error.message });
+    return res.status(500).json({ message: '❌ Gagal proses pendaftaran', error: error.message });
   }
 });
 
