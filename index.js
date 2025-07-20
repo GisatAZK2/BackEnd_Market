@@ -10,6 +10,8 @@ const connect = require('./config/supabase');
 const authRoutes = require('./routes/auth');
 const forumpendaftaran = require('./routes/forum-pendaftaran');
 const productRoutes = require('./routes/product');
+const category = require('./routes/category');
+const search = require('./routes/search');
 require('dotenv').config();
 
 const app = express();
@@ -43,6 +45,8 @@ app.use((req, res, next) => {
 app.use('/auth', authRoutes);
 app.use('/forum-pendaftaran', forumpendaftaran); 
 app.use('/product', productRoutes);
+app.use('/category',category);
+app.use('/search',search);
 
 // Socket.IO Connection
 io.on('connection', (socket) => {

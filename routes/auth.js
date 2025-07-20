@@ -1,62 +1,136 @@
 const express = require('express');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
-const pool = require('../config/supabase');
+const supabase = require('../config/supabase');
 const { generateOtp, sendPasswordResetEmail } = require('../utils/otp');
-const authMiddleware = require('../middleware/authMiddleware');
 
 const router = express.Router();
 
-
+// ✅ REGISTER
 router.post('/register', async (req, res) => {
   const { email, password } = req.body;
-  const hashed = await bcrypt.hash(password, 10);
-  const otp = Math.floor(100000 + Math.random() * 900000).toString();
-  const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
 
-  await pool.query(`
-    INSERT INTO users (email, password, otp_code, otp_expires_at) 
-    VALUES ($1, $2, $3, $4)
-  `, [email, hashed, otp, expiresAt]);
+  try {
+    const { data: existingUser, error: userErr } = await supabase
+      .from('users')
+      .select('*')
+      .eq('email', email)
+      .single();
 
-  await generateOtp(email, otp);
-  res.status(201).json({ message: 'User dibuat. OTP dikirim ke email.' });
-});
+    if (existingUser) {
+      return res.status(400).json({ error: 'Email sudah digunakan. Silakan gunakan email lain.' });
+    }
 
-router.post('/verify-otp', async (req, res) => {
-  const { email, otp } = req.body;
-  const result = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
-  const user = result.rows[0];
-  if (user.otp_code === otp && new Date(user.otp_expires_at) > new Date()) {
-    await pool.query(`UPDATE users SET verified = TRUE, otp_code = NULL, otp_expires_at = NULL WHERE email = $1`, [email]);
-    res.json({ message: 'OTP valid. Akun diaktifkan.' });
-  } else {
-    res.status(400).json({ error: 'OTP salah atau kadaluarsa.' });
+    const hashed = await bcrypt.hash(password, 10);
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    const expiresAt = new Date(Date.now() + 5 * 60 * 1000).toISOString(); // ✅ UTC time
+
+    const { error: insertErr } = await supabase.from('users').insert({
+      email,
+      password: hashed,
+      otp_code: otp,
+      otp_expires_at: expiresAt,
+      verified: false
+    });
+
+    if (insertErr) throw insertErr;
+
+    await generateOtp(email, otp);
+    res.status(201).json({ message: 'User dibuat. OTP dikirim ke email.' });
+  } catch (err) {
+    console.error('Error saat register:', err);
+    res.status(500).json({ error: 'Terjadi kesalahan pada server.' });
   }
 });
 
+// ✅ VERIFIKASI OTP
+router.post('/verify-otp', async (req, res) => {
+  const { email, otp } = req.body;
+
+  try {
+    const { data: user, error } = await supabase
+      .from('users')
+      .select('*')
+      .eq('email', email)
+      .single();
+
+    if (!user) return res.status(404).json({ error: 'User tidak ditemukan.' });
+
+    const now = new Date().toISOString(); // ✅ UTC time string
+
+    // ✅ Debug log (opsional)
+    console.log('OTP expires at:', user.otp_expires_at);
+    console.log('Now:', now);
+
+    if (user.otp_code === otp && user.otp_expires_at > now) {
+      const { error: updateErr } = await supabase
+        .from('users')
+        .update({
+          verified: true,
+          otp_code: null,
+          otp_expires_at: null
+        })
+        .eq('email', email);
+
+      if (updateErr) throw updateErr;
+
+      res.json({ message: 'OTP valid. Akun diaktifkan.' });
+    } else {
+      res.status(400).json({ error: 'OTP salah atau kadaluarsa.' });
+    }
+  } catch (err) {
+    console.error('OTP Error:', err);
+    res.status(500).json({ error: 'Terjadi kesalahan pada server.' });
+  }
+});
+
+// ✅ LOGIN
 router.post('/login', async (req, res) => {
   const { email, password } = req.body;
-  const result = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
-  const user = result.rows[0];
 
-  if (!user || !user.verified) return res.status(403).json({ error: 'Akun tidak ditemukan atau belum diverifikasi.' });
-  const match = await bcrypt.compare(password, user.password);
-  if (!match) return res.status(401).json({ error: 'Password salah.' });
+  try {
+    const { data: user, error } = await supabase
+      .from('users')
+      .select('*')
+      .eq('email', email)
+      .single();
 
-  const token = jwt.sign({ id: user.id }, process.env.JWT_SECRET, { expiresIn: '7d' });
-  res.json({ message: 'Login sukses.', token });
+    if (!user || !user.verified) {
+      return res.status(403).json({ error: 'Akun tidak ditemukan atau belum diverifikasi.' });
+    }
+
+    const match = await bcrypt.compare(password, user.password);
+    if (!match) return res.status(401).json({ error: 'Password salah.' });
+
+    const token = jwt.sign({ id: user.id }, process.env.JWT_SECRET, { expiresIn: '7d' });
+    res.json({ message: 'Login sukses.', token });
+  } catch (err) {
+    console.error('Login error:', err);
+    res.status(500).json({ error: 'Terjadi kesalahan pada server.' });
+  }
 });
 
+// ✅ LUPA PASSWORD
 router.post('/forgot-password', async (req, res) => {
   const { email } = req.body;
-  const result = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
-  if (result.rows.length === 0) return res.status(404).json({ error: 'Email tidak ditemukan.' });
 
-  const resetLink = `https://yourfrontend.com/reset-password?email=${email}`;
-  await sendPasswordResetEmail(email, resetLink);
-  res.json({ message: 'Link reset password dikirim ke email.' });
+  try {
+    const { data: user, error } = await supabase
+      .from('users')
+      .select('*')
+      .eq('email', email)
+      .single();
+
+    if (!user) return res.status(404).json({ error: 'Email tidak ditemukan.' });
+
+    const resetLink = `https://yourfrontend.com/reset-password?email=${email}`;
+    await sendPasswordResetEmail(email, resetLink);
+
+    res.json({ message: 'Link reset password dikirim ke email.' });
+  } catch (err) {
+    console.error('Reset password error:', err);
+    res.status(500).json({ error: 'Terjadi kesalahan pada server.' });
+  }
 });
-
 
 module.exports = router;

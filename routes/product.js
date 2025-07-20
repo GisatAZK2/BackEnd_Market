@@ -4,6 +4,7 @@ const path = require('path');
 const multer = require('multer');
 const { v4: uuidv4 } = require('uuid');
 const supabase = require('../config/supabase');
+const generateKeywords = require('../utils/keywordGenerator');
 
 const router = express.Router();
 
@@ -25,10 +26,11 @@ router.post('/upload', upload.single('productImage'), async (req, res) => {
     seller_id,
     productName,
     productDescription,
-    productPrice
+    productPrice,
+    category_id
   } = req.body;
 
-  if (!seller_id || !productName || !productDescription || !productPrice || !req.file) {
+  if (!seller_id || !productName || !productDescription || !productPrice ||!category_id ||!req.file) {
     return res.status(400).json({ message: '❌ Semua field wajib diisi termasuk gambar' });
   }
 
@@ -74,17 +76,24 @@ router.post('/upload', upload.single('productImage'), async (req, res) => {
       return res.status(500).json({ message: '❌ Gagal generate signed URL', error: signedUrlError.message });
     }
 
+    const keywords = [
+      ...generateKeywords(productName),
+      ...generateKeywords(productDescription)
+    ];
+
     // 💾 Simpan ke tabel products
     const { data: product, error: insertError } = await supabase
       .from('products')
       .insert([{
         seller_id,
+        category_id,
         seller_name: seller.name,
         seller_email: seller.email,
         product_name: productName,
         product_description: productDescription,
         product_price: priceNum,
-        product_image_url: signedUrlData.signedUrl
+        product_image_url: signedUrlData.signedUrl,
+        keywords
       }])
       .select()
       .single();
@@ -177,5 +186,46 @@ router.get('/allproduct', async (req, res) => {
     return res.status(500).json({ message: '❌ Gagal mengambil semua produk', error: error.message });
   }
 });
+
+// 🧲 Produk berdasarkan kategori
+router.get('/by-category/:category_id', async (req, res) => {
+  const { category_id } = req.params;
+
+  if (!category_id) {
+    return res.status(400).json({ message: '❌ category_id diperlukan' });
+  }
+
+  try {
+    // 🔍 Ambil kategori dulu (opsional, untuk validasi)
+    const { data: category, error: categoryError } = await supabase
+      .from('categories')
+      .select('id, name')
+      .eq('id', category_id)
+      .single();
+
+    if (categoryError || !category) {
+      return res.status(404).json({ message: '❌ Kategori tidak ditemukan' });
+    }
+
+    // 🛍 Ambil produk berdasarkan kategori
+    const { data: products, error: productError } = await supabase
+      .from('products')
+      .select('*')
+      .eq('category_id', category_id);
+
+    if (productError) {
+      return res.status(500).json({ message: '❌ Gagal ambil produk', error: productError.message });
+    }
+
+    return res.status(200).json({
+      message: `✅ Ditemukan ${products.length} produk dalam kategori "${category.name}"`,
+      category: category.name,
+      products
+    });
+  } catch (error) {
+    return res.status(500).json({ message: '❌ Server error', error: error.message });
+  }
+});
+
 
 module.exports = router;
