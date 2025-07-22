@@ -12,6 +12,7 @@ const forumpendaftaran = require('./routes/forum-pendaftaran');
 const productRoutes = require('./routes/product');
 const category = require('./routes/category');
 const search = require('./routes/search');
+const clean = require('./utils/cleanup');
 require('dotenv').config();
 
 const app = express();
@@ -47,6 +48,7 @@ app.use('/forum-pendaftaran', forumpendaftaran);
 app.use('/product', productRoutes);
 app.use('/category',category);
 app.use('/search',search);
+app.use('/clean',clean);
 
 // Socket.IO Connection
 io.on('connection', (socket) => {
