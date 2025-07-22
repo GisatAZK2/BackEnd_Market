@@ -227,5 +227,161 @@ router.get('/by-category/:category_id', async (req, res) => {
   }
 });
 
+// 🔍 Get produk by ID
+router.get('/:id', async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const { data: product, error } = await supabase
+      .from('products')
+      .select('*')
+      .eq('id', id)
+      .single();
+
+    if (error || !product) {
+      return res.status(404).json({ message: '❌ Produk tidak ditemukan' });
+    }
+
+    return res.status(200).json({ message: '✅ Produk ditemukan', product });
+  } catch (error) {
+    return res.status(500).json({ message: '❌ Gagal mengambil produk', error: error.message });
+  }
+});
+
+// ✏️ Edit produk
+router.put('/:id', upload.single('productImage'), async (req, res) => {
+  const { id } = req.params;
+  const {
+    productName,
+    productDescription,
+    productPrice,
+    category_id
+  } = req.body;
+
+  const priceNum = parseFloat(productPrice);
+
+  if (isNaN(priceNum) || priceNum <= 0) {
+    return res.status(400).json({ message: '❌ Harga tidak valid' });
+  }
+
+  try {
+    // Ambil produk dulu
+    const { data: existing, error: findErr } = await supabase
+      .from('products')
+      .select('*')
+      .eq('id', id)
+      .single();
+
+    if (findErr || !existing) {
+      return res.status(404).json({ message: '❌ Produk tidak ditemukan' });
+    }
+
+    let imageUrl = existing.product_image_url;
+
+    // Kalau ada file gambar baru
+    if (req.file) {
+      // Upload ke Supabase Storage
+      const fileExt = path.extname(req.file.originalname);
+      const fileName = `${uuidv4()}${fileExt}`;
+      const filePath = `${existing.seller_id}/${fileName}`;
+
+      const { error: uploadErr } = await supabase.storage
+        .from('product-images')
+        .upload(filePath, req.file.buffer, {
+          contentType: req.file.mimetype,
+          upsert: true
+        });
+
+      if (uploadErr) {
+        return res.status(500).json({ message: '❌ Gagal upload gambar baru', error: uploadErr.message });
+      }
+
+      // Buat signed URL baru
+      const { data: signedUrlData, error: signedUrlErr } = await supabase.storage
+        .from('product-images')
+        .createSignedUrl(filePath, 60 * 60 * 24 * 7);
+
+      if (signedUrlErr) {
+        return res.status(500).json({ message: '❌ Gagal generate signed URL', error: signedUrlErr.message });
+      }
+
+      imageUrl = signedUrlData.signedUrl;
+    }
+
+    const keywords = [
+      ...generateKeywords(productName),
+      ...generateKeywords(productDescription)
+    ];
+
+    // Update data
+    const { data: updated, error: updateErr } = await supabase
+      .from('products')
+      .update({
+        product_name: productName,
+        product_description: productDescription,
+        product_price: priceNum,
+        category_id,
+        product_image_url: imageUrl,
+        keywords
+      })
+      .eq('id', id)
+      .select()
+      .single();
+
+    if (updateErr) {
+      return res.status(500).json({ message: '❌ Gagal update produk', error: updateErr.message });
+    }
+
+    return res.status(200).json({ message: '✅ Produk berhasil diupdate', product: updated });
+  } catch (error) {
+    return res.status(500).json({ message: '❌ Terjadi error', error: error.message });
+  }
+});
+
+// ❌ Hapus produk
+router.delete('/:id', async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const { data: product, error: findErr } = await supabase
+      .from('products')
+      .select('*')
+      .eq('id', id)
+      .single();
+
+    if (findErr || !product) {
+      return res.status(404).json({ message: '❌ Produk tidak ditemukan' });
+    }
+
+    // Ambil path dari URL
+    const imagePath = decodeURIComponent(new URL(product.product_image_url).pathname.split('/storage/v1/object/public/product-images/')[1]);
+
+    // Hapus dari storage
+    const { error: deleteFileErr } = await supabase
+      .storage
+      .from('product-images')
+      .remove([imagePath]);
+
+    if (deleteFileErr) {
+      return res.status(500).json({ message: '❌ Gagal hapus gambar', error: deleteFileErr.message });
+    }
+
+    // Hapus dari DB
+    const { error: deleteErr } = await supabase
+      .from('products')
+      .delete()
+      .eq('id', id);
+
+    if (deleteErr) {
+      return res.status(500).json({ message: '❌ Gagal hapus produk', error: deleteErr.message });
+    }
+
+    return res.status(200).json({ message: '✅ Produk berhasil dihapus' });
+  } catch (error) {
+    return res.status(500).json({ message: '❌ Terjadi error saat menghapus produk', error: error.message });
+  }
+});
+
+
 
 module.exports = router;
