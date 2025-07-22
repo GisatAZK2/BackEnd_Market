@@ -1,8 +1,9 @@
 const express = require('express');
 const supabase = require('../config/supabase');
-const { sendOrderNotification } = require('../utils/email');
+const sendOrderNotification = require('../utils/email'); // ✅ Benar
 const router = express.Router();
 
+// 🛒 Buat pesanan baru
 // 🛒 Buat pesanan baru
 router.post('/order', async (req, res) => {
   const { user_id, product_id, quantity } = req.body;
@@ -24,20 +25,20 @@ router.post('/order', async (req, res) => {
     }
 
     // 🔍 Ambil email user & seller
-    const { data: userData } = await supabase
+    const { data: userData, error: userErr } = await supabase
       .from('users')
       .select('email')
       .eq('id', user_id)
       .single();
 
-    const { data: sellerData } = await supabase
+    const { data: sellerData, error: sellerErr } = await supabase
       .from('sellers')
       .select('email')
       .eq('id', product.seller_id)
       .single();
 
     const total_price = product.product_price * quantity;
-    const pickupDeadline = new Date(Date.now() + 6 * 60 * 60 * 1000); // 6 jam
+    const pickupDeadline = new Date(Date.now() + 6 * 60 * 60 * 1000); // 6 jam dari sekarang
 
     // 💾 Simpan order
     const { data: order, error: orderErr } = await supabase
@@ -63,17 +64,22 @@ router.post('/order', async (req, res) => {
       product_name: product.product_name,
       quantity,
       total_price,
-      image_url: product.product_image,
+      product_image_url: product.product_image_url, // ✅ gunakan key yang sesuai
       buyer_email: userData?.email,
       seller_email: sellerData?.email
     };
 
     await sendOrderNotification(emailInfo);
 
-    return res.status(201).json({ message: '✅ Order berhasil dibuat & email dikirim', order });
+    return res.status(201).json({
+      message: '✅ Order berhasil dibuat & email dikirim',
+      order,
+      product_image_url: product.product_image_url
+    });
   } catch (err) {
     return res.status(500).json({ message: '❌ Server error', error: err.message });
   }
 });
+
 
 module.exports = router;
