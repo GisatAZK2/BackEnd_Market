@@ -3,10 +3,8 @@ const router = express.Router();
 const supabase = require('../config/supabase');
 require('dotenv').config();
 
-
 const CRON_SECRET = process.env.CRON_SECRET || 'defaultsecret';
 
-// ✅ Route dengan secret via query param
 router.get('/cron/cleanup-users', async (req, res) => {
   const key = req.query.secret;
 

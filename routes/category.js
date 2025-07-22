@@ -4,7 +4,7 @@ const supabase = require('../config/supabase');
 
 const router = express.Router();
 
-// 🧾 Tambah kategori baru
+
 router.post('/create', async (req, res) => {
   const { name, description } = req.body;
 
@@ -25,7 +25,7 @@ router.post('/create', async (req, res) => {
   }
 });
 
-// 📦 Ambil semua kategori
+
 router.get('/all', async (req, res) => {
   try {
     const { data, error } = await supabase

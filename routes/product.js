@@ -27,14 +27,27 @@ router.post('/upload', upload.single('productImage'), async (req, res) => {
     productName,
     productDescription,
     productPrice,
-    category_id
+    category_id,
+    stock,
+    variants // ← dikirim dalam bentuk string JSON
   } = req.body;
 
-  if (!seller_id || !productName || !productDescription || !productPrice ||!category_id ||!req.file) {
-    return res.status(400).json({ message: '❌ Semua field wajib diisi termasuk gambar' });
+  if (
+    !seller_id ||
+    !productName ||
+    !productDescription ||
+    !productPrice ||
+    !category_id ||
+    !req.file
+  ) {
+    return res.status(400).json({
+      message: '❌ Semua field wajib diisi termasuk gambar'
+    });
   }
 
   const priceNum = parseFloat(productPrice);
+  const stockNum = parseInt(stock) || 0;
+
   if (isNaN(priceNum) || priceNum <= 0) {
     return res.status(400).json({ message: '❌ Harga harus valid dan > 0' });
   }
@@ -51,7 +64,7 @@ router.post('/upload', upload.single('productImage'), async (req, res) => {
       return res.status(404).json({ message: '❌ Seller tidak ditemukan' });
     }
 
-    // 📤 Upload ke Supabase Storage
+    // 📤 Upload gambar utama ke Supabase Storage
     const fileExt = path.extname(req.file.originalname);
     const fileName = `${uuidv4()}${fileExt}`;
     const filePath = `${seller_id}/${fileName}`;
@@ -67,10 +80,10 @@ router.post('/upload', upload.single('productImage'), async (req, res) => {
       return res.status(500).json({ message: '❌ Gagal upload gambar', error: uploadError.message });
     }
 
-    // ✅ Buat signed URL (7 hari)
+    // ✅ Buat signed URL gambar produk utama (7 hari)
     const { data: signedUrlData, error: signedUrlError } = await supabase.storage
       .from('product-images')
-      .createSignedUrl(filePath, 60 * 60 * 24 * 7000000); // 7 hari
+      .createSignedUrl(filePath, 60 * 60 * 24 * 7); // 7 hari
 
     if (signedUrlError) {
       return res.status(500).json({ message: '❌ Gagal generate signed URL', error: signedUrlError.message });
@@ -92,6 +105,7 @@ router.post('/upload', upload.single('productImage'), async (req, res) => {
         product_name: productName,
         product_description: productDescription,
         product_price: priceNum,
+        stock: stockNum,
         product_image_url: signedUrlData.signedUrl,
         keywords
       }])
@@ -100,6 +114,36 @@ router.post('/upload', upload.single('productImage'), async (req, res) => {
 
     if (insertError) {
       return res.status(500).json({ message: '❌ Gagal simpan produk', error: insertError.message });
+    }
+
+    // 📦 Simpan varian jika ada
+    if (variants) {
+      let parsedVariants;
+      try {
+        parsedVariants = JSON.parse(variants); // Harus array
+      } catch (parseErr) {
+        return res.status(400).json({ message: '❌ Format varian tidak valid (bukan JSON)' });
+      }
+
+      if (!Array.isArray(parsedVariants)) {
+        return res.status(400).json({ message: '❌ Varian harus berupa array' });
+      }
+
+      const variantData = parsedVariants.map(v => ({
+        product_id: product.id,
+        variant_name: v.name,
+        variant_price: parseFloat(v.price),
+        variant_stock: parseInt(v.stock),
+        variant_image_url: v.image_url || null
+      }));
+
+      const { error: variantInsertError } = await supabase
+        .from('product_variants')
+        .insert(variantData);
+
+      if (variantInsertError) {
+        return res.status(500).json({ message: '❌ Gagal simpan varian', error: variantInsertError.message });
+      }
     }
 
     return res.status(201).json({ message: '✅ Produk berhasil diunggah', data: product });
