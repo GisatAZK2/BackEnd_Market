@@ -1,14 +1,17 @@
 const express = require('express');
 const router = express.Router();
 const supabase = require('../config/supabase');
+require('dotenv').config();
 
-// 🔐 Ganti ini biar cuma kamu yang bisa trigger cron (opsional tapi disarankan)
-const API_KEY = process.env.CRON_API_KEY || 'supersecretkey';
 
+const CRON_SECRET = process.env.CRON_SECRET || 'defaultsecret';
+
+// ✅ Route dengan secret via query param
 router.get('/cron/cleanup-users', async (req, res) => {
-  const key = req.headers['x-api-key'];
-  if (key !== API_KEY) {
-    return res.status(403).json({ error: 'Unauthorized cron request 🚫' });
+  const key = req.query.secret;
+
+  if (key !== CRON_SECRET) {
+    return res.status(403).json({ error: 'Akses ditolak 🛑' });
   }
 
   try {
