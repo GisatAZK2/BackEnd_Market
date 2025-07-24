@@ -4,7 +4,6 @@ const cors = require('cors');
 const bodyParser = require('body-parser');
 const requireApiKey = require('./middleware/requireApiKey');
 const rateLimiter = require('./middleware/ratelimiter');
-const connect = require('./config/supabase');
 const authRoutes = require('./routes/auth');
 const forumpendaftaran = require('./routes/forum-pendaftaran');
 const productRoutes = require('./routes/product');
@@ -12,6 +11,7 @@ const category = require('./routes/category');
 const search = require('./routes/search');
 const clean = require('./utils/cleanup');
 const order = require('./routes/orderRoutes');
+const cookieParser = require('cookie-parser');
 require('dotenv').config();
 
 const app = express();
@@ -19,6 +19,8 @@ const app = express();
 // Middleware global
 app.use(cors());
 app.use(bodyParser.json());
+app.use(cookieParser());
+
 
 // ✅ Middleware API key (semua route wajib pakai)
 app.use(requireApiKey);

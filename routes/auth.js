@@ -2,10 +2,12 @@ const express = require('express');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const supabase = require('../config/supabase');
+const cookieParser = require('cookie-parser'); // pastikan sudah dipasang di app.js
 const { generateOtp, sendPasswordResetEmail } = require('../utils/otp');
+
 const router = express.Router();
 
-// ✅ REGISTER
+// ======================== REGISTER ========================
 router.post('/register', async (req, res) => {
   const { email, password, username } = req.body;
   console.log('Body register:', req.body);
@@ -21,22 +23,22 @@ router.post('/register', async (req, res) => {
       return res.status(400).json({ error: 'Email sudah digunakan. Silakan gunakan email lain.' });
     }
 
-    const finalUsername = username && username.trim() !== '' 
-      ? username.trim() 
+    const finalUsername = username && username.trim() !== ''
+      ? username.trim()
       : email.split('@')[0];
 
     const hashed = await bcrypt.hash(password, 10);
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
     const expiresAt = new Date(Date.now() + 5 * 60 * 1000).toISOString();
 
-    const { data: insertedUser, error: insertErr } = await supabase.from('users').insert([{
+    const { error: insertErr } = await supabase.from('users').insert([{
       email,
       username: finalUsername,
       password: hashed,
       otp_code: otp,
       otp_expires_at: expiresAt,
       verified: false
-    }]).select();
+    }]);
 
     if (insertErr) {
       console.error('Supabase insert error:', insertErr);
@@ -51,7 +53,7 @@ router.post('/register', async (req, res) => {
   }
 });
 
-// ✅ VERIFIKASI OTP
+// ======================== VERIFIKASI OTP ========================
 router.post('/verify-otp', async (req, res) => {
   const { email, otp } = req.body;
 
@@ -87,7 +89,7 @@ router.post('/verify-otp', async (req, res) => {
   }
 });
 
-// ✅ LOGIN + COOKIE
+// ======================== LOGIN ========================
 router.post('/login', async (req, res) => {
   const { email, password } = req.body;
 
@@ -107,25 +109,27 @@ router.post('/login', async (req, res) => {
 
     const token = jwt.sign({ id: user.id }, process.env.JWT_SECRET, { expiresIn: '7d' });
 
-    // Set cookie (httpOnly biar aman)
-    res.cookie('user_info', {
+    // Set cookie aman dari XSS (httpOnly)
+    res.cookie('user_info', JSON.stringify({
       id: user.id,
       email: user.email,
       username: user.username
-    }, {
+    }), {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
+      sameSite: 'Lax',
       maxAge: 7 * 24 * 60 * 60 * 1000
     });
 
-    res.json({ message: 'Login sukses.', token });
+    // kirim id user ke frontend untuk dipakai fetch /user/:id
+    res.json({ message: 'Login sukses.', token, id: user.id });
   } catch (err) {
     console.error('Login error:', err);
     res.status(500).json({ error: 'Terjadi kesalahan pada server.' });
   }
 });
 
-// ✅ LUPA PASSWORD
+// ======================== LUPA PASSWORD ========================
 router.post('/forgot-password', async (req, res) => {
   const { email } = req.body;
 
@@ -148,15 +152,28 @@ router.post('/forgot-password', async (req, res) => {
   }
 });
 
-// ✅ GET USER BY ID
+// ======================== GET USER BY ID (Validasi Cookie) ========================
 router.get('/user/:id', async (req, res) => {
-  const { id } = req.params;
+  const cookie = req.cookies.user_info; 
+  if (!cookie) return res.status(401).json({ error: 'Tidak ada sesi login.' });
+
+  let userInfo;
+  try {
+    userInfo = JSON.parse(cookie);
+  } catch (e) {
+    return res.status(400).json({ error: 'Cookie tidak valid.' });
+  }
+
+  // Pastikan cookie id sesuai dengan id yang diminta
+  if (userInfo.id !== req.params.id) {
+    return res.status(403).json({ error: 'Tidak boleh akses data user lain.' });
+  }
 
   try {
     const { data: user, error } = await supabase
       .from('users')
       .select('id, email, username, verified')
-      .eq('id', id)
+      .eq('id', req.params.id)
       .single();
 
     if (error || !user) {

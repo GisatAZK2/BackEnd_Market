@@ -1,6 +1,6 @@
 # 📦 Marketplace Backend API
 
-API untuk autentikasi dan pendaftaran seller dengan dukungan Firebase Auth, OTP, serta integrasi dengan ImageKit dan API wilayah Indonesia.
+API untuk autentikasi, pendaftaran seller, dan pengelolaan data dengan OTP, cookie, dan integrasi wilayah Indonesia.
 
 ---
 
@@ -21,7 +21,7 @@ Register akun baru + kirim OTP ke email.
 ```json
 {
   "email": "user@example.com",
-  "username" : "User123"
+  "username" : "User123",
   "password": "password123"
 }
 ```
@@ -61,7 +61,7 @@ Verifikasi OTP dan aktifkan akun.
 
 ```json
 {
-  "error": "OTP salah atau sudah kadaluarsa."
+  "error": "OTP salah atau kadaluarsa."
 }
 ```
 
@@ -91,46 +91,121 @@ Kirim link reset password ke email.
 
 #### POST `/auth/login`
 
-> Ditangani di client (Firebase SDK). Endpoint dummy.
+Login dengan email dan password.
+Jika berhasil, server akan mengirimkan:
 
-**Response:**
-
-```json
-{
-  "error": "Login ditangani oleh Firebase Client SDK."
-}
-```
-
----
-
-#### POST `/auth/verify-token`
-
-Verifikasi Firebase ID token + cek apakah user sudah verifikasi OTP.
+1. **JWT Token** dalam body response
+2. **Cookie ********`user_info`******** (HttpOnly)** yang menyimpan data user
 
 **Request:**
 
 ```json
 {
-  "idToken": "FIREBASE_ID_TOKEN"
+  "email": "user@example.com",
+  "password": "password123"
 }
 ```
 
-**Response (verified):**
+**Response (berhasil):**
 
 ```json
 {
-  "uid": "USER_UID",
-  "email": "user@example.com"
+  "message": "Login sukses.",
+  "token": "<JWT_TOKEN>",
+  "id": "user-uuid"
 }
 ```
 
-**Response (belum verified):**
+**Response (gagal):**
 
 ```json
 {
-  "error": "Akun belum diverifikasi via OTP."
+  "error": "Password salah."
 }
 ```
+
+**Catatan:**
+
+* Cookie `user_info` bersifat **HttpOnly** sehingga tidak dapat diakses oleh JavaScript (aman dari XSS).
+* JWT token dikirim ke frontend untuk digunakan bila diperlukan.
+
+---
+
+#### GET `/auth/user/:id`
+
+Mengambil informasi user berdasarkan `id`.
+**Hanya bisa diakses** jika user sudah login (cookie `user_info` tersedia dan cocok).
+
+**Request (Header):**
+
+```http
+Cookie: user_info=<HttpOnly cookie otomatis dari login>
+```
+
+**Response (berhasil):**
+
+```json
+{
+  "user": {
+    "id": "uuid-user",
+    "email": "user@example.com",
+    "username": "User123",
+    "verified": true
+  }
+}
+```
+
+**Response (gagal):**
+
+```json
+{
+  "error": "Tidak ada sesi login atau tidak boleh akses data user lain."
+}
+```
+
+---
+
+## 🖥️ **Frontend Flow**
+
+### **1. Login**
+
+```js
+fetch('/auth/login', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ email, password }),
+  credentials: 'include' // penting agar cookie ikut tersimpan
+})
+  .then(res => res.json())
+  .then(data => {
+    if (data.id) {
+      localStorage.setItem('userId', data.id);
+      // Lanjut fetch data user
+    } else {
+      alert(data.error);
+    }
+  });
+```
+
+### **2. Ambil Data User**
+
+```js
+const userId = localStorage.getItem('userId');
+
+fetch(`/auth/user/${userId}`, {
+  credentials: 'include' // kirim cookie HttpOnly
+})
+  .then(res => res.json())
+  .then(data => console.log('Data user:', data));
+```
+
+---
+
+## Catatan Keamanan
+
+* **Cookie HttpOnly** melindungi dari pencurian via XSS.
+* Server akan memvalidasi cookie agar user hanya bisa mengakses datanya sendiri.
+* JWT token hanya sebagai pelengkap; cookie menjadi sesi utama.
 
 ---
 
