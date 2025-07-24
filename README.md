@@ -359,5 +359,4 @@ Pendaftaran akun seller. Wajib kirim gambar toko (`multipart/form-data`).
 ## 📌 Catatan
 
 * Semua email akan diverifikasi menggunakan OTP sebelum akun bisa digunakan.
-* Token JWT dari Firebase harus diverifikasi sebelum mengakses fitur protected (gunakan endpoint `/verify-token`).
-* Pastikan Anda menyimpan `serviceAccountKey.json` untuk Firebase di folder `./`.
+
