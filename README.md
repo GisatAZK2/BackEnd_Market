@@ -12,30 +12,6 @@ API untuk autentikasi dan pendaftaran seller dengan dukungan Firebase Auth, OTP,
 
 ---
 
-#### POST `/auth/check-email`
-
-Cek apakah email sudah terdaftar.
-
-**Request:**
-
-```json
-{
-  "email": "user@example.com"
-}
-```
-
-**Response:**
-
-```json
-// Jika ditemukan
-{ "exists": true }
-
-// Jika tidak ditemukan
-{ "exists": false }
-```
-
----
-
 #### POST `/auth/register`
 
 Register akun baru + kirim OTP ke email.
@@ -45,6 +21,7 @@ Register akun baru + kirim OTP ke email.
 ```json
 {
   "email": "user@example.com",
+  "username" : "User123"
   "password": "password123"
 }
 ```
