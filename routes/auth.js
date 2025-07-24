@@ -3,12 +3,12 @@ const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const supabase = require('../config/supabase');
 const { generateOtp, sendPasswordResetEmail } = require('../utils/otp');
-
 const router = express.Router();
 
 // ✅ REGISTER
 router.post('/register', async (req, res) => {
   const { email, password, username } = req.body;
+  console.log('Body register:', req.body);
 
   try {
     const { data: existingUser } = await supabase
@@ -21,25 +21,27 @@ router.post('/register', async (req, res) => {
       return res.status(400).json({ error: 'Email sudah digunakan. Silakan gunakan email lain.' });
     }
 
-    // Kalau username kosong → ambil dari email sebelum @
     const finalUsername = username && username.trim() !== '' 
       ? username.trim() 
       : email.split('@')[0];
 
     const hashed = await bcrypt.hash(password, 10);
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
-    const expiresAt = new Date(Date.now() + 5 * 60 * 1000).toISOString(); // ✅ UTC time
+    const expiresAt = new Date(Date.now() + 5 * 60 * 1000).toISOString();
 
-    const { error: insertErr } = await supabase.from('users').insert({
+    const { data: insertedUser, error: insertErr } = await supabase.from('users').insert([{
       email,
       username: finalUsername,
       password: hashed,
       otp_code: otp,
       otp_expires_at: expiresAt,
       verified: false
-    });
+    }]).select();
 
-    if (insertErr) throw insertErr;
+    if (insertErr) {
+      console.error('Supabase insert error:', insertErr);
+      return res.status(500).json({ error: 'Gagal membuat user di database.' });
+    }
 
     await generateOtp(email, otp);
     res.status(201).json({ message: 'User dibuat. OTP dikirim ke email.' });
@@ -49,13 +51,12 @@ router.post('/register', async (req, res) => {
   }
 });
 
-
 // ✅ VERIFIKASI OTP
 router.post('/verify-otp', async (req, res) => {
   const { email, otp } = req.body;
 
   try {
-    const { data: user, error } = await supabase
+    const { data: user } = await supabase
       .from('users')
       .select('*')
       .eq('email', email)
@@ -63,12 +64,7 @@ router.post('/verify-otp', async (req, res) => {
 
     if (!user) return res.status(404).json({ error: 'User tidak ditemukan.' });
 
-    const now = new Date().toISOString(); // ✅ UTC time string
-
-    // ✅ Debug log (opsional)
-    console.log('OTP expires at:', user.otp_expires_at);
-    console.log('Now:', now);
-
+    const now = new Date().toISOString();
     if (user.otp_code === otp && user.otp_expires_at > now) {
       const { error: updateErr } = await supabase
         .from('users')
@@ -91,12 +87,12 @@ router.post('/verify-otp', async (req, res) => {
   }
 });
 
-// ✅ LOGIN
+// ✅ LOGIN + COOKIE
 router.post('/login', async (req, res) => {
   const { email, password } = req.body;
 
   try {
-    const { data: user, error } = await supabase
+    const { data: user } = await supabase
       .from('users')
       .select('*')
       .eq('email', email)
@@ -110,6 +106,18 @@ router.post('/login', async (req, res) => {
     if (!match) return res.status(401).json({ error: 'Password salah.' });
 
     const token = jwt.sign({ id: user.id }, process.env.JWT_SECRET, { expiresIn: '7d' });
+
+    // Set cookie (httpOnly biar aman)
+    res.cookie('user_info', {
+      id: user.id,
+      email: user.email,
+      username: user.username
+    }, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      maxAge: 7 * 24 * 60 * 60 * 1000
+    });
+
     res.json({ message: 'Login sukses.', token });
   } catch (err) {
     console.error('Login error:', err);
@@ -122,7 +130,7 @@ router.post('/forgot-password', async (req, res) => {
   const { email } = req.body;
 
   try {
-    const { data: user, error } = await supabase
+    const { data: user } = await supabase
       .from('users')
       .select('*')
       .eq('email', email)
@@ -136,6 +144,28 @@ router.post('/forgot-password', async (req, res) => {
     res.json({ message: 'Link reset password dikirim ke email.' });
   } catch (err) {
     console.error('Reset password error:', err);
+    res.status(500).json({ error: 'Terjadi kesalahan pada server.' });
+  }
+});
+
+// ✅ GET USER BY ID
+router.get('/user/:id', async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const { data: user, error } = await supabase
+      .from('users')
+      .select('id, email, username, verified')
+      .eq('id', id)
+      .single();
+
+    if (error || !user) {
+      return res.status(404).json({ error: 'User tidak ditemukan.' });
+    }
+
+    res.json({ user });
+  } catch (err) {
+    console.error('Get user error:', err);
     res.status(500).json({ error: 'Terjadi kesalahan pada server.' });
   }
 });
