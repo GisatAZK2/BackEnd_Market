@@ -8,10 +8,10 @@ const router = express.Router();
 
 // ✅ REGISTER
 router.post('/register', async (req, res) => {
-  const { email, password } = req.body;
+  const { email, password, username } = req.body;
 
   try {
-    const { data: existingUser, error: userErr } = await supabase
+    const { data: existingUser } = await supabase
       .from('users')
       .select('*')
       .eq('email', email)
@@ -21,12 +21,18 @@ router.post('/register', async (req, res) => {
       return res.status(400).json({ error: 'Email sudah digunakan. Silakan gunakan email lain.' });
     }
 
+    // Kalau username kosong → ambil dari email sebelum @
+    const finalUsername = username && username.trim() !== '' 
+      ? username.trim() 
+      : email.split('@')[0];
+
     const hashed = await bcrypt.hash(password, 10);
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
     const expiresAt = new Date(Date.now() + 5 * 60 * 1000).toISOString(); // ✅ UTC time
 
     const { error: insertErr } = await supabase.from('users').insert({
       email,
+      username: finalUsername,
       password: hashed,
       otp_code: otp,
       otp_expires_at: expiresAt,
@@ -42,6 +48,7 @@ router.post('/register', async (req, res) => {
     res.status(500).json({ error: 'Terjadi kesalahan pada server.' });
   }
 });
+
 
 // ✅ VERIFIKASI OTP
 router.post('/verify-otp', async (req, res) => {
