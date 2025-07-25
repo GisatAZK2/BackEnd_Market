@@ -2,10 +2,15 @@ const express = require('express');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const supabase = require('../config/supabase');
-const cookieParser = require('cookie-parser'); // pastikan sudah dipasang di app.js
+const { createClient } = require('@supabase/supabase-js');
 const { generateOtp, sendPasswordResetEmail } = require('../utils/otp');
 
+
 const router = express.Router();
+const supabaseAdmin = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_ROLE_KEY 
+);
 
 // ======================== REGISTER ========================
 router.post('/register', async (req, res) => {
@@ -259,6 +264,99 @@ router.delete('/user/:id', async (req, res) => {
   } catch (err) {
     console.error('Delete user error:', err);
     res.status(500).json({ error: 'Gagal menghapus user.' });
+  }
+});
+
+router.post('/login/google', async (req, res) => {
+  const { provider_token } = req.body; // token dari frontend (Google OAuth token)
+
+  try {
+    // Verifikasi token Google ke Supabase
+    const { data: session, error: signInError } = await supabase.auth.signInWithIdToken({
+      provider: 'google',
+      token: provider_token,
+    });
+
+    if (signInError || !session || !session.user) {
+      return res.status(401).json({ error: 'Login Google gagal.' });
+    }
+
+    const { email, user_metadata } = session.user;
+
+    // Cek apakah email sudah ada di tabel 'users'
+    const { data: existingUser } = await supabase
+      .from('users')
+      .select('*')
+      .eq('email', email)
+      .single();
+
+    if (!existingUser) {
+      // User baru → buat user & kirim OTP
+      const otp = Math.floor(100000 + Math.random() * 900000).toString();
+      const expiresAt = new Date(Date.now() + 5 * 60 * 1000).toISOString();
+      const username = email.split('@')[0];
+
+      const { error: insertErr } = await supabase
+        .from('users')
+        .insert([{
+          email,
+          username,
+          password: null,
+          otp_code: otp,
+          otp_expires_at: expiresAt,
+          verified: false,
+        }]);
+
+      if (insertErr) {
+        console.error('Insert user error:', insertErr);
+        return res.status(500).json({ error: 'Gagal menyimpan user.' });
+      }
+
+      await generateOtp(email, otp);
+      return res.status(201).json({
+        message: 'User Google baru dibuat. OTP dikirim ke email.',
+        step: 'verify_otp',
+      });
+    }
+
+    if (!existingUser.verified) {
+      // User ada tapi belum verifikasi
+      const otp = Math.floor(100000 + Math.random() * 900000).toString();
+      const expiresAt = new Date(Date.now() + 5 * 60 * 1000).toISOString();
+
+      await supabase
+        .from('users')
+        .update({
+          otp_code: otp,
+          otp_expires_at: expiresAt,
+        })
+        .eq('email', email);
+
+      await generateOtp(email, otp);
+      return res.status(200).json({
+        message: 'OTP dikirim ulang. Silakan verifikasi.',
+        step: 'verify_otp',
+      });
+    }
+
+    // Sudah verified → login langsung
+    const token = jwt.sign({ id: existingUser.id }, process.env.JWT_SECRET, { expiresIn: '7d' });
+
+    res.cookie('user_info', JSON.stringify({
+      id: existingUser.id,
+      email: existingUser.email,
+      username: existingUser.username
+    }), {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'Lax',
+      maxAge: 7 * 24 * 60 * 60 * 1000
+    });
+
+    res.json({ message: 'Login Google sukses.', token, id: existingUser.id });
+  } catch (err) {
+    console.error('Google login error:', err);
+    res.status(500).json({ error: 'Terjadi kesalahan pada server.' });
   }
 });
 

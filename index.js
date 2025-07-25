@@ -15,15 +15,22 @@ const cookieParser = require('cookie-parser');
 require('dotenv').config();
 
 const app = express();
-const getLink = process.env.CORS_ORIGIN?.split(',') || []; 
+const getLink = process.env.CORS_ORIGIN?.split(',').map(link => link.trim()) || [];
 
 // CORS
 const corsOptions = {
-  origin: getLink,
-  optionsSuccessStatus: 200, // Masalah Broser
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  origin: (origin, callback) => {
+    if (!origin || getLink.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error("Not allowed by CORS"));
+    }
+  },
   credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  optionsSuccessStatus: 200,
 };
+
 
 
 // Middleware global
