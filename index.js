@@ -32,7 +32,6 @@ const corsOptions = {
 };
 
 
-
 // Middleware global
 app.use(cors(corsOptions));
 app.use(bodyParser.json());

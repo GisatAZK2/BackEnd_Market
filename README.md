@@ -422,6 +422,169 @@ Pendaftaran akun seller. Wajib kirim gambar toko (`multipart/form-data`).
 
 ---
 
+
+# 📦 Produk API 
+
+API ini menangani CRUD produk, upload gambar ke Supabase Storage, serta fitur pencarian berdasarkan lokasi menggunakan Haversine Formula.
+
+## 📁 Endpoint List
+
+---
+
+### 🔼 `POST /upload`
+
+**Deskripsi:** Upload produk baru dengan gambar dan varian (opsional).  
+**Form Data:**
+
+| Field             | Tipe     | Keterangan                              |
+|------------------|----------|------------------------------------------|
+| `seller_id`       | string   | ID seller                                |
+| `productName`     | string   | Nama produk                              |
+| `productDescription` | string   | Deskripsi produk                          |
+| `productPrice`    | number   | Harga produk (wajib lebih dari 0)        |
+| `stock`           | number   | Jumlah stok (opsional, default 0)        |
+| `category_id`     | string   | ID kategori                              |
+| `variants`        | string   | JSON string array varian produk (opsional) |
+| `productImage`    | file     | Gambar produk (.jpeg/.png, maks. 5MB)    |
+
+**Response:**
+```json
+{
+  "message": "✅ Produk berhasil diunggah",
+  "data": { ... }
+}
+```
+
+---
+
+### 🛍️ `GET /allproduct`
+
+Mengambil semua produk dari database.
+
+**Response:**
+```json
+{
+  "message": "✅ Ditemukan X produk",
+  "products": [...]
+}
+```
+
+---
+
+### 📍 `GET /nearby-by-location?lat=<latitude>&lng=<longitude>`
+
+**Deskripsi:** Menampilkan produk dari seller yang berada dalam radius 40 km dari lokasi pengguna.
+
+**Query Parameter:**
+
+- `lat` — Latitude pengguna
+- `lng` — Longitude pengguna
+
+**Contoh:** `/nearby-by-location?lat=-6.200&lng=106.816`
+
+**Response:**
+```json
+{
+  "message": "✅ Ditemukan X produk dalam radius 40 km",
+  "products": [
+    {
+      "id": "...",
+      "product_name": "...",
+      "distanceInKm": 5.42,
+      ...
+    }
+  ]
+}
+```
+
+---
+
+### 📂 `GET /by-category/:category_id`
+
+Menampilkan produk berdasarkan kategori tertentu.
+
+---
+
+### 🔍 `GET /:id`
+
+Mengambil detail produk berdasarkan `id`.
+
+---
+
+### ✏️ `PUT /:id`
+
+Edit produk berdasarkan ID. Bisa disertai `productImage` (opsional) untuk mengganti gambar.
+
+---
+
+### ❌ `DELETE /:id`
+
+Menghapus produk berdasarkan ID. Termasuk menghapus gambar dari Supabase Storage.
+
+---
+
+## 🧰 Struktur Tabel Terkait
+
+### Tabel: `products`
+| Kolom                 | Tipe       |
+|-----------------------|------------|
+| `id`                  | uuid       |
+| `seller_id`           | uuid       |
+| `product_name`        | string     |
+| `product_description` | text       |
+| `product_price`       | float      |
+| `stock`               | integer    |
+| `category_id`         | uuid       |
+| `product_image_url`   | text       |
+| `keywords`            | string[]   |
+
+### Tabel: `product_variants`
+| Kolom              | Tipe     |
+|--------------------|----------|
+| `product_id`       | uuid     |
+| `variant_name`     | string   |
+| `variant_price`    | float    |
+| `variant_stock`    | int      |
+| `variant_image_url`| text     |
+
+---
+
+## 🧭 Panduan Ambil Lokasi dari Frontend (JavaScript)
+
+Gunakan **HTML5 Geolocation API** untuk ambil koordinat pengguna:
+
+```js
+navigator.geolocation.getCurrentPosition(
+  (position) => {
+    const latitude = position.coords.latitude;
+    const longitude = position.coords.longitude;
+
+    // Contoh fetch produk terdekat
+    fetch(`/api/product/nearby-by-location?lat=${latitude}&lng=${longitude}`)
+      .then(res => res.json())
+      .then(data => {
+        console.log('Produk terdekat:', data.products);
+      })
+      .catch(err => console.error(err));
+  },
+  (error) => {
+    console.error('Gagal mendapatkan lokasi:', error);
+  },
+  {
+    enableHighAccuracy: true,
+    timeout: 10000,
+    maximumAge: 0
+  }
+);
+```
+
+### 🛑 Catatan:
+- Minta izin pengguna agar bisa akses lokasi.
+- Geolocation hanya berjalan di **HTTPS** atau **localhost**.
+
+
+---
+
 ## 📌 Catatan
 
 * Semua email akan diverifikasi menggunakan OTP sebelum akun bisa digunakan.
