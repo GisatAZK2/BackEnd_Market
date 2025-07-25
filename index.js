@@ -15,9 +15,19 @@ const cookieParser = require('cookie-parser');
 require('dotenv').config();
 
 const app = express();
+const getLink = process.env.CORS_ORIGIN?.split(',') || []; 
+
+// CORS
+const corsOptions = {
+  origin: getLink,
+  optionsSuccessStatus: 200, // Masalah Broser
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  credentials: true,
+};
+
 
 // Middleware global
-app.use(cors());
+app.use(cors(corsOptions));
 app.use(bodyParser.json());
 app.use(cookieParser());
 

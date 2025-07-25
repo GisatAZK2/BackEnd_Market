@@ -187,4 +187,80 @@ router.get('/user/:id', async (req, res) => {
   }
 });
 
+// ======================== UPDATE USER ========================
+router.put('/user/:id', async (req, res) => {
+  const cookie = req.cookies.user_info;
+  if (!cookie) return res.status(401).json({ error: 'Tidak ada sesi login.' });
+
+  let userInfo;
+  try {
+    userInfo = JSON.parse(cookie);
+  } catch (e) {
+    return res.status(400).json({ error: 'Cookie tidak valid.' });
+  }
+
+  if (userInfo.id !== req.params.id) {
+    return res.status(403).json({ error: 'Tidak boleh update data user lain.' });
+  }
+
+  const { username, password } = req.body;
+
+  try {
+    const updatePayload = {};
+
+    if (username) updatePayload.username = username;
+    if (password) {
+      const hashed = await bcrypt.hash(password, 10);
+      updatePayload.password = hashed;
+    }
+
+    const { data, error } = await supabase
+      .from('users')
+      .update(updatePayload)
+      .eq('id', req.params.id)
+      .select('id, email, username');
+
+    if (error) throw error;
+
+    res.json({ message: 'User berhasil diupdate.', user: data[0] });
+  } catch (err) {
+    console.error('Update user error:', err);
+    res.status(500).json({ error: 'Gagal update user.' });
+  }
+});
+
+
+// ======================== DELETE USER ========================
+router.delete('/user/:id', async (req, res) => {
+  const cookie = req.cookies.user_info;
+  if (!cookie) return res.status(401).json({ error: 'Tidak ada sesi login.' });
+
+  let userInfo;
+  try {
+    userInfo = JSON.parse(cookie);
+  } catch (e) {
+    return res.status(400).json({ error: 'Cookie tidak valid.' });
+  }
+
+  if (userInfo.id !== req.params.id) {
+    return res.status(403).json({ error: 'Tidak boleh hapus user lain.' });
+  }
+
+  try {
+    const { error } = await supabase
+      .from('users')
+      .delete()
+      .eq('id', req.params.id);
+
+    if (error) throw error;
+
+    res.clearCookie('user_info'); // Hapus cookie juga
+    res.json({ message: 'User berhasil dihapus dan sesi diakhiri.' });
+  } catch (err) {
+    console.error('Delete user error:', err);
+    res.status(500).json({ error: 'Gagal menghapus user.' });
+  }
+});
+
+
 module.exports = router;
