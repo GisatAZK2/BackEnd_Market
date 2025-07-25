@@ -14,54 +14,202 @@ const transporter = nodemailer.createTransport({
 /**
  * Kirim email notifikasi order ke buyer & seller (gambar pakai URL langsung)
  */
-async function sendOrderNotification({ product_name, quantity, total_price, product_image_url, buyer_email, seller_email }) {
-  const htmlEmailTemplate = (title, message) => `
+async function sendOrderNotification({
+  product_name,
+  variant_name,
+  quantity,
+  total_price,
+  product_image_url,
+  buyer_email,
+  seller_email,
+  buyer_username
+}) {
+  const htmlEmailTemplate = (title, message, isBuyer) => `
     <!DOCTYPE html>
     <html lang="id">
     <head>
       <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
       <title>${title}</title>
+      <style>
+        @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600&display=swap');
+        
+        body {
+          font-family: 'Poppins', Arial, sans-serif;
+          margin: 0;
+          padding: 0;
+          background-color: #f5f7fa;
+          color: #333;
+          line-height: 1.6;
+        }
+        
+        .container {
+          max-width: 600px;
+          margin: 20px auto;
+          background: #ffffff;
+          border-radius: 12px;
+          overflow: hidden;
+          box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+        }
+        
+        .header {
+          background: ${isBuyer ? '#4CAF50' : '#2196F3'};
+          color: white;
+          padding: 25px 30px;
+          text-align: center;
+        }
+        
+        .header h1 {
+          margin: 0;
+          font-size: 24px;
+          font-weight: 600;
+        }
+        
+        .content {
+          padding: 30px;
+        }
+        
+        .order-details {
+          background: #f9f9f9;
+          border-radius: 8px;
+          padding: 20px;
+          margin-bottom: 25px;
+        }
+        
+        .detail-row {
+          display: flex;
+          margin-bottom: 10px;
+        }
+        
+        .detail-label {
+          font-weight: 500;
+          width: 120px;
+          color: #666;
+        }
+        
+        .detail-value {
+          flex: 1;
+          font-weight: 400;
+        }
+        
+        .product-image {
+          text-align: center;
+          margin: 20px 0;
+        }
+        
+        .product-image img {
+          max-width: 200px;
+          border-radius: 8px;
+          box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+          border: 1px solid #eee;
+        }
+        
+        .message {
+          background: #f0f8ff;
+          padding: 15px;
+          border-radius: 8px;
+          border-left: 4px solid ${isBuyer ? '#4CAF50' : '#2196F3'};
+          margin: 20px 0;
+        }
+        
+        .footer {
+          text-align: center;
+          padding: 15px;
+          color: #888;
+          font-size: 12px;
+          border-top: 1px solid #eee;
+        }
+        
+        .highlight {
+          color: ${isBuyer ? '#4CAF50' : '#2196F3'};
+          font-weight: 500;
+        }
+      </style>
     </head>
-    <body style="font-family: Arial, sans-serif; padding: 20px; background-color: #f9f9f9;">
-      <div style="max-width: 500px; margin: auto; background: #fff; padding: 20px; border-radius: 10px; box-shadow: 0 2px 6px rgba(0,0,0,0.1);">
-        <h2>${title}</h2>
-        <p><strong>Produk:</strong> ${product_name}</p>
-        <p><strong>Quantity:</strong> ${quantity}</p>
-        <p><strong>Total Harga:</strong> Rp${total_price.toLocaleString('id-ID')}</p>
-        <div style="margin-top: 15px;">
-          <img src="${product_image_url}" alt="Produk" style="width: 100%; max-width: 200px; border-radius: 8px;" />
+    <body>
+      <div class="container">
+        <div class="header">
+          <h1>${title}</h1>
         </div>
-        <p style="margin-top: 20px;">${message}</p>
-        <hr style="margin-top: 30px;">
-        <small style="color: #666;">Email ini dikirim otomatis oleh sistem Produk Terdekat.</small>
+        
+        <div class="content">
+          <div class="order-details">
+            <div class="detail-row">
+              <div class="detail-label">Produk:</div>
+              <div class="detail-value">${product_name}</div>
+            </div>
+            ${variant_name ? `
+            <div class="detail-row">
+              <div class="detail-label">Varian:</div>
+              <div class="detail-value">${variant_name}</div>
+            </div>` : ''}
+            <div class="detail-row">
+              <div class="detail-label">Jumlah:</div>
+              <div class="detail-value">${quantity}</div>
+            </div>
+            <div class="detail-row">
+              <div class="detail-label">Total Harga:</div>
+              <div class="detail-value highlight">Rp${total_price.toLocaleString('id-ID')}</div>
+            </div>
+            ${!isBuyer ? `
+            <div class="detail-row">
+              <div class="detail-label">Pembeli:</div>
+              <div class="detail-value highlight">${buyer_username}</div>
+            </div>` : ''}
+          </div>
+          
+          <div class="product-image">
+            <img src="${product_image_url}" alt="${product_name}">
+          </div>
+          
+          <div class="message">
+            <p>${message}</p>
+          </div>
+          
+          <p style="text-align: center; margin-top: 25px;">
+            <a href="#" style="display: inline-block; padding: 12px 25px; 
+              background: ${isBuyer ? '#4CAF50' : '#2196F3'}; 
+              color: white; text-decoration: none; border-radius: 6px;
+              font-weight: 500;">
+              ${isBuyer ? 'Lihat Detail Pesanan' : 'Kelola Pesanan'}
+            </a>
+          </p>
+        </div>
+        
+        <div class="footer">
+          <p>Email ini dikirim otomatis oleh sistem Produk Terdekat. Harap tidak membalas email ini.</p>
+          <p>© ${new Date().getFullYear()} Produk Terdekat. All rights reserved.</p>
+        </div>
       </div>
     </body>
     </html>
   `;
 
-  const mailOptionsBuyer = {
-    from: FROM_EMAIL,
+  const buyerMail = {
+    from: `Produk Terdekat <${FROM_EMAIL}>`,
     to: buyer_email,
-    subject: `🛒 Pesanan Anda Berhasil!`,
+    subject: `🛒 Pesanan Anda Berhasil! - ${product_name}`,
     html: htmlEmailTemplate(
       '🎉 Terima kasih sudah memesan!',
-      'Pesanan Anda sedang diproses dan siap diambil dalam 6 jam.'
+      'Pesanan Anda sedang diproses dan siap diambil dalam 6 jam. Kami akan mengirimkan notifikasi ketika pesanan Anda sudah siap diambil.',
+      true
     )
   };
 
-  const mailOptionsSeller = {
-    from: FROM_EMAIL,
+  const sellerMail = {
+    from: `Produk Terdekat <${FROM_EMAIL}>`,
     to: seller_email,
-    subject: `📦 Ada Pesanan Baru!`,
+    subject: `📦 Pesanan Baru dari ${buyer_username}`,
     html: htmlEmailTemplate(
-      '📢 Anda menerima pesanan baru!',
-      'Segera proses pesanan ini untuk memastikan pengalaman terbaik bagi pembeli.'
+      '📢 Pesanan Baru Diterima!',
+      `Segera proses pesanan ini untuk memastikan pengalaman terbaik bagi pembeli. Harap konfirmasi pesanan dalam waktu 1 jam.`,
+      false
     )
   };
 
   try {
-    await transporter.sendMail(mailOptionsBuyer);
-    await transporter.sendMail(mailOptionsSeller);
+    await transporter.sendMail(buyerMail);
+    await transporter.sendMail(sellerMail);
     console.log(`✅ Email order dikirim ke ${buyer_email} & ${seller_email}`);
   } catch (err) {
     console.error('❌ Gagal kirim email order:', err.message);
