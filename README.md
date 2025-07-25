@@ -164,6 +164,72 @@ Cookie: user_info=<HttpOnly cookie otomatis dari login>
 ```
 
 ---
+### ✏️ PUT `/auth/user/:id`
+
+Update data user (hanya untuk user yang sedang login dan sesuai ID-nya).
+
+**Headers:**
+```js
+Cookie: user_info=<HttpOnly cookie otomatis dari login>
+```
+
+
+**Request Body:**
+
+```json
+{
+  "username": "NamaBaru",
+  "password": "passwordBaru123"
+}
+```
+
+**Response (berhasil):**
+
+```json
+{
+  "message": "User berhasil diupdate.",
+  "user": {
+    "id": "uuid-user",
+    "email": "user@example.com",
+    "username": "NamaBaru"
+  }
+}
+```
+**Response (Gagal):**
+
+```json
+{
+  "error": "Tidak boleh update data user lain."
+}
+```
+
+---
+### 🗑️ DELETE `/auth/user/:id`
+
+Hapus akun user dan hapus cookie login (logout otomatis).
+
+**Headers:**
+```js
+  Cookie: user_info=<HttpOnly cookie otomatis dari login>
+```
+
+**Response (Berhasil):**
+```json
+{
+  "message": "User berhasil dihapus dan sesi diakhiri."
+}
+
+```
+
+**Response (Gagal (Akses User Lain)):**
+```json
+{
+  "error": "Tidak boleh hapus user lain."
+}
+
+```
+
+---
 
 ## 🖥️ **Frontend Flow**
 
