@@ -1,4 +1,3 @@
-// 🔁 Migrasi Express Router Produk ke Supabase
 const express = require('express');
 const path = require('path');
 const multer = require('multer');
@@ -8,94 +7,89 @@ const generateKeywords = require('../utils/keywordGenerator');
 
 const router = express.Router();
 
-// 📦 Multer setup
-const upload = multer({
+// === Multer untuk multi gambar produk & varian ===
+const uploadMulter = multer({
   limits: { fileSize: 5 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
-    if (file.mimetype === 'image/jpeg' || file.mimetype === 'image/png') {
-      cb(null, true);
-    } else {
-      cb(new Error('❌ Gambar harus JPEG atau PNG'));
-    }
+    if (['image/jpeg', 'image/png'].includes(file.mimetype)) cb(null, true);
+    else cb(new Error('❌ Gambar harus JPEG atau PNG'));
   }
 });
 
-// 🧾 POST /upload (unggah produk baru)
-router.post('/upload', upload.single('productImage'), async (req, res) => {
+const uploadForCreate = uploadMulter.fields([
+  { name: 'productImages', maxCount: 10 },
+  { name: 'variantImages', maxCount: 10 }
+]);
+
+const uploadForEdit = uploadMulter.array('productImages', 10);
+
+// === Helper: ambil variant & tentukan stok final ===
+async function attachVariantsAndStock(products) {
+  if (!products || products.length === 0) return [];
+  const ids = products.map(p => p.id);
+
+  const { data: variants, error } = await supabase
+    .from('product_variants')
+    .select('*')
+    .in('product_id', ids);
+
+  if (error) {
+    console.error(error.message);
+    return products.map(p => ({ ...p, variants: [], finalStock: p.stock }));
+  }
+
+  return products.map(p => {
+    const vList = variants.filter(v => v.product_id === p.id);
+    let finalStock = p.stock; // default manual
+    if (vList.length > 0) {
+      finalStock = vList.reduce((sum, v) => sum + v.variant_stock, 0);
+    }
+    return { ...p, variants: vList, finalStock };
+  });
+}
+
+// === Upload Produk Baru ===
+router.post('/upload', uploadForCreate, async (req, res) => {
   const {
     seller_id,
     productName,
     productDescription,
     productPrice,
     category_id,
-    stock,
-    variants // ← dikirim dalam bentuk string JSON
+    stock, // manual kalau tidak ada varian
+    variants // JSON string
   } = req.body;
 
-  if (
-    !seller_id ||
-    !productName ||
-    !productDescription ||
-    !productPrice ||
-    !category_id ||
-    !req.file
-  ) {
-    return res.status(400).json({
-      message: '❌ Semua field wajib diisi termasuk gambar'
-    });
+  if (!seller_id || !productName || !productDescription || !productPrice || !category_id) {
+    return res.status(400).json({ message: '❌ Semua field wajib diisi' });
+  }
+  if (!req.files['productImages']) {
+    return res.status(400).json({ message: '❌ Minimal 1 gambar produk diperlukan' });
   }
 
   const priceNum = parseFloat(productPrice);
-  const stockNum = parseInt(stock) || 0;
-
-  if (isNaN(priceNum) || priceNum <= 0) {
-    return res.status(400).json({ message: '❌ Harga harus valid dan > 0' });
-  }
+  const stockNum = stock ? parseInt(stock) : 0;
+  if (isNaN(priceNum) || priceNum <= 0) return res.status(400).json({ message: '❌ Harga tidak valid' });
 
   try {
-    // 🔍 Cari seller
-    const { data: seller, error: sellerError } = await supabase
-      .from('sellers')
-      .select('*')
-      .eq('id', seller_id)
-      .single();
+    const { data: seller } = await supabase.from('sellers').select('*').eq('id', seller_id).single();
+    if (!seller) return res.status(404).json({ message: '❌ Seller tidak ditemukan' });
 
-    if (sellerError || !seller) {
-      return res.status(404).json({ message: '❌ Seller tidak ditemukan' });
+    // Upload multi gambar produk
+    const productImagesUrls = [];
+    for (let img of req.files['productImages']) {
+      const fileExt = path.extname(img.originalname);
+      const fileName = `${uuidv4()}${fileExt}`;
+      const filePath = `${seller_id}/products/${fileName}`;
+      await supabase.storage.from('product-images').upload(filePath, img.buffer, { contentType: img.mimetype, upsert: true });
+      const { data: urlData } = await supabase.storage.from('product-images').createSignedUrl(filePath, 60 * 60 * 24 * 7);
+      productImagesUrls.push(urlData.signedUrl);
     }
 
-    // 📤 Upload gambar utama ke Supabase Storage
-    const fileExt = path.extname(req.file.originalname);
-    const fileName = `${uuidv4()}${fileExt}`;
-    const filePath = `${seller_id}/${fileName}`;
+    const keywords = [...generateKeywords(productName), ...generateKeywords(productDescription)];
 
-    const { error: uploadError } = await supabase.storage
-      .from('product-images')
-      .upload(filePath, req.file.buffer, {
-        contentType: req.file.mimetype,
-        upsert: true
-      });
-
-    if (uploadError) {
-      return res.status(500).json({ message: '❌ Gagal upload gambar', error: uploadError.message });
-    }
-
-    // ✅ Buat signed URL gambar produk utama (7 hari)
-    const { data: signedUrlData, error: signedUrlError } = await supabase.storage
-      .from('product-images')
-      .createSignedUrl(filePath, 60 * 60 * 24 * 7); // 7 hari
-
-    if (signedUrlError) {
-      return res.status(500).json({ message: '❌ Gagal generate signed URL', error: signedUrlError.message });
-    }
-
-    const keywords = [
-      ...generateKeywords(productName),
-      ...generateKeywords(productDescription)
-    ];
-
-    // 💾 Simpan ke tabel products
-    const { data: product, error: insertError } = await supabase
+    // Insert produk
+    const { data: product } = await supabase
       .from('products')
       .insert([{
         seller_id,
@@ -106,44 +100,46 @@ router.post('/upload', upload.single('productImage'), async (req, res) => {
         product_description: productDescription,
         product_price: priceNum,
         stock: stockNum,
-        product_image_url: signedUrlData.signedUrl,
+        product_image_url: productImagesUrls,
         keywords
       }])
       .select()
       .single();
 
-    if (insertError) {
-      return res.status(500).json({ message: '❌ Gagal simpan produk', error: insertError.message });
+    // Variants
+    let parsedVariants = [];
+    if (variants) {
+      try { parsedVariants = JSON.parse(variants); }
+      catch { return res.status(400).json({ message: '❌ Format varian tidak valid' }); }
     }
 
-    // 📦 Simpan varian jika ada
-    if (variants) {
-      let parsedVariants;
-      try {
-        parsedVariants = JSON.parse(variants); // Harus array
-      } catch (parseErr) {
-        return res.status(400).json({ message: '❌ Format varian tidak valid (bukan JSON)' });
+    if (Array.isArray(parsedVariants) && parsedVariants.length > 0) {
+      const uploadedVariants = [];
+      for (let i = 0; i < parsedVariants.length; i++) {
+        const v = parsedVariants[i];
+        let variantImageUrl = v.image_url || null;
+        if (req.files['variantImages'] && req.files['variantImages'][i]) {
+          const variantFile = req.files['variantImages'][i];
+          const fileExt = path.extname(variantFile.originalname);
+          const fileName = `${uuidv4()}${fileExt}`;
+          const variantPath = `${seller_id}/variants/${fileName}`;
+          await supabase.storage.from('product-images').upload(variantPath, variantFile.buffer, { contentType: variantFile.mimetype, upsert: true });
+          const { data: urlData } = await supabase.storage.from('product-images').createSignedUrl(variantPath, 60 * 60 * 24 * 7);
+          variantImageUrl = urlData.signedUrl;
+        }
+        uploadedVariants.push({
+          product_id: product.id,
+          variant_name: v.name,
+          variant_price: parseFloat(v.price),
+          variant_stock: parseInt(v.stock),
+          variant_image_url: variantImageUrl
+        });
       }
+      await supabase.from('product_variants').insert(uploadedVariants);
 
-      if (!Array.isArray(parsedVariants)) {
-        return res.status(400).json({ message: '❌ Varian harus berupa array' });
-      }
-
-      const variantData = parsedVariants.map(v => ({
-        product_id: product.id,
-        variant_name: v.name,
-        variant_price: parseFloat(v.price),
-        variant_stock: parseInt(v.stock),
-        variant_image_url: v.image_url || null
-      }));
-
-      const { error: variantInsertError } = await supabase
-        .from('product_variants')
-        .insert(variantData);
-
-      if (variantInsertError) {
-        return res.status(500).json({ message: '❌ Gagal simpan varian', error: variantInsertError.message });
-      }
+      // Update stok produk = total stok varian
+      const totalStock = uploadedVariants.reduce((sum, v) => sum + v.variant_stock, 0);
+      await supabase.from('products').update({ stock: totalStock }).eq('id', product.id);
     }
 
     return res.status(201).json({ message: '✅ Produk berhasil diunggah', data: product });
@@ -152,42 +148,26 @@ router.post('/upload', upload.single('productImage'), async (req, res) => {
   }
 });
 
-// 🔎 Haversine Distance
+// === GET produk terdekat ===
 const haversineDistance = (lat1, lon1, lat2, lon2) => {
   const toRad = (value) => (value * Math.PI) / 180;
   const R = 6371;
   const dLat = toRad(lat2 - lat1);
   const dLon = toRad(lon2 - lon1);
-  const a =
-    Math.sin(dLat / 2) ** 2 +
-    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   return R * c;
 };
 
-// 🔍 Produk terdekat
 router.get('/nearby-by-location', async (req, res) => {
   const { lat, lng } = req.query;
-
   const userLat = parseFloat(lat);
   const userLng = parseFloat(lng);
-
-  if (isNaN(userLat) || isNaN(userLng)) {
-    return res.status(400).json({ message: '❌ Koordinat tidak valid' });
-  }
+  if (isNaN(userLat) || isNaN(userLng)) return res.status(400).json({ message: '❌ Koordinat tidak valid' });
 
   try {
-    const { data: sellers, error: sellerErr } = await supabase
-      .from('sellers')
-      .select('id, name, latitude, longitude');
-
-    const { data: products, error: productErr } = await supabase
-      .from('products')
-      .select('*');
-
-    if (sellerErr || productErr || !sellers || !products) {
-      return res.status(500).json({ message: '❌ Gagal ambil data dari Supabase' });
-    }
+    const { data: sellers } = await supabase.from('sellers').select('id, name, latitude, longitude');
+    const { data: products } = await supabase.from('products').select('*');
 
     const merged = products.map((product) => {
       const seller = sellers.find((s) => s.id === product.seller_id);
@@ -195,237 +175,269 @@ router.get('/nearby-by-location', async (req, res) => {
         seller && seller.latitude && seller.longitude
           ? haversineDistance(userLat, userLng, seller.latitude, seller.longitude)
           : Infinity;
-
-      return {
-        ...product,
-        sellerName: seller?.name,
-        distanceInKm: +distanceInKm.toFixed(2)
-      };
+      return { ...product, sellerName: seller?.name, distanceInKm: +distanceInKm.toFixed(2) };
     }).filter(p => p.distanceInKm <= 40);
 
-    return res.status(200).json({
-      message: `✅ Ditemukan ${merged.length} produk dalam radius 40 km`,
-      products: merged
-    });
+    const mergedWithVariants = await attachVariantsAndStock(merged);
+    return res.status(200).json({ message: `✅ Ditemukan ${mergedWithVariants.length} produk dalam radius 40 km`, products: mergedWithVariants });
   } catch (error) {
     return res.status(500).json({ message: '❌ Gagal mengambil produk', error: error.message });
   }
 });
 
-
-// 📦 Semua produk
+// === GET semua produk ===
 router.get('/allproduct', async (req, res) => {
   try {
-    const { data: products, error } = await supabase
-      .from('products')
-      .select('*');
-
-    if (error) throw error;
-
-    return res.status(200).json({
-      message: `✅ Ditemukan ${products.length} produk`,
-      products
-    });
+    const { data: products } = await supabase.from('products').select('*');
+    const productsWithVariants = await attachVariantsAndStock(products);
+    return res.status(200).json({ message: `✅ ${products.length} produk`, products: productsWithVariants });
   } catch (error) {
     return res.status(500).json({ message: '❌ Gagal mengambil semua produk', error: error.message });
   }
 });
 
-// 🧲 Produk berdasarkan kategori
+// === GET produk berdasarkan kategori ===
 router.get('/by-category/:category_id', async (req, res) => {
   const { category_id } = req.params;
-
-  if (!category_id) {
-    return res.status(400).json({ message: '❌ category_id diperlukan' });
-  }
-
   try {
-    // 🔍 Ambil kategori dulu (opsional, untuk validasi)
-    const { data: category, error: categoryError } = await supabase
-      .from('categories')
-      .select('id, name')
-      .eq('id', category_id)
-      .single();
+    const { data: category } = await supabase.from('categories').select('id, name').eq('id', category_id).single();
+    if (!category) return res.status(404).json({ message: '❌ Kategori tidak ditemukan' });
 
-    if (categoryError || !category) {
-      return res.status(404).json({ message: '❌ Kategori tidak ditemukan' });
-    }
-
-    // 🛍 Ambil produk berdasarkan kategori
-    const { data: products, error: productError } = await supabase
-      .from('products')
-      .select('*')
-      .eq('category_id', category_id);
-
-    if (productError) {
-      return res.status(500).json({ message: '❌ Gagal ambil produk', error: productError.message });
-    }
-
-    return res.status(200).json({
-      message: `✅ Ditemukan ${products.length} produk dalam kategori "${category.name}"`,
-      category: category.name,
-      products
-    });
+    const { data: products } = await supabase.from('products').select('*').eq('category_id', category_id);
+    const productsWithVariants = await attachVariantsAndStock(products);
+    return res.status(200).json({ message: `✅ Ditemukan ${products.length} produk dalam kategori "${category.name}"`, category: category.name, products: productsWithVariants });
   } catch (error) {
     return res.status(500).json({ message: '❌ Server error', error: error.message });
   }
 });
 
-// 🔍 Get produk by ID
+// === GET produk by ID ===
 router.get('/:id', async (req, res) => {
   const { id } = req.params;
-
   try {
-    const { data: product, error } = await supabase
-      .from('products')
-      .select('*')
-      .eq('id', id)
-      .single();
+    const { data: product } = await supabase.from('products').select('*').eq('id', id).single();
+    if (!product) return res.status(404).json({ message: '❌ Produk tidak ditemukan' });
 
-    if (error || !product) {
-      return res.status(404).json({ message: '❌ Produk tidak ditemukan' });
-    }
-
-    return res.status(200).json({ message: '✅ Produk ditemukan', product });
+    const productsWithVariants = await attachVariantsAndStock([product]);
+    return res.status(200).json({ message: '✅ Produk ditemukan', product: productsWithVariants[0] });
   } catch (error) {
     return res.status(500).json({ message: '❌ Gagal mengambil produk', error: error.message });
   }
 });
 
-// ✏️ Edit produk
-router.put('/:id', upload.single('productImage'), async (req, res) => {
+
+router.put('/edit/:id', uploadForCreate, async (req, res) => {
   const { id } = req.params;
   const {
     productName,
     productDescription,
     productPrice,
-    category_id
+    category_id,
+    stock,
+    variants // ← JSON string
   } = req.body;
 
-  const priceNum = parseFloat(productPrice);
-
-  if (isNaN(priceNum) || priceNum <= 0) {
-    return res.status(400).json({ message: '❌ Harga tidak valid' });
-  }
-
   try {
-    // Ambil produk dulu
-    const { data: existing, error: findErr } = await supabase
-      .from('products')
-      .select('*')
-      .eq('id', id)
-      .single();
+    const { data: existingProduct, error: findError } = await supabase.from('products').select('*').eq('id', id).single();
+    if (findError || !existingProduct) return res.status(404).json({ message: '❌ Produk tidak ditemukan' });
 
-    if (findErr || !existing) {
-      return res.status(404).json({ message: '❌ Produk tidak ditemukan' });
+    let newProductImagesUrls = existingProduct.product_image_url || [];
+
+    // === Ganti gambar produk
+    if (req.files['productImages']) {
+      // Hapus gambar lama
+      const oldProductPaths = existingProduct.product_image_url.map((url) => {
+        const parts = url.split('/'); // ambil path dari signedUrl
+        return decodeURIComponent(parts.slice(-4).join('/').split('?')[0]); // contoh: seller_id/products/uuid.png
+      });
+      await supabase.storage.from('product-images').remove(oldProductPaths);
+
+      // Upload gambar baru
+      newProductImagesUrls = [];
+      for (let img of req.files['productImages']) {
+        const fileExt = path.extname(img.originalname);
+        const fileName = `${uuidv4()}${fileExt}`;
+        const filePath = `${existingProduct.seller_id}/products/${fileName}`;
+        await supabase.storage.from('product-images').upload(filePath, img.buffer, { contentType: img.mimetype, upsert: true });
+        const { data: urlData } = await supabase.storage.from('product-images').createSignedUrl(filePath, 60 * 60 * 24 * 7);
+        newProductImagesUrls.push(urlData.signedUrl);
+      }
     }
 
-    let imageUrl = existing.product_image_url;
+    // === Update produk
+    const updatedProduct = {
+      product_name: productName || existingProduct.product_name,
+      product_description: productDescription || existingProduct.product_description,
+      product_price: productPrice ? parseFloat(productPrice) : existingProduct.product_price,
+      category_id: category_id || existingProduct.category_id,
+      stock: stock ? parseInt(stock) : existingProduct.stock,
+      product_image_url: newProductImagesUrls
+    };
 
-    // Kalau ada file gambar baru
-    if (req.file) {
-      // Upload ke Supabase Storage
-      const fileExt = path.extname(req.file.originalname);
-      const fileName = `${uuidv4()}${fileExt}`;
-      const filePath = `${existing.seller_id}/${fileName}`;
+    await supabase.from('products').update(updatedProduct).eq('id', id);
 
-      const { error: uploadErr } = await supabase.storage
-        .from('product-images')
-        .upload(filePath, req.file.buffer, {
-          contentType: req.file.mimetype,
-          upsert: true
-        });
+    // === Update varian
+    let parsedVariants = [];
+    if (variants) {
+      try {
+        parsedVariants = JSON.parse(variants);
+      } catch {
+        return res.status(400).json({ message: '❌ Format varian tidak valid' });
+      }
+    }
 
-      if (uploadErr) {
-        return res.status(500).json({ message: '❌ Gagal upload gambar baru', error: uploadErr.message });
+    if (Array.isArray(parsedVariants)) {
+      for (let i = 0; i < parsedVariants.length; i++) {
+        const v = parsedVariants[i];
+
+        let variantImageUrl = v.image_url || null;
+
+        if (req.files['variantImages'] && req.files['variantImages'][i]) {
+          // Hapus gambar lama jika ada
+          if (v.image_url) {
+            const urlParts = v.image_url.split('/');
+            const variantPath = decodeURIComponent(urlParts.slice(-4).join('/').split('?')[0]);
+            await supabase.storage.from('product-images').remove([variantPath]);
+          }
+
+          const variantFile = req.files['variantImages'][i];
+          const fileExt = path.extname(variantFile.originalname);
+          const fileName = `${uuidv4()}${fileExt}`;
+          const newVariantPath = `${existingProduct.seller_id}/variants/${fileName}`;
+          await supabase.storage.from('product-images').upload(newVariantPath, variantFile.buffer, { contentType: variantFile.mimetype, upsert: true });
+          const { data: urlData } = await supabase.storage.from('product-images').createSignedUrl(newVariantPath, 60 * 60 * 24 * 7);
+          variantImageUrl = urlData.signedUrl;
+        }
+
+        if (v.id) {
+          // Update existing varian
+          await supabase.from('product_variants').update({
+            variant_name: v.name,
+            variant_price: parseFloat(v.price),
+            variant_stock: parseInt(v.stock),
+            variant_image_url: variantImageUrl
+          }).eq('id', v.id);
+        } else {
+          // Insert baru
+          await supabase.from('product_variants').insert({
+            product_id: id,
+            variant_name: v.name,
+            variant_price: parseFloat(v.price),
+            variant_stock: parseInt(v.stock),
+            variant_image_url: variantImageUrl
+          });
+        }
       }
 
-      // Buat signed URL baru
-      const { data: signedUrlData, error: signedUrlErr } = await supabase.storage
-        .from('product-images')
-        .createSignedUrl(filePath, 60 * 60 * 24 * 7);
-
-      if (signedUrlErr) {
-        return res.status(500).json({ message: '❌ Gagal generate signed URL', error: signedUrlErr.message });
-      }
-
-      imageUrl = signedUrlData.signedUrl;
+      // Update stok total dari semua varian
+      const { data: updatedVariants } = await supabase.from('product_variants').select('variant_stock').eq('product_id', id);
+      const totalStock = updatedVariants.reduce((sum, v) => sum + v.variant_stock, 0);
+      await supabase.from('products').update({ stock: totalStock }).eq('id', id);
     }
 
-    const keywords = [
-      ...generateKeywords(productName),
-      ...generateKeywords(productDescription)
-    ];
-
-    // Update data
-    const { data: updated, error: updateErr } = await supabase
-      .from('products')
-      .update({
-        product_name: productName,
-        product_description: productDescription,
-        product_price: priceNum,
-        category_id,
-        product_image_url: imageUrl,
-        keywords
-      })
-      .eq('id', id)
-      .select()
-      .single();
-
-    if (updateErr) {
-      return res.status(500).json({ message: '❌ Gagal update produk', error: updateErr.message });
-    }
-
-    return res.status(200).json({ message: '✅ Produk berhasil diupdate', product: updated });
+    return res.status(200).json({ message: '✅ Produk dan varian berhasil diupdate' });
   } catch (error) {
-    return res.status(500).json({ message: '❌ Terjadi error', error: error.message });
+    console.error(error);
+    return res.status(500).json({ message: '❌ Gagal update', error: error.message });
   }
 });
 
-// ❌ Hapus produk
-router.delete('/:id', async (req, res) => {
+router.delete('/delete/:id', async (req, res) => {
   const { id } = req.params;
+  const { type = 'product', mode = 'all' } = req.query;
 
   try {
-    const { data: product, error: findErr } = await supabase
+    // === 🔁 CASE: Hapus VARIAN berdasarkan ID
+    if (type === 'variant') {
+      const { data: variant, error: varErr } = await supabase
+        .from('product_variants')
+        .select('*')
+        .eq('id', id)
+        .single();
+
+      if (varErr || !variant) return res.status(404).json({ message: '❌ Varian tidak ditemukan' });
+
+      // Hapus gambar varian jika ada
+      if (variant.variant_image_url) {
+        const path = decodeURIComponent(variant.variant_image_url.split('/').slice(-4).join('/').split('?')[0]);
+        await supabase.storage.from('product-images').remove([path]);
+      }
+
+      // Hapus varian
+      await supabase.from('product_variants').delete().eq('id', id);
+
+      // Update stok total produk setelah varian dihapus
+      const { data: remainingVariants } = await supabase
+        .from('product_variants')
+        .select('variant_stock')
+        .eq('product_id', variant.product_id);
+
+      const totalStock = (remainingVariants || []).reduce((sum, v) => sum + v.variant_stock, 0);
+      await supabase.from('products').update({ stock: totalStock }).eq('id', variant.product_id);
+
+      return res.status(200).json({ message: '✅ Varian berhasil dihapus & stok diperbarui' });
+    }
+
+    // === 🔁 CASE: Hapus PRODUK
+    const { data: product, error: findError } = await supabase
       .from('products')
       .select('*')
       .eq('id', id)
       .single();
 
-    if (findErr || !product) {
-      return res.status(404).json({ message: '❌ Produk tidak ditemukan' });
+    if (findError || !product) return res.status(404).json({ message: '❌ Produk tidak ditemukan' });
+
+    const { data: variants } = await supabase
+      .from('product_variants')
+      .select('*')
+      .eq('product_id', id);
+
+    if (mode === 'variant_only') {
+      if (variants && variants.length > 0) {
+        const variantPaths = variants
+          .map(v => v.variant_image_url)
+          .filter(Boolean)
+          .map(url => decodeURIComponent(url.split('/').slice(-4).join('/').split('?')[0]));
+
+        if (variantPaths.length > 0) await supabase.storage.from('product-images').remove(variantPaths);
+        await supabase.from('product_variants').delete().eq('product_id', id);
+      }
+
+      return res.status(200).json({ message: '✅ Semua varian berhasil dihapus' });
     }
 
-    // Ambil path dari URL
-    const imagePath = decodeURIComponent(new URL(product.product_image_url).pathname.split('/storage/v1/object/public/product-images/')[1]);
+    if (mode === 'product_only') {
+      const productPaths = (product.product_image_url || []).map(url =>
+        decodeURIComponent(url.split('/').slice(-4).join('/').split('?')[0])
+      );
 
-    // Hapus dari storage
-    const { error: deleteFileErr } = await supabase
-      .storage
-      .from('product-images')
-      .remove([imagePath]);
+      if (productPaths.length > 0) await supabase.storage.from('product-images').remove(productPaths);
+      await supabase.from('products').delete().eq('id', id);
 
-    if (deleteFileErr) {
-      return res.status(500).json({ message: '❌ Gagal hapus gambar', error: deleteFileErr.message });
+      return res.status(200).json({ message: '✅ Produk saja berhasil dihapus (varian tetap)' });
     }
 
-    // Hapus dari DB
-    const { error: deleteErr } = await supabase
-      .from('products')
-      .delete()
-      .eq('id', id);
+    // === Default: hapus produk + varian + gambar
+    const productPaths = (product.product_image_url || []).map(url =>
+      decodeURIComponent(url.split('/').slice(-4).join('/').split('?')[0])
+    );
 
-    if (deleteErr) {
-      return res.status(500).json({ message: '❌ Gagal hapus produk', error: deleteErr.message });
-    }
+    const variantPaths = (variants || [])
+      .map(v => v.variant_image_url)
+      .filter(Boolean)
+      .map(url => decodeURIComponent(url.split('/').slice(-4).join('/').split('?')[0]));
 
-    return res.status(200).json({ message: '✅ Produk berhasil dihapus' });
+    if (productPaths.length > 0) await supabase.storage.from('product-images').remove(productPaths);
+    if (variantPaths.length > 0) await supabase.storage.from('product-images').remove(variantPaths);
+
+    await supabase.from('product_variants').delete().eq('product_id', id);
+    await supabase.from('products').delete().eq('id', id);
+
+    return res.status(200).json({ message: '✅ Produk dan semua varian berhasil dihapus' });
   } catch (error) {
-    return res.status(500).json({ message: '❌ Terjadi error saat menghapus produk', error: error.message });
+    return res.status(500).json({ message: '❌ Gagal menghapus', error: error.message });
   }
 });
-
 
 
 module.exports = router;
