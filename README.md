@@ -431,7 +431,7 @@ API ini menangani CRUD produk, upload gambar ke Supabase Storage, serta fitur pe
 
 ---
 
-### 🔼 `POST /upload`
+### 🔼 `POST /product/upload`
 
 **Deskripsi:** Upload produk baru dengan gambar dan varian (opsional).  
 **Form Data:**
@@ -457,7 +457,7 @@ API ini menangani CRUD produk, upload gambar ke Supabase Storage, serta fitur pe
 
 ---
 
-### 🛍️ `GET /allproduct`
+### 🛍️ `GET /product/allproduct`
 
 Mengambil semua produk dari database.
 
@@ -471,7 +471,7 @@ Mengambil semua produk dari database.
 
 ---
 
-### 📍 `GET /nearby-by-location?lat=<latitude>&lng=<longitude>`
+### 📍 `GET /product/nearby-by-location?lat=<latitude>&lng=<longitude>`
 
 **Deskripsi:** Menampilkan produk dari seller yang berada dalam radius 40 km dari lokasi pengguna.
 
@@ -480,7 +480,7 @@ Mengambil semua produk dari database.
 - `lat` — Latitude pengguna
 - `lng` — Longitude pengguna
 
-**Contoh:** `/nearby-by-location?lat=-6.200&lng=106.816`
+**Contoh:** `/product/nearby-by-location?lat=-6.200&lng=106.816`
 
 **Response:**
 ```json
@@ -499,25 +499,25 @@ Mengambil semua produk dari database.
 
 ---
 
-### 📂 `GET /by-category/:category_id`
+### 📂 `GET /product/by-category/:category_id`
 
 Menampilkan produk berdasarkan kategori tertentu.
 
 ---
 
-### 🔍 `GET /:id`
+### 🔍 `GET /product/:id`
 
 Mengambil detail produk berdasarkan `id`.
 
 ---
 
-### ✏️ `PUT /:id`
+### ✏️ `PUT /product/:id`
 
 Edit produk berdasarkan ID. Bisa disertai `productImage` (opsional) untuk mengganti gambar.
 
 ---
 
-### ❌ `DELETE /:id`
+### ❌ `DELETE /product/:id`
 
 Menghapus produk berdasarkan ID. Termasuk menghapus gambar dari Supabase Storage.
 
@@ -577,15 +577,10 @@ navigator.geolocation.getCurrentPosition(
   }
 );
 ```
-
-### 🛑 Catatan:
-- Minta izin pengguna agar bisa akses lokasi.
-- Geolocation hanya berjalan di **HTTPS** atau **localhost**.
-
-
 ---
-
 ## 📌 Catatan
 
 * Semua email akan diverifikasi menggunakan OTP sebelum akun bisa digunakan.
+* Minta izin pengguna agar bisa akses lokasi.
+* Geolocation hanya berjalan di **HTTPS** atau **localhost**.
 
