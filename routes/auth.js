@@ -136,7 +136,7 @@ router.post('/login', async (req, res) => {
 
 // ======================== LUPA PASSWORD ========================
 router.post('/forgot-password', async (req, res) => {
-  const { email } = req.body;
+  const { email, resetLink } = req.body;
 
   try {
     const { data: user } = await supabase
@@ -147,10 +147,46 @@ router.post('/forgot-password', async (req, res) => {
 
     if (!user) return res.status(404).json({ error: 'Email tidak ditemukan.' });
 
-    const resetLink = `https://yourfrontend.com/reset-password?email=${email}`;
-    await sendPasswordResetEmail(email, resetLink);
+    const link = resetLink || `https://cihuy-store-projek-production.up.railway.app/reset-password?email=${encodeURIComponent(email)}`;
+
+    // Kirim email reset
+    await sendPasswordResetEmail(email, link);
 
     res.json({ message: 'Link reset password dikirim ke email.' });
+  } catch (err) {
+    console.error('Reset password error:', err);
+    res.status(500).json({ error: 'Terjadi kesalahan pada server.' });
+  }
+});
+
+
+// lanjutan forgot password
+
+// ======================== RESET PASSWORD ========================
+router.post('/reset-password', async (req, res) => {
+  const { email, newPassword } = req.body;
+
+  try {
+    const { data: user } = await supabase
+      .from('users')
+      .select('*')
+      .eq('email', email)
+      .single();
+
+    if (!user) return res.status(404).json({ error: 'Email tidak ditemukan.' });
+
+    const hashed = await bcrypt.hash(newPassword, 10);
+    const { error } = await supabase
+      .from('users')
+      .update({ password: hashed })
+      .eq('email', email);
+
+    if (error) {
+      console.error('Supabase update error:', error);
+      return res.status(500).json({ error: 'Gagal mereset kata sandi.' });
+    }
+
+    res.json({ message: 'Kata sandi berhasil direset.' });
   } catch (err) {
     console.error('Reset password error:', err);
     res.status(500).json({ error: 'Terjadi kesalahan pada server.' });
