@@ -184,7 +184,7 @@ router.post('/forgot-password', async (req, res) => {
 
     if (!user) return res.status(404).json({ error: 'Email tidak ditemukan.' });
 
-    const link = resetLink || `https://cihuy-store-projek-production.up.railway.app/reset-password?email=${encodeURIComponent(email)}`;
+    const link = resetLink || `https://cihuy-store.sytes.net/reset-password?email=${encodeURIComponent(email)}`;
 
     // Kirim email reset
     await sendPasswordResetEmail(email, link);
