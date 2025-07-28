@@ -15,49 +15,61 @@ const cookieParser = require('cookie-parser');
 require('dotenv').config();
 
 const app = express();
-const getLink = process.env.CORS_ORIGIN?.split(',').map(link => link.trim()) || [];
 
-// CORS
+// === CORS ORIGINS ===
+const allowedOrigins = process.env.CORS_ORIGIN
+  ? process.env.CORS_ORIGIN.split(',').map(link => link.trim().replace(/\/$/, ''))
+  : [];
+
 const corsOptions = {
   origin: (origin, callback) => {
-    if (!origin || getLink.includes(origin)) {
-      callback(null, true);
-    } else {
-      callback(new Error("Not allowed by CORS"));
+    // Allow server-to-server & Postman (no origin)
+    if (!origin) return callback(null, true);
+
+    const cleanedOrigin = origin.replace(/\/$/, '');
+
+    // Development: allow localhost
+    if (process.env.NODE_ENV !== 'production' && cleanedOrigin.includes('localhost')) {
+      return callback(null, true);
     }
+
+    if (allowedOrigins.includes(cleanedOrigin)) {
+      return callback(null, true);
+    }
+
+    console.warn('❌ CORS blocked for origin:', origin);
+    return callback(new Error('Not allowed by CORS'));
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   optionsSuccessStatus: 200,
 };
 
-
-// Middleware global
+// === Middleware global ===
 app.use(cors(corsOptions));
 app.use(bodyParser.json());
 app.use(cookieParser());
 
-
-// ✅ Middleware API key (semua route wajib pakai)
+// === Middleware API key (semua route wajib pakai) ===
 app.use(requireApiKey);
 
-// ✅ Middleware rate limiter, tapi skip /forum-pendaftaran
+// === Middleware rate limiter (skip /forum-pendaftaran) ===
 app.use((req, res, next) => {
   if (req.path.startsWith('/forum-pendaftaran')) {
-    return next(); // Lewati rate limiter
+    return next();
   }
-  return rateLimiter(req, res, next); // Apply rate limiter
+  return rateLimiter(req, res, next);
 });
 
-// Routes
+// === Routes ===
 app.use('/auth', authRoutes);
-app.use('/forum-pendaftaran', forumpendaftaran); 
+app.use('/forum-pendaftaran', forumpendaftaran);
 app.use('/product', productRoutes);
 app.use('/category', category);
 app.use('/search', search);
 app.use('/clean', clean);
 app.use('/order', order);
 
-// Start server
+// === Start server ===
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`🚀 API running on port ${PORT}`));
