@@ -65,7 +65,7 @@ app.use((req, res, next) => {
 app.use('/auth', authRoutes);
 app.use('/forum-pendaftaran', forumpendaftaran);
 app.use('/product', productRoutes);
-app.use('/category', category);
+app.use('/categories', category);
 app.use('/search', search);
 app.use('/clean', clean);
 app.use('/order', order);
