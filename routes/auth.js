@@ -103,7 +103,7 @@ router.post('/verify-otp', async (req, res) => {
       }), {
         httpOnly: true,
         secure: process.env.NODE_ENV === 'production',
-        sameSite: 'Lax',
+        sameSite: 'None',
         maxAge: 7 * 24 * 60 * 60 * 1000
       });
 
@@ -159,7 +159,7 @@ router.post('/login', async (req, res) => {
     }), {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
-      sameSite: 'Lax',
+      sameSite: 'None',
       maxAge: 7 * 24 * 60 * 60 * 1000
     });
 
@@ -184,7 +184,7 @@ router.post('/forgot-password', async (req, res) => {
 
     if (!user) return res.status(404).json({ error: 'Email tidak ditemukan.' });
 
-    const link = resetLink || `https://cihuy-store.sytes.net/reset-password?email=${encodeURIComponent(email)}`;
+    const link = resetLink || `https://cihuy-store-production.up.railway.app/reset-password?email=${encodeURIComponent(email)}`;
 
     // Kirim email reset
     await sendPasswordResetEmail(email, link);
@@ -438,7 +438,7 @@ router.post('/login/google', async (req, res) => {
     }), {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
-      sameSite: 'Lax',
+      sameSite: 'None',
       maxAge: 7 * 24 * 60 * 60 * 1000
     });
 
