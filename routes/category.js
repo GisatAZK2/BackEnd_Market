@@ -84,4 +84,26 @@ router.delete('/:id', async (req, res) => {
   }
 });
 
+// ==================== GET CATEGORY BY ID ====================
+router.get('/:id', async (req, res) => {
+  const { id } = req.params;
+  try {
+    const { data, error } = await supabase
+      .from('categories')
+      .select('id, name, description, image_url')
+      .eq('id', id)
+      .single();
+
+    if (error) throw error;
+    if (!data) {
+      return res.status(404).json({ message: '❌ Kategori tidak ditemukan' });
+    }
+
+    return res.status(200).json({ message: '✅ Kategori ditemukan', category: data });
+  } catch (err) {
+    return res.status(500).json({ message: '❌ Gagal mengambil kategori', error: err.message });
+  }
+});
+
+
 module.exports = router;

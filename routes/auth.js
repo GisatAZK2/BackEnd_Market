@@ -2,6 +2,10 @@ const express = require('express');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const supabase = require('../config/supabase');
+const multer = require('multer');
+const sharp = require('sharp');
+const path = require('path');
+const fs = require('fs');
 const { createClient } = require('@supabase/supabase-js');
 const { generateOtp, sendPasswordResetEmail } = require('../utils/otp');
 
@@ -11,9 +15,12 @@ const supabaseAdmin = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_ROLE_KEY 
 );
+const storage = multer.memoryStorage();
+const upload = multer({ storage });
+
 
 // ======================== REGISTER ========================
-router.post('/register', async (req, res) => {
+router.post('/register', upload.single('avatar'), async (req, res) => {
   const { email, password, username } = req.body;
   console.log('Body register:', req.body);
 
@@ -36,13 +43,39 @@ router.post('/register', async (req, res) => {
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
     const expiresAt = new Date(Date.now() + 5 * 60 * 1000).toISOString();
 
+    // === Avatar Handling ===
+    let avatarPath;
+    if (req.file) {
+      // Konversi ke webp dan simpan ke folder uploads
+      const filename = `avatar_${Date.now()}.webp`;
+      const outputPath = path.join(__dirname, `../uploads/${filename}`);
+
+      await sharp(req.file.buffer)
+        .webp({ quality: 80 })
+        .toFile(outputPath);
+
+      avatarPath = `/uploads/${filename}`;
+    } else {
+      // Generate default avatar → ambil file default.png lalu konversi ke webp
+      const defaultImagePath = path.join(__dirname, '../assets/default-avatar.png');
+      const filename = `avatar_default_${Date.now()}.webp`;
+      const outputPath = path.join(__dirname, `../uploads/${filename}`);
+
+      await sharp(defaultImagePath)
+        .webp({ quality: 80 })
+        .toFile(outputPath);
+
+      avatarPath = `/uploads/${filename}`;
+    }
+
     const { error: insertErr } = await supabase.from('users').insert([{
       email,
       username: finalUsername,
       password: hashed,
       otp_code: otp,
       otp_expires_at: expiresAt,
-      verified: false
+      verified: false,
+      avatar: avatarPath  // simpan path avatar
     }]);
 
     if (insertErr) {
