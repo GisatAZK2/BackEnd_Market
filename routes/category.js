@@ -62,7 +62,7 @@ router.post('/create', upload.single('image'), async (req, res) => {
 });
 
 // ==================== GET ALL CATEGORY ====================
-router.get('/all', async (req, res) => {
+router.get('/', async (req, res) => {
   try {
     const { data, error } = await supabase.from('categories').select('*');
     if (error) throw error;
