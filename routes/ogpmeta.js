@@ -25,7 +25,9 @@ router.get('/:id', async (req, res) => {
       ogImage = product.product_image_url;
     }
 
+    // === URL FRONTEND ===
     const ogUrl = `https://cihuy.sytes.net/detail/produk/${encodeURIComponent(product.product_name)}/${id}`;
+
     const jsonLD = {
       "@context": "https://schema.org/",
       "@type": "Product",
