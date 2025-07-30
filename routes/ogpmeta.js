@@ -16,19 +16,26 @@ router.get('/:id', async (req, res) => {
       return res.status(404).send('<h1>❌ Produk tidak ditemukan</h1>');
     }
 
+    // Deteksi apakah ini bot WhatsApp (atau sosial media lain)
+    const ua = (req.headers['user-agent'] || '').toLowerCase();
+    const isBot =
+      ua.includes('whatsapp') ||
+      ua.includes('facebook') ||
+      ua.includes('discord') ||
+      ua.includes('twitterbot') ||
+      ua.includes('linkedin');
+
+    const frontendUrl = `https://cihuy.sytes.net/detail/produk/${encodeURIComponent(product.product_name)}/${id}`;
+
     // Ambil gambar utama
     let ogImage = '';
     try {
       const parsed = JSON.parse(product.product_image_url);
       ogImage = Array.isArray(parsed) ? parsed[0] : product.product_image_url;
-    } catch {
+    } catch (e) {
       ogImage = product.product_image_url;
     }
 
-    // Link frontend (yang akan diakses user setelah klik)
-    const frontendUrl = `https://cihuy.sytes.net/detail/produk/${encodeURIComponent(product.product_name)}/${id}`;
-
-    // Schema.org JSON-LD
     const jsonLD = {
       "@context": "https://schema.org/",
       "@type": "Product",
@@ -44,8 +51,9 @@ router.get('/:id', async (req, res) => {
       }
     };
 
-    // HTML untuk WhatsApp preview
-    const html = `
+    if (isBot) {
+      // === BOT (WhatsApp, Facebook, etc) → kasih meta OG ===
+      const html = `
 <!DOCTYPE html>
 <html lang="id">
 <head>
@@ -60,21 +68,24 @@ router.get('/:id', async (req, res) => {
     <meta property="og:url" content="${frontendUrl}" />
     <meta property="og:type" content="product" />
     <meta property="og:site_name" content="CIHUY STORE" />
+    <link rel="canonical" href="${frontendUrl}" />
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:title" content="${product.product_name}" />
     <meta name="twitter:description" content="${product.product_description || ''}" />
     <meta name="twitter:image" content="${ogImage}" />
     <script type="application/ld+json">${JSON.stringify(jsonLD)}</script>
-    <meta http-equiv="refresh" content="0; url=${frontendUrl}" />
 </head>
 <body>
-    <p>Mengalihkan ke produk... <a href="${frontendUrl}">Klik di sini</a></p>
+    <h1>${product.product_name}</h1>
+    <p>${product.product_description || ''}</p>
+    ${ogImage ? `<img src="${ogImage}" alt="${product.product_name}" style="max-width:400px" />` : ''}
 </body>
 </html>`;
-
-    res.setHeader('Cache-Control', 'no-cache');
-    res.send(html);
-
+      res.send(html);
+    } else {
+      // === USER NORMAL → redirect ke halaman frontend ===
+      res.redirect(frontendUrl);
+    }
   } catch (e) {
     console.error(e);
     res.status(500).send('<h1>Terjadi kesalahan server</h1>');
