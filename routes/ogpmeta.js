@@ -16,7 +16,7 @@ router.get('/:id', async (req, res) => {
       return res.status(404).send('<h1>❌ Produk tidak ditemukan</h1>');
     }
 
-    // Deteksi apakah ini bot WhatsApp (atau sosial media lain)
+    // User-Agent detection (bot vs human)
     const ua = (req.headers['user-agent'] || '').toLowerCase();
     const isBot =
       ua.includes('whatsapp') ||
@@ -52,38 +52,38 @@ router.get('/:id', async (req, res) => {
     };
 
     if (isBot) {
-      // === BOT (WhatsApp, Facebook, etc) → kasih meta OG ===
+      // === Untuk WhatsApp, Facebook, dll ===
       const html = `
 <!DOCTYPE html>
 <html lang="id">
 <head>
-    <meta charset="utf-8">
-    <title>${product.product_name}</title>
-    <meta name="description" content="${product.product_description || ''}" />
-    <meta property="og:title" content="${product.product_name}" />
-    <meta property="og:description" content="${product.product_description || ''}" />
-    <meta property="og:image" content="${ogImage}" />
-    <meta property="og:image:width" content="600" />
-    <meta property="og:image:height" content="600" />
-    <meta property="og:url" content="${frontendUrl}" />
-    <meta property="og:type" content="product" />
-    <meta property="og:site_name" content="CIHUY STORE" />
-    <link rel="canonical" href="${frontendUrl}" />
-    <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:title" content="${product.product_name}" />
-    <meta name="twitter:description" content="${product.product_description || ''}" />
-    <meta name="twitter:image" content="${ogImage}" />
-    <script type="application/ld+json">${JSON.stringify(jsonLD)}</script>
+  <meta charset="utf-8">
+  <title>${product.product_name}</title>
+  <meta name="description" content="${product.product_description || ''}" />
+  <meta property="og:title" content="${product.product_name}" />
+  <meta property="og:description" content="${product.product_description || ''}" />
+  <meta property="og:image" content="${ogImage}" />
+  <meta property="og:image:width" content="600" />
+  <meta property="og:image:height" content="600" />
+  <meta property="og:url" content="${frontendUrl}" />
+  <meta property="og:type" content="product" />
+  <meta property="og:site_name" content="CIHUY STORE" />
+  <link rel="canonical" href="${frontendUrl}" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="${product.product_name}" />
+  <meta name="twitter:description" content="${product.product_description || ''}" />
+  <meta name="twitter:image" content="${ogImage}" />
+  <script type="application/ld+json">${JSON.stringify(jsonLD)}</script>
 </head>
 <body>
-    <h1>${product.product_name}</h1>
-    <p>${product.product_description || ''}</p>
-    ${ogImage ? `<img src="${ogImage}" alt="${product.product_name}" style="max-width:400px" />` : ''}
+  <h1>${product.product_name}</h1>
+  <p>${product.product_description || ''}</p>
+  ${ogImage ? `<img src="${ogImage}" alt="${product.product_name}" style="max-width:400px" />` : ''}
 </body>
 </html>`;
       res.send(html);
     } else {
-      // === USER NORMAL → redirect ke halaman frontend ===
+      // === User biasa langsung redirect ke frontend ===
       res.redirect(frontendUrl);
     }
   } catch (e) {
