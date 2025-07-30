@@ -10,6 +10,7 @@ const category = require('./routes/category');
 const search = require('./routes/search');
 const clean = require('./utils/cleanup');
 const order = require('./routes/orderRoutes');
+const share = require('./routes/ogpmeta');
 const cookieParser = require('cookie-parser');
 const apicache = require('apicache'); // <-- tambahan
 require('dotenv').config();
@@ -44,6 +45,8 @@ app.use(cors(corsOptions));
 app.use(bodyParser.json());
 app.use(cookieParser());
 
+app.use('/share', share);
+
 // === Middleware API key (semua route wajib pakai) ===
 app.use(requireApiKey);
 
@@ -64,6 +67,8 @@ app.use('/categories', cache('10 minutes'), category);
 app.use('/search', cache('2 minutes'), search);
 app.use('/clean', clean);
 app.use('/order', order);
+
+
 
 // === Start server ===
 const PORT = process.env.PORT || 3000;
