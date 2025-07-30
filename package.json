@@ -20,6 +20,7 @@
   "dependencies": {
     "@sendgrid/mail": "^8.1.5",
     "@supabase/supabase-js": "^2.51.0",
+    "apicache": "^1.6.3",
     "axios": "^1.10.0",
     "bcrypt": "^6.0.0",
     "body-parser": "^2.2.0",

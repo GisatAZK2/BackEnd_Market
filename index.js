@@ -1,4 +1,3 @@
-// ✅ Versi tanpa Socket.IO
 const express = require('express');
 const cors = require('cors');
 const bodyParser = require('body-parser');
@@ -12,6 +11,7 @@ const search = require('./routes/search');
 const clean = require('./utils/cleanup');
 const order = require('./routes/orderRoutes');
 const cookieParser = require('cookie-parser');
+const apicache = require('apicache'); // <-- tambahan
 require('dotenv').config();
 
 const app = express();
@@ -23,20 +23,14 @@ const allowedOrigins = process.env.CORS_ORIGIN
 
 const corsOptions = {
   origin: (origin, callback) => {
-    // Allow server-to-server & Postman (no origin)
     if (!origin) return callback(null, true);
-
     const cleanedOrigin = origin.replace(/\/$/, '');
-
-    // Development: allow localhost
     if (process.env.NODE_ENV !== 'production' && cleanedOrigin.includes('localhost')) {
       return callback(null, true);
     }
-
     if (allowedOrigins.includes(cleanedOrigin)) {
       return callback(null, true);
     }
-
     console.warn('❌ CORS blocked for origin:', origin);
     return callback(new Error('Not allowed by CORS'));
   },
@@ -55,18 +49,19 @@ app.use(requireApiKey);
 
 // === Middleware rate limiter (skip /forum-pendaftaran) ===
 app.use((req, res, next) => {
-  if (req.path.startsWith('/forum-pendaftaran')) {
-    return next();
-  }
+  if (req.path.startsWith('/forum-pendaftaran')) return next();
   return rateLimiter(req, res, next);
 });
+
+// === Cache Middleware ===
+const cache = apicache.middleware;
 
 // === Routes ===
 app.use('/auth', authRoutes);
 app.use('/forum-pendaftaran', forumpendaftaran);
-app.use('/product', productRoutes);
-app.use('/categories', category);
-app.use('/search', search);
+app.use('/product', cache('5 minutes'), productRoutes); // <--- cache di sini
+app.use('/categories', cache('10 minutes'), category);
+app.use('/search', cache('2 minutes'), search);
 app.use('/clean', clean);
 app.use('/order', order);
 
