@@ -577,6 +577,128 @@ navigator.geolocation.getCurrentPosition(
   }
 );
 ```
+
+# 🔍 Search API & Workflow
+
+API ini menyediakan fitur pencarian produk berbasis **keywords** dengan dukungan **suggestion (partial search)** dan **meta cache** untuk frontend.
+
+---
+
+## **Endpoint**
+
+### 1. Cari Produk (Exact Keywords)
+```
+GET /search?q=<keywords>
+```
+- **Parameter**:  
+  - `q` → Bisa 1 atau lebih keyword, pisahkan dengan spasi atau koma.
+- **Kegunaan**: Mengambil produk yang mengandung semua keywords pada kolom `keywords`.
+
+**Response Contoh**:
+```json
+{
+  "message": "✅ Ditemukan 1 produk",
+  "keywords": ["nasi", "botol"],
+  "products": [
+    {
+      "id": "7134ec56-6b4a-4a3f-be48-620ea8f6ed55",
+      "product_name": "Nasi Botol",
+      "product_description": "Nasi praktis dalam botol",
+      "product_price": 15000,
+      "keywords": ["nasi", "botol"],
+      "stock": 100
+    }
+  ]
+}
+```
+
+---
+
+### 2. Meta Data (Cache Keywords & Produk)
+```
+GET /search/meta
+```
+- **Kegunaan**: Mengambil **keywords unik** dan **nama produk** untuk cache frontend.
+- **Waktu Panggil**: 1x saat halaman dimuat.
+
+**Response Contoh**:
+```json
+{
+  "message": "✅ Data meta berhasil diambil",
+  "keywords": ["nasi", "kecap", "botol", "ketchup"],
+  "productNames": [
+    { "id": "1", "name": "Nasi Goreng" },
+    { "id": "2", "name": "Kecap Botol" }
+  ]
+}
+```
+
+---
+
+### 3. Suggestion (Partial Keyword)
+```
+GET /search/suggest?q=<partial>
+```
+- **Parameter**:
+  - `q` → potongan kata yang sedang diketik user (contoh: `"nas"`).
+- **Kegunaan**: Mengembalikan daftar suggestion keyword dan nama produk yang mirip.
+
+**Response Contoh**:
+```json
+{
+  "message": "✅ Suggestion ditemukan",
+  "keywords": ["nasi", "nasi goreng"],
+  "productNames": ["Nasi Goreng Spesial", "Nasi Bakar"]
+}
+```
+
+---
+
+## **Alur Workflow Frontend**
+
+### 1. Saat Halaman Dimuat
+- Panggil **`/search/meta`** → cache `keywords` dan `productNames` di frontend.
+
+### 2. Saat User Mengetik
+- Tunggu 300ms (debounce).
+- Panggil **`/search/suggest?q=<input>`** untuk mendapatkan:
+  - Produk dengan nama mirip.
+  - Keywords yang mengandung input.
+
+### 3. Saat User Memilih Suggestion
+- Isi nilai input dengan pilihan.
+- Panggil **`/search?q=<pilihan>`** untuk mengambil produk detail.
+- Render daftar produk hasil pencarian di bawah input.
+
+---
+
+## **Urutan API Call**
+1. **On Page Load** → `/search/meta`
+2. **On Input Typing (≥1 karakter)** → `/search/suggest?q=<input>`
+3. **On Suggestion Click** → `/search?q=<keyword>`
+
+---
+
+## **Diagram Flow (Mermaid)**
+```mermaid
+sequenceDiagram
+    participant User
+    participant Frontend
+    participant API
+
+    User->>Frontend: Open Page
+    Frontend->>API: GET /search/meta
+    API-->>Frontend: keywords + productNames
+
+    User->>Frontend: Type "nas"
+    Frontend->>API: GET /search/suggest?q=nas
+    API-->>Frontend: suggestions (keywords + products)
+
+    User->>Frontend: Click suggestion
+    Frontend->>API: GET /search?q=nasi
+    API-->>Frontend: Produk hasil pencarian
+```
+
 ---
 ## 📌 Catatan
 
