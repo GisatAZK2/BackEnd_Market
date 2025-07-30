@@ -10,7 +10,7 @@ const { createClient } = require('@supabase/supabase-js');
 const { generateOtp, sendPasswordResetEmail } = require('../utils/otp');
 
 
-const router = express.Router();
+const router = express.Router(); 
 const supabaseAdmin = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_ROLE_KEY 
@@ -25,6 +25,7 @@ router.post('/register', upload.single('avatar'), async (req, res) => {
   console.log('Body register:', req.body);
 
   try {
+    // === Cek user sudah ada atau belum ===
     const { data: existingUser } = await supabase
       .from('users')
       .select('*')
@@ -35,6 +36,7 @@ router.post('/register', upload.single('avatar'), async (req, res) => {
       return res.status(400).json({ error: 'Email sudah digunakan. Silakan gunakan email lain.' });
     }
 
+    // === Buat username final ===
     const finalUsername = username && username.trim() !== ''
       ? username.trim()
       : email.split('@')[0];
@@ -46,28 +48,65 @@ router.post('/register', upload.single('avatar'), async (req, res) => {
     // === Avatar Handling ===
     let avatarPath;
     if (req.file) {
-      // Konversi ke webp dan simpan ke folder uploads
+      // --- Kalau user upload avatar ---
       const filename = `avatar_${Date.now()}.webp`;
-      const outputPath = path.join(__dirname, `../uploads/${filename}`);
 
-      await sharp(req.file.buffer)
+      // Konversi ke WebP dalam buffer
+      const buffer = await sharp(req.file.buffer)
         .webp({ quality: 80 })
-        .toFile(outputPath);
+        .toBuffer();
 
-      avatarPath = `/uploads/${filename}`;
+      // Upload ke Supabase Storage
+      const { error: uploadErr } = await supabase.storage
+        .from('avatars')
+        .upload(filename, buffer, {
+          contentType: 'image/webp',
+          upsert: true
+        });
+
+      if (uploadErr) {
+        console.error('Upload error:', uploadErr);
+        return res.status(500).json({ error: 'Gagal upload avatar ke storage.' });
+      }
+
+      // Ambil public URL
+      const { data: publicUrl } = supabase.storage
+        .from('avatars')
+        .getPublicUrl(filename);
+
+      avatarPath = publicUrl.publicUrl;
     } else {
-      // Generate default avatar → ambil file default.png lalu konversi ke webp
-      const defaultImagePath = path.join(__dirname, '../assets/default-avatar.png');
+      // --- Kalau user TIDAK upload avatar ---
+      const defaultImagePath = path.join(__dirname, './assets/user.png');
       const filename = `avatar_default_${Date.now()}.webp`;
-      const outputPath = path.join(__dirname, `../uploads/${filename}`);
 
-      await sharp(defaultImagePath)
+      // Konversi default.png ke WebP buffer
+      const buffer = await sharp(defaultImagePath)
         .webp({ quality: 80 })
-        .toFile(outputPath);
+        .toBuffer();
 
-      avatarPath = `/uploads/${filename}`;
+      // Upload ke Supabase Storage
+      const { error: uploadErr } = await supabase.storage
+        .from('avatars')
+        .upload(filename, buffer, {
+          contentType: 'image/webp',
+          upsert: true
+        });
+
+      if (uploadErr) {
+        console.error('Upload default avatar error:', uploadErr);
+        return res.status(500).json({ error: 'Gagal upload default avatar ke storage.' });
+      }
+
+      // Ambil public URL
+      const { data: publicUrl } = supabase.storage
+        .from('avatars')
+        .getPublicUrl(filename);
+
+      avatarPath = publicUrl.publicUrl;
     }
 
+    // === Simpan ke database ===
     const { error: insertErr } = await supabase.from('users').insert([{
       email,
       username: finalUsername,
@@ -75,7 +114,7 @@ router.post('/register', upload.single('avatar'), async (req, res) => {
       otp_code: otp,
       otp_expires_at: expiresAt,
       verified: false,
-      avatar: avatarPath  // simpan path avatar
+      avatar: avatarPath
     }]);
 
     if (insertErr) {
@@ -184,11 +223,12 @@ router.post('/login', async (req, res) => {
 
     const token = jwt.sign({ id: user.id }, process.env.JWT_SECRET, { expiresIn: '7d' });
 
-    // Set cookie aman dari XSS (httpOnly)
+    // === Set cookie (httpOnly) ===
     res.cookie('user_info', JSON.stringify({
       id: user.id,
       email: user.email,
-      username: user.username
+      username: user.username,
+      avatar: user.avatar
     }), {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
@@ -196,13 +236,21 @@ router.post('/login', async (req, res) => {
       maxAge: 7 * 24 * 60 * 60 * 1000
     });
 
-    // kirim id user ke frontend untuk dipakai fetch /user/:id
-    res.json({ message: 'Login sukses.', token, id: user.id });
+    // === Respon ke frontend (tambahkan avatar) ===
+    res.json({
+      message: 'Login sukses.',
+      token,
+      id: user.id,
+      email: user.email,
+      username: user.username,
+      avatar: user.avatar  // <---- avatar ikut dikirim
+    });
   } catch (err) {
     console.error('Login error:', err);
     res.status(500).json({ error: 'Terjadi kesalahan pada server.' });
   }
 });
+
 
 // ======================== LUPA PASSWORD ========================
 router.post('/forgot-password', async (req, res) => {
@@ -280,9 +328,10 @@ router.get('/user/:id', async (req, res) => {
     return res.status(403).json({ error: 'Sesi login tidak valid.' });
   }
 
+  // === Tambahin avatar di select ===
   const { data: user, error } = await supabase
     .from('users')
-    .select('id, email, username, verified')
+    .select('id, email, username, verified, avatar')
     .eq('id', req.params.id)
     .single();
 
@@ -367,40 +416,35 @@ router.delete('/user/:id', async (req, res) => {
 });
 
 
-
 router.post('/login/google', async (req, res) => {
   const { provider_token } = req.body;
-
   if (!provider_token) {
-    const response = { error: 'Token Google tidak ditemukan.' };
-    console.log('Response →', response);
-    return res.status(400).json(response);
+    return res.status(400).json({ error: 'Token Google tidak ditemukan.' });
   }
 
   try {
-    // === 1. Verifikasi token Google ke Supabase ===
+    // 1. Verifikasi token Google ke Supabase
     const { data: session, error: signInError } = await supabase.auth.signInWithIdToken({
       provider: 'google',
       token: provider_token,
     });
 
     if (signInError || !session?.user) {
-      const response = { error: 'Login Google gagal.' };
       console.error('Google sign-in error:', signInError);
-      console.log('Response →', response);
-      return res.status(401).json(response);
+      return res.status(401).json({ error: 'Login Google gagal.' });
     }
 
-    const { email } = session.user;
+    const { email, user_metadata } = session.user;
+    const googleAvatar = user_metadata?.avatar_url || null;
 
-    // === 2. Cari user di DB ===
+    // 2. Cek apakah user sudah ada di tabel users
     const { data: user } = await supabase
       .from('users')
       .select('*')
       .eq('email', email)
       .single();
 
-    // === 3. Kalau belum ada user, buat & kirim OTP ===
+    // 3. User belum ada → buat baru + OTP
     if (!user) {
       const username = email.split('@')[0];
       const otp = Math.floor(100000 + Math.random() * 900000).toString();
@@ -409,31 +453,29 @@ router.post('/login/google', async (req, res) => {
       const { error: insertErr } = await supabase.from('users').insert([{
         email,
         username,
-        password: '',
+        password: null,        // tidak perlu password
         otp_code: otp,
         otp_expires_at: expiresAt,
-        verified: false
+        verified: false,
+        avatar: googleAvatar   // langsung simpan avatar dari Google
       }]);
 
       if (insertErr) {
-        const response = { error: 'Gagal menyimpan user.' };
         console.error('Insert user error:', insertErr);
-        console.log('Response →', response);
-        return res.status(500).json(response);
+        return res.status(500).json({ error: 'Gagal menyimpan user.' });
       }
 
       await generateOtp(email, otp);
-      const response = {
+      return res.status(201).json({
         success: true,
         step: 'verify_otp',
         message: 'User baru dibuat. OTP dikirim ke email.',
-        email
-      };
-      console.log('Response →', response);
-      return res.status(201).json(response);
+        email,
+        avatar: googleAvatar
+      });
     }
 
-    // === 4. Kalau user belum diverifikasi → kirim OTP ulang ===
+    // 4. User belum diverifikasi → kirim OTP ulang
     if (!user.verified) {
       const otp = Math.floor(100000 + Math.random() * 900000).toString();
       const expiresAt = new Date(Date.now() + 5 * 60 * 1000).toISOString();
@@ -444,50 +486,47 @@ router.post('/login/google', async (req, res) => {
         .eq('email', email);
 
       if (updateErr) {
-        const response = { error: 'Gagal memperbarui OTP.' };
         console.error('Update OTP error:', updateErr);
-        console.log('Response →', response);
-        return res.status(500).json(response);
+        return res.status(500).json({ error: 'Gagal memperbarui OTP.' });
       }
 
       await generateOtp(email, otp);
-      const response = {
+      return res.json({
         success: true,
         step: 'verify_otp',
         message: 'OTP dikirim ulang. Silakan verifikasi.',
-        email
-      };
-      console.log('Response →', response);
-      return res.json(response);
+        email,
+        avatar: user.avatar || googleAvatar
+      });
     }
 
-    // === 5. Kalau user verified → buat JWT & set cookie ===
+    // 5. User sudah verified → buat JWT + cookie
     const token = jwt.sign({ id: user.id }, process.env.JWT_SECRET, { expiresIn: '7d' });
 
+    const isProd = process.env.NODE_ENV === 'production';
     res.cookie('user_info', JSON.stringify({
       id: user.id,
       email: user.email,
-      username: user.username
+      username: user.username,
+      avatar: user.avatar || googleAvatar
     }), {
       httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'None',
+      secure: isProd,
+      sameSite: isProd ? 'None' : 'Lax',
       maxAge: 7 * 24 * 60 * 60 * 1000
     });
 
-    const response = {
+    return res.json({
       message: 'Login Google sukses.',
       token,
-      id: user.id
-    };
-    console.log('Response →', response);
-    return res.json(response);
-
+      id: user.id,
+      email: user.email,
+      username: user.username,
+      avatar: user.avatar || googleAvatar
+    });
   } catch (err) {
-    const response = { error: 'Kesalahan server.' };
     console.error('Google login error:', err);
-    console.log('Response →', response);
-    return res.status(500).json(response);
+    return res.status(500).json({ error: 'Kesalahan server.' });
   }
 });
 
