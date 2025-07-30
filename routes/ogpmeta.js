@@ -21,13 +21,14 @@ router.get('/:id', async (req, res) => {
     try {
       const parsed = JSON.parse(product.product_image_url);
       ogImage = Array.isArray(parsed) ? parsed[0] : product.product_image_url;
-    } catch (e) {
+    } catch {
       ogImage = product.product_image_url;
     }
 
-    // === URL FRONTEND ===
-    const ogUrl = `https://cihuy.sytes.net/detail/produk/${encodeURIComponent(product.product_name)}/${id}`;
+    // Link frontend (yang akan diakses user setelah klik)
+    const frontendUrl = `https://cihuy.sytes.net/detail/produk/${encodeURIComponent(product.product_name)}/${id}`;
 
+    // Schema.org JSON-LD
     const jsonLD = {
       "@context": "https://schema.org/",
       "@type": "Product",
@@ -38,11 +39,12 @@ router.get('/:id', async (req, res) => {
       "brand": { "@type": "Brand", "name": "CIHUY STORE" },
       "offers": {
         "@type": "Offer",
-        "url": ogUrl,
+        "url": frontendUrl,
         "availability": "https://schema.org/InStock"
       }
     };
 
+    // HTML untuk WhatsApp preview
     const html = `
 <!DOCTYPE html>
 <html lang="id">
@@ -55,24 +57,24 @@ router.get('/:id', async (req, res) => {
     <meta property="og:image" content="${ogImage}" />
     <meta property="og:image:width" content="600" />
     <meta property="og:image:height" content="600" />
-    <meta property="og:url" content="${ogUrl}" />
+    <meta property="og:url" content="${frontendUrl}" />
     <meta property="og:type" content="product" />
     <meta property="og:site_name" content="CIHUY STORE" />
-    <link rel="canonical" href="${ogUrl}" />
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:title" content="${product.product_name}" />
     <meta name="twitter:description" content="${product.product_description || ''}" />
     <meta name="twitter:image" content="${ogImage}" />
     <script type="application/ld+json">${JSON.stringify(jsonLD)}</script>
+    <meta http-equiv="refresh" content="0; url=${frontendUrl}" />
 </head>
 <body>
-    <h1>${product.product_name}</h1>
-    <p>${product.product_description || ''}</p>
-    ${ogImage ? `<img src="${ogImage}" alt="${product.product_name}" style="max-width:400px" />` : ''}
+    <p>Mengalihkan ke produk... <a href="${frontendUrl}">Klik di sini</a></p>
 </body>
 </html>`;
+
     res.setHeader('Cache-Control', 'no-cache');
     res.send(html);
+
   } catch (e) {
     console.error(e);
     res.status(500).send('<h1>Terjadi kesalahan server</h1>');
