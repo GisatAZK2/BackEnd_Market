@@ -341,7 +341,8 @@ router.get('/user/:id', async (req, res) => {
 });
 
 // ======================== UPDATE USER ========================
-router.put('/user/:id', async (req, res) => {
+// ======================== UPDATE USER ========================
+router.put('/user/:id', upload.single('avatar'), async (req, res) => {
   const cookie = req.cookies.user_info;
   if (!cookie) return res.status(401).json({ error: 'Tidak ada sesi login.' });
 
@@ -359,19 +360,64 @@ router.put('/user/:id', async (req, res) => {
   const { username, password } = req.body;
 
   try {
+    // Ambil user lama
+    const { data: oldUser, error: oldUserErr } = await supabase
+      .from('users')
+      .select('avatar')
+      .eq('id', req.params.id)
+      .single();
+    if (oldUserErr || !oldUser) {
+      return res.status(404).json({ error: 'User tidak ditemukan.' });
+    }
+
     const updatePayload = {};
 
+    // === Update username & password ===
     if (username) updatePayload.username = username;
     if (password) {
       const hashed = await bcrypt.hash(password, 10);
       updatePayload.password = hashed;
     }
 
+    // === Update avatar jika ada file baru ===
+    if (req.file) {
+      const filename = `avatar_${Date.now()}.webp`;
+
+      // Hapus avatar lama kalau ada dan bukan default
+      if (oldUser.avatar && !oldUser.avatar.includes('avatar_default')) {
+        const oldPath = oldUser.avatar.split('/').pop(); // ambil nama file saja
+        await supabase.storage.from('avatars').remove([oldPath]);
+      }
+
+      const buffer = await sharp(req.file.buffer)
+        .webp({ quality: 80 })
+        .toBuffer();
+
+      const { error: uploadErr } = await supabase.storage
+        .from('avatars')
+        .upload(filename, buffer, {
+          contentType: 'image/webp',
+          upsert: true
+        });
+
+      if (uploadErr) {
+        console.error('Upload avatar error:', uploadErr);
+        return res.status(500).json({ error: 'Gagal upload avatar baru.' });
+      }
+
+      const { data: publicUrl } = supabase.storage
+        .from('avatars')
+        .getPublicUrl(filename);
+
+      updatePayload.avatar = publicUrl.publicUrl;
+    }
+
+    // Update ke database
     const { data, error } = await supabase
       .from('users')
       .update(updatePayload)
       .eq('id', req.params.id)
-      .select('id, email, username');
+      .select('id, email, username, avatar');
 
     if (error) throw error;
 

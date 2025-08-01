@@ -53,7 +53,6 @@ async function attachVariantsAndStock(products) {
 }
 
 // === Upload Produk Baru ===
-// === Upload Produk Baru ===
 router.post('/upload', uploadForCreate, async (req, res) => {
   const {
     seller_id,
@@ -108,9 +107,11 @@ router.post('/upload', uploadForCreate, async (req, res) => {
       ? productImagesUrls[0]
       : productImagesUrls;
 
+    // === Tambahkan seller name ke keywords ===
     const keywords = [
       ...generateKeywords(productName),
-      ...generateKeywords(productDescription)
+      ...generateKeywords(productDescription),
+      ...generateKeywords(seller.name)
     ];
 
     let parsedVariants = [];
@@ -195,7 +196,7 @@ router.post('/upload', uploadForCreate, async (req, res) => {
         min_price: minPrice,
         max_price: maxPrice,
         stock: totalStock,
-        product_image_url: imageField, // 🟢 string jika 1, array jika >1
+        product_image_url: imageField,
         keywords
       }])
       .select()
@@ -228,7 +229,6 @@ router.post('/upload', uploadForCreate, async (req, res) => {
     return res.status(500).json({ message: '❌ Terjadi error', error: error.message });
   }
 });
-
 
 // === GET produk terdekat ===
 const haversineDistance = (lat1, lon1, lat2, lon2) => {
@@ -392,13 +392,15 @@ router.put('/:id', uploadForEdit, async (req, res) => {
       imageField = finalProductImages;
     }
 
-    // === Keywords baru ===
+    // === Keywords baru (nama, deskripsi, seller name) ===
+    const sellerName = oldProduct.seller_name || '';
     const keywords = [
       ...generateKeywords(productName || oldProduct.product_name),
-      ...generateKeywords(productDescription || oldProduct.product_description)
+      ...generateKeywords(productDescription || oldProduct.product_description),
+      ...generateKeywords(sellerName)
     ];
 
-    // === Handle Variants (Update / Add Only) ===
+    // === Handle Variants ===
     let parsedVariants = [];
     if (variants) {
       try {
@@ -414,19 +416,16 @@ router.put('/:id', uploadForEdit, async (req, res) => {
     let minPrice = 0;
     let maxPrice = 0;
 
-    // Ambil varian lama untuk kalkulasi harga/stock
     const { data: oldVariants } = await supabase
       .from('product_variants')
       .select('*')
       .eq('product_id', productId);
 
-    // Proses varian baru atau update
     if (Array.isArray(parsedVariants) && parsedVariants.length > 0) {
       for (let i = 0; i < parsedVariants.length; i++) {
         const v = parsedVariants[i];
         let variantImageUrl = v.image_url || null;
 
-        // Upload gambar baru jika ada
         if (req.files && req.files['variantImages'] && req.files['variantImages'][i]) {
           const file = req.files['variantImages'][i];
           const ext = path.extname(file.originalname);
@@ -445,7 +444,6 @@ router.put('/:id', uploadForEdit, async (req, res) => {
         }
 
         if (v.id) {
-          // Update varian lama
           await supabase.from('product_variants')
             .update({
               variant_name: v.name,
@@ -456,7 +454,6 @@ router.put('/:id', uploadForEdit, async (req, res) => {
             .eq('id', v.id);
           uploadedVariants.push({ ...v, variant_image_url: variantImageUrl || v.image_url });
         } else {
-          // Tambah varian baru
           const { data: inserted } = await supabase.from('product_variants')
             .insert({
               product_id: productId,
@@ -475,7 +472,6 @@ router.put('/:id', uploadForEdit, async (req, res) => {
       }
     }
 
-    // === Hitung ulang harga & stok ===
     const allVariants = [...oldVariants, ...uploadedVariants.filter(v => !v.id || !oldVariants.find(o => o.id === v.id))];
     const prices = allVariants.map(v => parseFloat(v.price || v.variant_price));
     const stocks = allVariants.map(v => parseInt(v.stock || v.variant_stock));
@@ -492,7 +488,6 @@ router.put('/:id', uploadForEdit, async (req, res) => {
       maxPrice = finalProductPrice;
     }
 
-    // === Update produk utama ===
     const { error: updateErr, data: updated } = await supabase
       .from('products')
       .update({
