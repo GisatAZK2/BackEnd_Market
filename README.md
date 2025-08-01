@@ -577,27 +577,31 @@ navigator.geolocation.getCurrentPosition(
   }
 );
 ```
+# 🔍 Search API & Workflow (Update 2025-08-01)
 
-# 🔍 Search API & Workflow
-
-API ini menyediakan fitur pencarian produk berbasis **keywords** dengan dukungan **suggestion (partial search)** dan **meta cache** untuk frontend.
+API ini menyediakan fitur pencarian produk berbasis **keywords** dengan dukungan **suggestion (partial search)**, **meta cache** untuk frontend, serta mendukung **pagination** dan **auto extend data varian & stok total**.  
+Jika produk tidak ditemukan, sistem akan otomatis melakukan pencarian berdasarkan **nama seller**.
 
 ---
 
 ## **Endpoint**
 
-### 1. Cari Produk (Exact Keywords)
+### 1. Cari Produk (Exact Keywords → Fallback Seller)
 ```
-GET /search?q=<keywords>
+GET /search?q=<keywords>&limit=<n>&offset=<n>
 ```
 - **Parameter**:  
-  - `q` → Bisa 1 atau lebih keyword, pisahkan dengan spasi atau koma.
-- **Kegunaan**: Mengambil produk yang mengandung semua keywords pada kolom `keywords`.
+  - `q` → Bisa 1 atau lebih keyword, pisahkan dengan spasi atau koma.  
+  - `limit` *(opsional)* → jumlah data per halaman (default: 20).  
+  - `offset` *(opsional)* → posisi awal data (default: 0).
+- **Kegunaan**: 
+  - Mengambil produk yang mengandung semua keywords pada kolom `keywords`.  
+  - Jika tidak ada produk, sistem otomatis mencari nama seller.
 
-**Response Contoh**:
+**Response Contoh** (produk ditemukan):
 ```json
 {
-  "message": "✅ Ditemukan 1 produk",
+  "message": "✅ Ditemukan 2 produk",
   "keywords": ["nasi", "botol"],
   "products": [
     {
@@ -606,8 +610,36 @@ GET /search?q=<keywords>
       "product_description": "Nasi praktis dalam botol",
       "product_price": 15000,
       "keywords": ["nasi", "botol"],
-      "stock": 100
+      "stock": 100,
+      "variants": [
+        {
+          "id": "var1",
+          "variant_name": "Rasa Original",
+          "variant_stock": 50
+        },
+        {
+          "id": "var2",
+          "variant_name": "Rasa Pedas",
+          "variant_stock": 50
+        }
+      ],
+      "total_stock": 100
     }
+  ],
+  "pagination": {
+    "limit": 20,
+    "offset": 0
+  }
+}
+```
+
+**Response Contoh** (produk kosong → fallback seller):
+```json
+{
+  "message": "✅ Tidak ada produk dengan kata kunci tersebut, tetapi ditemukan 2 toko",
+  "sellers": [
+    "Warung Nasi Mbak Ana",
+    "Nasi Enak Pak Budi"
   ]
 }
 ```
@@ -618,7 +650,7 @@ GET /search?q=<keywords>
 ```
 GET /search/meta
 ```
-- **Kegunaan**: Mengambil **keywords unik** dan **nama produk** untuk cache frontend.
+- **Kegunaan**: Mengambil **keywords unik** dan **nama produk + seller** untuk cache frontend.
 - **Waktu Panggil**: 1x saat halaman dimuat.
 
 **Response Contoh**:
@@ -627,8 +659,8 @@ GET /search/meta
   "message": "✅ Data meta berhasil diambil",
   "keywords": ["nasi", "kecap", "botol", "ketchup"],
   "productNames": [
-    { "id": "1", "name": "Nasi Goreng" },
-    { "id": "2", "name": "Kecap Botol" }
+    { "id": "1", "name": "Nasi Goreng", "seller": "Warung Bu Tini" },
+    { "id": "2", "name": "Kecap Botol", "seller": "Toko Sembako Jaya" }
   ]
 }
 ```
@@ -637,45 +669,92 @@ GET /search/meta
 
 ### 3. Suggestion (Partial Keyword)
 ```
-GET /search/suggest?q=<partial>
+GET /search/suggest?q=<partial>&limit=<n>
 ```
 - **Parameter**:
   - `q` → potongan kata yang sedang diketik user (contoh: `"nas"`).
-- **Kegunaan**: Mengembalikan daftar suggestion keyword dan nama produk yang mirip.
+  - `limit` *(opsional)* → jumlah hasil (default: 10).
+- **Kegunaan**: 
+  - Mengembalikan daftar suggestion keyword, produk yang mirip, dan nama seller terkait.
+  - Produk sudah otomatis memiliki data variant & total stok.
 
 **Response Contoh**:
 ```json
 {
   "message": "✅ Suggestion ditemukan",
   "keywords": ["nasi", "nasi goreng"],
-  "productNames": ["Nasi Goreng Spesial", "Nasi Bakar"]
+  "products": [
+    {
+      "id": "123",
+      "product_name": "Nasi Goreng Spesial",
+      "seller_name": "Warung Mbak Ana",
+      "variants": [],
+      "total_stock": 20
+    }
+  ]
 }
 ```
 
 ---
 
-## **Alur Workflow Frontend**
+### 4. Ambil Semua Produk
+```
+GET /search/allproduct?limit=<n>&offset=<n>
+```
+- **Kegunaan**: Menampilkan semua produk beserta varian & total stok, dengan pagination.
+- **Parameter**:
+  - `limit` *(opsional)* → default 50
+  - `offset` *(opsional)* → default 0
+
+**Response Contoh**:
+```json
+{
+  "message": "✅ 50 produk",
+  "products": [
+    {
+      "id": "p1",
+      "product_name": "Nasi Uduk",
+      "variants": [
+        { "id": "v1", "variant_name": "Porsi Sedang", "variant_stock": 10 },
+        { "id": "v2", "variant_name": "Porsi Jumbo", "variant_stock": 5 }
+      ],
+      "total_stock": 15
+    }
+  ],
+  "pagination": {
+    "limit": 50,
+    "offset": 0
+  }
+}
+```
+
+---
+
+## **Alur Workflow Frontend (Update)**
 
 ### 1. Saat Halaman Dimuat
-- Panggil **`/search/meta`** → cache `keywords` dan `productNames` di frontend.
+- Panggil **`/search/meta`** → cache `keywords` & `productNames`.
 
 ### 2. Saat User Mengetik
-- Tunggu 300ms (debounce).
-- Panggil **`/search/suggest?q=<input>`** untuk mendapatkan:
-  - Produk dengan nama mirip.
-  - Keywords yang mengandung input.
+- Gunakan **debounce 300ms**.
+- Panggil **`/search/suggest?q=<input>`** → tampilkan suggestion:
+  - Keywords mirip.
+  - Produk & seller terkait.
 
-### 3. Saat User Memilih Suggestion
-- Isi nilai input dengan pilihan.
-- Panggil **`/search?q=<pilihan>`** untuk mengambil produk detail.
-- Render daftar produk hasil pencarian di bawah input.
+### 3. Saat User Memilih Suggestion / Tekan Enter
+- Panggil **`/search?q=<pilihan>&limit=20&offset=0`**.
+- Tampilkan produk hasil pencarian beserta varian & stok total.
+
+### 4. Saat Scroll ke Bawah (Load More)
+- Tambah offset → panggil ulang `/search?q=<pilihan>&limit=20&offset=<baru>`.
 
 ---
 
 ## **Urutan API Call**
 1. **On Page Load** → `/search/meta`
 2. **On Input Typing (≥1 karakter)** → `/search/suggest?q=<input>`
-3. **On Suggestion Click** → `/search?q=<keyword>`
+3. **On Suggestion Click / Enter** → `/search?q=<keyword>&limit=20&offset=0`
+4. **On Scroll Load More** → `/search?q=<keyword>&limit=20&offset=20`
 
 ---
 
@@ -692,13 +771,16 @@ sequenceDiagram
 
     User->>Frontend: Type "nas"
     Frontend->>API: GET /search/suggest?q=nas
-    API-->>Frontend: suggestions (keywords + products)
+    API-->>Frontend: suggestions (keywords + products + sellers)
 
     User->>Frontend: Click suggestion
-    Frontend->>API: GET /search?q=nasi
-    API-->>Frontend: Produk hasil pencarian
-```
+    Frontend->>API: GET /search?q=nasi&limit=20&offset=0
+    API-->>Frontend: Produk hasil pencarian (+variants, stock)
 
+    User->>Frontend: Scroll
+    Frontend->>API: GET /search?q=nasi&limit=20&offset=20
+    API-->>Frontend: Produk tambahan
+```
 ---
 ## 📌 Catatan
 
