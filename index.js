@@ -62,7 +62,7 @@ const cache = apicache.middleware;
 // === Routes ===
 app.use('/auth', authRoutes);
 app.use('/forum-pendaftaran', forumpendaftaran);
-app.use('/product', cache('5 minutes'), productRoutes); // <--- cache di sini
+app.use('/product', cache('15 seconds'), productRoutes); // <--- cache di sini
 app.use('/categories', cache('10 minutes'), category);
 app.use('/search', cache('2 minutes'), search);
 app.use('/clean', clean);

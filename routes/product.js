@@ -2,17 +2,18 @@ const express = require('express');
 const path = require('path');
 const multer = require('multer');
 const { v4: uuidv4 } = require('uuid');
+const sharp = require('sharp');
 const supabase = require('../config/supabase');
 const generateKeywords = require('../utils/keywordGenerator');
 
 const router = express.Router();
 
-// === Multer untuk multi gambar produk & varian ===
+// === Multer tanpa filter format ketat (cek mimetype basic) ===
 const uploadMulter = multer({
-  limits: { fileSize: 5 * 1024 * 1024 },
+  limits: { fileSize: 10 * 1024 * 1024 }, // naikkan limit jadi 10MB
   fileFilter: (req, file, cb) => {
-    if (['image/jpeg', 'image/png'].includes(file.mimetype)) cb(null, true);
-    else cb(new Error('❌ Gambar harus JPEG atau PNG'));
+    if (file.mimetype.startsWith('image/')) cb(null, true);
+    else cb(new Error('❌ Hanya file gambar yang diizinkan'));
   }
 });
 
@@ -21,11 +22,14 @@ const uploadForCreate = uploadMulter.fields([
   { name: 'variantImages', maxCount: 10 }
 ]);
 
-
 const uploadForEdit = uploadMulter.fields([
   { name: 'productImages', maxCount: 10 },
   { name: 'variantImages', maxCount: 10 }
 ]);
+
+async function convertToWebp(buffer) {
+  return sharp(buffer).webp({ quality: 80 }).toBuffer();
+}
 
 // === Helper: ambil variant & tentukan stok final ===
 async function attachVariantsAndStock(products) {
@@ -52,7 +56,7 @@ async function attachVariantsAndStock(products) {
   });
 }
 
-// === Upload Produk Baru ===
+
 // === Upload Produk Baru ===
 router.post('/upload', uploadForCreate, async (req, res) => {
   const {
@@ -80,28 +84,27 @@ router.post('/upload', uploadForCreate, async (req, res) => {
       .eq('id', seller_id)
       .single();
 
-    if (!seller) {
-      return res.status(404).json({ message: '❌ Seller tidak ditemukan' });
-    }
+    if (!seller) return res.status(404).json({ message: '❌ Seller tidak ditemukan' });
 
     const productImagesUrls = [];
     for (let img of req.files['productImages']) {
-      const fileExt = path.extname(img.originalname);
-      const fileName = `${uuidv4()}${fileExt}`;
+      const fileName = `${uuidv4()}.webp`;
       const filePath = `${seller_id}/products/${fileName}`;
+
+      const webpBuffer = await convertToWebp(img.buffer);
 
       await supabase.storage
         .from('product-images')
-        .upload(filePath, img.buffer, {
-          contentType: img.mimetype,
+        .upload(filePath, webpBuffer, {
+          contentType: 'image/webp',
           upsert: true
         });
 
-      const { data: urlData } = await supabase.storage
+      const { data } = supabase.storage
         .from('product-images')
-        .createSignedUrl(filePath, 60 * 60 * 24 * 7);
+        .getPublicUrl(filePath);
 
-      productImagesUrls.push(urlData.signedUrl);
+      productImagesUrls.push(data.publicUrl);
     }
 
     const imageField = productImagesUrls.length === 1
@@ -114,19 +117,11 @@ router.post('/upload', uploadForCreate, async (req, res) => {
     ];
 
     let parsedVariants = [];
-    try {
-      if (variants) {
-        parsedVariants = JSON.parse(variants);
-      }
-    } catch (err) {
-      return res.status(400).json({ message: '❌ Format varian tidak valid' });
-    }
+    try { if (variants) parsedVariants = JSON.parse(variants); } catch { return res.status(400).json({ message: '❌ Format varian tidak valid' }); }
 
     let uploadedVariants = [];
     let totalStock = stock ? parseInt(stock) : 0;
-    let finalProductPrice = 0;
-    let minPrice = 0;
-    let maxPrice = 0;
+    let finalProductPrice = 0, minPrice = 0, maxPrice = 0;
 
     if (Array.isArray(parsedVariants) && parsedVariants.length > 0) {
       for (let i = 0; i < parsedVariants.length; i++) {
@@ -134,23 +129,16 @@ router.post('/upload', uploadForCreate, async (req, res) => {
         let variantImageUrl = v.image_url || null;
 
         if (req.files['variantImages'] && req.files['variantImages'][i]) {
-          const variantFile = req.files['variantImages'][i];
-          const fileExt = path.extname(variantFile.originalname);
-          const fileName = `${uuidv4()}${fileExt}`;
+          const fileName = `${uuidv4()}.webp`;
           const variantPath = `${seller_id}/variants/${fileName}`;
+          const webpVariant = await convertToWebp(req.files['variantImages'][i].buffer);
 
           await supabase.storage
             .from('product-images')
-            .upload(variantPath, variantFile.buffer, {
-              contentType: variantFile.mimetype,
-              upsert: true
-            });
+            .upload(variantPath, webpVariant, { contentType: 'image/webp', upsert: true });
 
-          const { data: urlData } = await supabase.storage
-            .from('product-images')
-            .createSignedUrl(variantPath, 60 * 60 * 24 * 7);
-
-          variantImageUrl = urlData.signedUrl;
+          const { data } = supabase.storage.from('product-images').getPublicUrl(variantPath);
+          variantImageUrl = data.publicUrl;
         }
 
         uploadedVariants.push({
@@ -166,17 +154,11 @@ router.post('/upload', uploadForCreate, async (req, res) => {
       minPrice = Math.min(...prices);
       maxPrice = Math.max(...prices);
       finalProductPrice = minPrice;
-
       totalStock = uploadedVariants.reduce((sum, v) => sum + v.variant_stock, 0);
-
     } else {
       const parsedPrice = parseFloat(productPrice);
-      if (isNaN(parsedPrice) || parsedPrice <= 0) {
-        return res.status(400).json({
-          message: '❌ Produk tanpa varian harus memiliki harga lebih dari 0 (productPrice)'
-        });
-      }
-
+      if (isNaN(parsedPrice) || parsedPrice <= 0)
+        return res.status(400).json({ message: '❌ Produk tanpa varian harus memiliki harga lebih dari 0' });
       finalProductPrice = parsedPrice;
       minPrice = parsedPrice;
       maxPrice = parsedPrice;
@@ -195,39 +177,27 @@ router.post('/upload', uploadForCreate, async (req, res) => {
         min_price: minPrice,
         max_price: maxPrice,
         stock: totalStock,
-        product_image_url: imageField, // 🟢 string jika 1, array jika >1
+        product_image_url: imageField,
         keywords
       }])
       .select()
       .single();
 
-    if (insertError) {
-      return res.status(500).json({
-        message: '❌ Gagal insert produk',
-        error: insertError.message
-      });
-    }
+    if (insertError) return res.status(500).json({ message: '❌ Gagal insert produk', error: insertError.message });
 
     if (uploadedVariants.length > 0) {
-      for (let v of uploadedVariants) {
-        v.product_id = product.id;
-      }
+      for (let v of uploadedVariants) v.product_id = product.id;
       await supabase.from('product_variants').insert(uploadedVariants);
     }
 
-    return res.status(201).json({
-      message: '✅ Produk berhasil diunggah',
-      data: {
-        ...product,
-        variants: uploadedVariants
-      }
-    });
+    return res.status(201).json({ message: '✅ Produk berhasil diunggah', data: { ...product, variants: uploadedVariants } });
 
   } catch (error) {
-    console.error('❌ Upload Error:', error);
+    console.error(error);
     return res.status(500).json({ message: '❌ Terjadi error', error: error.message });
   }
 });
+
 
 
 // === GET produk terdekat ===
@@ -309,6 +279,7 @@ router.get('/:id', async (req, res) => {
 
 
 // === ROUTE UPDATE PRODUK ===
+// === ROUTE UPDATE PRODUK (Konversi semua gambar ke WebP) ===
 router.put('/:id', uploadForEdit, async (req, res) => {
   const productId = req.params.id;
   const {
@@ -354,24 +325,26 @@ router.put('/:id', uploadForEdit, async (req, res) => {
         .remove([`${oldProduct.seller_id}/products/${fileName}`]);
     }
 
-    // === Upload gambar baru produk ===
+    // === Upload gambar baru produk (convert WebP) ===
     const productImagesUrls = [];
     if (req.files && req.files['productImages']) {
       for (let img of req.files['productImages']) {
-        const ext = path.extname(img.originalname);
-        const fileName = `${uuidv4()}${ext}`;
+        const fileName = `${uuidv4()}.webp`;
         const filePath = `${oldProduct.seller_id}/products/${fileName}`;
+        const webpBuffer = await convertToWebp(img.buffer);
 
-        await supabase.storage.from('product-images').upload(filePath, img.buffer, {
-          contentType: img.mimetype,
-          upsert: true
-        });
-
-        const { data: urlData } = await supabase.storage
+        await supabase.storage
           .from('product-images')
-          .createSignedUrl(filePath, 60 * 60 * 24 * 7);
+          .upload(filePath, webpBuffer, {
+            contentType: 'image/webp',
+            upsert: true
+          });
 
-        productImagesUrls.push(urlData.signedUrl);
+        const { data } = supabase.storage
+          .from('product-images')
+          .getPublicUrl(filePath);
+
+        productImagesUrls.push(data.publicUrl);
       }
     }
 
@@ -386,11 +359,8 @@ router.put('/:id', uploadForEdit, async (req, res) => {
     const finalProductImages = [...remainingOldImages, ...productImagesUrls];
 
     let imageField = null;
-    if (finalProductImages.length === 1) {
-      imageField = finalProductImages[0];
-    } else if (finalProductImages.length > 1) {
-      imageField = finalProductImages;
-    }
+    if (finalProductImages.length === 1) imageField = finalProductImages[0];
+    else if (finalProductImages.length > 1) imageField = finalProductImages;
 
     // === Keywords baru ===
     const keywords = [
@@ -414,34 +384,34 @@ router.put('/:id', uploadForEdit, async (req, res) => {
     let minPrice = 0;
     let maxPrice = 0;
 
-    // Ambil varian lama untuk kalkulasi harga/stock
     const { data: oldVariants } = await supabase
       .from('product_variants')
       .select('*')
       .eq('product_id', productId);
 
-    // Proses varian baru atau update
+    // === Proses varian baru atau update ===
     if (Array.isArray(parsedVariants) && parsedVariants.length > 0) {
       for (let i = 0; i < parsedVariants.length; i++) {
         const v = parsedVariants[i];
         let variantImageUrl = v.image_url || null;
 
-        // Upload gambar baru jika ada
+        // Upload gambar varian baru (convert WebP)
         if (req.files && req.files['variantImages'] && req.files['variantImages'][i]) {
-          const file = req.files['variantImages'][i];
-          const ext = path.extname(file.originalname);
-          const fileName = `${uuidv4()}${ext}`;
-          const filePath = `${oldProduct.seller_id}/variants/${fileName}`;
+          const fileName = `${uuidv4()}.webp`;
+          const variantPath = `${oldProduct.seller_id}/variants/${fileName}`;
+          const webpBuffer = await convertToWebp(req.files['variantImages'][i].buffer);
 
-          await supabase.storage.from('product-images').upload(filePath, file.buffer, {
-            contentType: file.mimetype,
-            upsert: true
-          });
-
-          const { data: urlData } = await supabase.storage
+          await supabase.storage
             .from('product-images')
-            .createSignedUrl(filePath, 60 * 60 * 24 * 7);
-          variantImageUrl = urlData.signedUrl;
+            .upload(variantPath, webpBuffer, {
+              contentType: 'image/webp',
+              upsert: true
+            });
+
+          const { data } = supabase.storage
+            .from('product-images')
+            .getPublicUrl(variantPath);
+          variantImageUrl = data.publicUrl;
         }
 
         if (v.id) {
@@ -526,7 +496,6 @@ router.put('/:id', uploadForEdit, async (req, res) => {
     return res.status(500).json({ message: '❌ Terjadi kesalahan saat edit produk', error: error.message });
   }
 });
-
 
 router.delete('/delete/:id', async (req, res) => {
   const { id } = req.params;
