@@ -550,17 +550,18 @@ router.post('/login/google', async (req, res) => {
     const token = jwt.sign({ id: user.id }, process.env.JWT_SECRET, { expiresIn: '7d' });
 
     const isProd = process.env.NODE_ENV === 'production';
-    res.cookie('user_info', JSON.stringify({
-      id: user.id,
-      email: user.email,
-      username: user.username,
-      avatar: user.avatar || googleAvatar
-    }), {
-      httpOnly: true,
-      secure: isProd,
-      sameSite: isProd ? 'None' : 'Lax',
-      maxAge: 7 * 24 * 60 * 60 * 1000
-    });
+    rres.cookie('user_info', JSON.stringify({
+  id: user.id,
+  email: user.email,
+  username: user.username,
+  avatar: user.avatar || googleAvatar
+}), {
+  httpOnly: true,
+  secure: false,         // ❌ ubah ke false di development
+  sameSite: 'Lax',       // ✅ Lax cukup untuk localhost
+  maxAge: 7 * 24 * 60 * 60 * 1000
+});
+
 
     return res.json({
       message: 'Login Google sukses.',

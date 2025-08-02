@@ -148,10 +148,12 @@ router.get('/allproduct', async (req, res) => {
   const { limit = 50, offset = 0 } = req.query;
 
   try {
-    const { data: products } = await supabase
-      .from('products')
-      .select('*')
-      .range(parseInt(offset), parseInt(offset) + parseInt(limit) - 1);
+    const { data: products, error } = await supabase
+  .from('products')
+  .select('*')
+  .or(`product_name.ilike.${searchTerm},seller_name.ilike.${searchTerm}`)
+  .limit(parseInt(limit));
+
 
     const productsWithVariants = await attachVariantsAndStock(products);
 
