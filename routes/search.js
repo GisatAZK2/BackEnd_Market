@@ -143,17 +143,18 @@ router.get('/suggest', async (req, res) => {
   }
 });
 
+
 // ===== All product =====
 router.get('/allproduct', async (req, res) => {
   const { limit = 50, offset = 0 } = req.query;
 
   try {
     const { data: products, error } = await supabase
-  .from('products')
-  .select('*')
-  .or(`product_name.ilike.${searchTerm},seller_name.ilike.${searchTerm}`)
-  .limit(parseInt(limit));
+      .from('products')
+      .select('*')
+      .range(parseInt(offset), parseInt(offset) + parseInt(limit) - 1);
 
+    if (error) throw error;
 
     const productsWithVariants = await attachVariantsAndStock(products);
 
@@ -163,7 +164,10 @@ router.get('/allproduct', async (req, res) => {
       pagination: { limit: parseInt(limit), offset: parseInt(offset) }
     });
   } catch (error) {
-    return res.status(500).json({ message: '❌ Gagal mengambil semua produk', error: error.message });
+    return res.status(500).json({
+      message: '❌ Gagal mengambil semua produk',
+      error: error.message
+    });
   }
 });
 
