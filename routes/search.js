@@ -118,7 +118,7 @@ router.get('/suggest', async (req, res) => {
 
     const { data: products, error } = await supabase
       .from('products')
-      .select('id, product_name, seller_name, keywords')
+      .select('*')
       .or(`product_name.ilike.${searchTerm},seller_name.ilike.${searchTerm}`)
       .limit(parseInt(limit));
 
