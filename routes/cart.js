@@ -214,7 +214,8 @@ router.put("/cart/update", async (req, res) => {
 });
 
 // === Hapus item dari cart ===
-router.delete("/cart/remove/:productId/:variantId?", async (req, res) => {
+// === Hapus item dari cart ===
+router.delete("/cart/remove/:productId", async (req, res) => {
   const user = getUserFromCookie(req);
   if (!user?.id) {
     return res
@@ -222,7 +223,8 @@ router.delete("/cart/remove/:productId/:variantId?", async (req, res) => {
       .json({ message: "❌ Harus login (cookie tidak valid)" });
   }
 
-  const { productId, variantId } = req.params;
+  const { productId } = req.params;
+  const { variantId } = req.query; // <-- ambil dari query string
 
   try {
     const { data: cart } = await supabase
