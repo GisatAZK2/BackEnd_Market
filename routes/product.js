@@ -5,6 +5,11 @@ const { v4: uuidv4 } = require("uuid");
 const sharp = require("sharp");
 const supabase = require("../config/supabase");
 const generateKeywords = require("../utils/keywordGenerator");
+const {
+  applyDiscount,
+  getActiveDiscountForProduct,
+  attachVariantsStockDiscount,
+} = require("../utils/applyDiscountAndVariants");
 
 const router = express.Router();
 
@@ -29,89 +34,6 @@ const uploadForEdit = uploadMulter.fields([
 
 async function convertToWebp(buffer) {
   return sharp(buffer).webp({ quality: 80 }).toBuffer();
-}
-
-// === DISKON HELPER ===
-async function getActiveDiscountForProduct(productId, storeId) {
-  const now = new Date().toISOString();
-
-  const { data: storeDiscounts } = await supabase
-    .from("store_discounts")
-    .select("*")
-    .eq("store_id", storeId)
-    .lte("start_time", now)
-    .gte("end_time", now);
-
-  const { data: events } = await supabase
-    .from("events")
-    .select("*")
-    .lte("start_time", now)
-    .gte("end_time", now);
-
-  const { data: flashSales } = await supabase
-    .from("flash_sales")
-    .select("*")
-    .eq("product_id", productId)
-    .lte("start_time", now)
-    .gte("end_time", now);
-
-  let discountPercentage = 0;
-  if (events?.length > 0) discountPercentage = Math.max(discountPercentage, 10);
-  if (storeDiscounts?.length > 0) {
-    for (const d of storeDiscounts)
-      discountPercentage = Math.max(discountPercentage, d.percentage);
-  }
-  if (flashSales?.length > 0) {
-    for (const fs of flashSales)
-      discountPercentage = Math.max(discountPercentage, fs.discount_percentage);
-  }
-  return discountPercentage;
-}
-
-// === VARIANT + STOK + DISKON ===
-async function attachVariantsStockDiscount(products) {
-  if (!products || products.length === 0) return [];
-
-  const ids = products.map((p) => p.id);
-  const { data: variants, error } = await supabase
-    .from("product_variants")
-    .select("*")
-    .in("product_id", ids);
-
-  if (error) {
-    console.error(error.message);
-    return products.map((p) => ({ ...p, variants: [], finalStock: p.stock }));
-  }
-
-  return Promise.all(
-    products.map(async (p) => {
-      const discountPercentage = await getActiveDiscountForProduct(
-        p.id,
-        p.seller_id,
-      );
-      const vList = variants.filter((v) => v.product_id === p.id);
-      let finalStock = p.stock;
-      if (vList.length > 0)
-        finalStock = vList.reduce((sum, v) => sum + v.variant_stock, 0);
-
-      const discountedVariants = vList.map((v) => ({
-        ...v,
-        final_price: Math.round(
-          v.variant_price * (1 - discountPercentage / 100),
-        ),
-      }));
-
-      return {
-        ...p,
-        variants: discountedVariants,
-        finalStock,
-        discountPercentage,
-        finalPrice: Math.round(
-          p.product_price * (1 - discountPercentage / 100),
-        ),
-      };
-    }),
-  );
 }
 
 // === Upload Produk Baru ===
@@ -301,13 +223,16 @@ router.get("/nearby-by-location", async (req, res) => {
   const { lat, lng } = req.query;
   const userLat = parseFloat(lat);
   const userLng = parseFloat(lng);
-  if (isNaN(userLat) || isNaN(userLng))
+
+  if (isNaN(userLat) || isNaN(userLng)) {
     return res.status(400).json({ message: "❌ Koordinat tidak valid" });
+  }
 
   try {
     const { data: sellers } = await supabase
       .from("sellers")
       .select("id, name, latitude, longitude");
+
     const { data: products } = await supabase.from("products").select("*");
 
     const merged = products
@@ -331,6 +256,7 @@ router.get("/nearby-by-location", async (req, res) => {
       .filter((p) => p.distanceInKm <= 40);
 
     const mergedWithVariants = await attachVariantsStockDiscount(merged);
+
     return res.status(200).json({
       message: `✅ Ditemukan ${mergedWithVariants.length} produk dalam radius 40 km`,
       products: mergedWithVariants,
@@ -342,7 +268,7 @@ router.get("/nearby-by-location", async (req, res) => {
   }
 });
 
-// === GET ALL PRODUCT ===
+// === SEMUA PRODUK ===
 router.get("/allproduct", async (req, res) => {
   try {
     const { data: products } = await supabase.from("products").select("*");
@@ -359,7 +285,7 @@ router.get("/allproduct", async (req, res) => {
   }
 });
 
-// === GET BY CATEGORY ===
+// === PRODUK BERDASARKAN KATEGORI ===
 router.get("/by-category/:category_id", async (req, res) => {
   const { category_id } = req.params;
   try {
@@ -368,6 +294,7 @@ router.get("/by-category/:category_id", async (req, res) => {
       .select("id, name")
       .eq("id", category_id)
       .single();
+
     if (!category)
       return res.status(404).json({ message: "❌ Kategori tidak ditemukan" });
 
@@ -375,7 +302,9 @@ router.get("/by-category/:category_id", async (req, res) => {
       .from("products")
       .select("*")
       .eq("category_id", category_id);
+
     const productsWithVariants = await attachVariantsStockDiscount(products);
+
     return res.status(200).json({
       message: `✅ Ditemukan ${products.length} produk dalam kategori "${category.name}"`,
       category: category.name,
@@ -388,7 +317,7 @@ router.get("/by-category/:category_id", async (req, res) => {
   }
 });
 
-// === GET BY ID ===
+// === PRODUK BERDASARKAN ID ===
 router.get("/:id", async (req, res) => {
   const { id } = req.params;
   try {
@@ -397,10 +326,12 @@ router.get("/:id", async (req, res) => {
       .select("*")
       .eq("id", id)
       .single();
+
     if (!product)
       return res.status(404).json({ message: "❌ Produk tidak ditemukan" });
 
     const productsWithVariants = await attachVariantsStockDiscount([product]);
+
     return res.status(200).json({
       message: "✅ Produk ditemukan",
       product: productsWithVariants[0],

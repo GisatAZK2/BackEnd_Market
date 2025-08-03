@@ -16,9 +16,11 @@ const discount = require("./routes/discount");
 const cookieParser = require("cookie-parser");
 const apicache = require("apicache");
 const path = require("path");
+const startCronJobs = require("./utils/restoreStock");
 require("dotenv").config();
 
 const app = express();
+startCronJobs();
 
 // === CORS ORIGINS ===
 const allowedOrigins = process.env.CORS_ORIGIN
@@ -97,7 +99,7 @@ const cache = apicache.middleware;
 // === Routes ===
 app.use("/auth", authRoutes);
 app.use("/forum-pendaftaran", forumpendaftaran);
-app.use("/product", cache("15 seconds"), productRoutes);
+app.use("/product", productRoutes);
 app.use("/categories", cache("10 minutes"), category);
 app.use("/search", cache("2 minutes"), search);
 app.use("/clean", clean);
