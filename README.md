@@ -423,7 +423,7 @@ Pendaftaran akun seller. Wajib kirim gambar toko (`multipart/form-data`).
 ---
 
 
-# 📦 Produk API 
+# 📦 Produk API
 
 API ini menangani CRUD produk, upload gambar ke Supabase Storage, serta fitur pencarian berdasarkan lokasi menggunakan Haversine Formula.
 
@@ -433,7 +433,7 @@ API ini menangani CRUD produk, upload gambar ke Supabase Storage, serta fitur pe
 
 ### 🔼 `POST /product/upload`
 
-**Deskripsi:** Upload produk baru dengan gambar dan varian (opsional).  
+**Deskripsi:** Upload produk baru dengan gambar dan varian (opsional).
 **Form Data:**
 
 | Field             | Tipe     | Keterangan                              |
@@ -579,7 +579,7 @@ navigator.geolocation.getCurrentPosition(
 ```
 # 🔍 Search API & Workflow (Update 2025-08-01)
 
-API ini menyediakan fitur pencarian produk berbasis **keywords** dengan dukungan **suggestion (partial search)**, **meta cache** untuk frontend, serta mendukung **pagination** dan **auto extend data varian & stok total**.  
+API ini menyediakan fitur pencarian produk berbasis **keywords** dengan dukungan **suggestion (partial search)**, **meta cache** untuk frontend, serta mendukung **pagination** dan **auto extend data varian & stok total**.
 Jika produk tidak ditemukan, sistem akan otomatis melakukan pencarian berdasarkan **nama seller**.
 
 ---
@@ -590,12 +590,12 @@ Jika produk tidak ditemukan, sistem akan otomatis melakukan pencarian berdasarka
 ```
 GET /search?q=<keywords>&limit=<n>&offset=<n>
 ```
-- **Parameter**:  
-  - `q` → Bisa 1 atau lebih keyword, pisahkan dengan spasi atau koma.  
-  - `limit` *(opsional)* → jumlah data per halaman (default: 20).  
+- **Parameter**:
+  - `q` → Bisa 1 atau lebih keyword, pisahkan dengan spasi atau koma.
+  - `limit` *(opsional)* → jumlah data per halaman (default: 20).
   - `offset` *(opsional)* → posisi awal data (default: 0).
-- **Kegunaan**: 
-  - Mengambil produk yang mengandung semua keywords pada kolom `keywords`.  
+- **Kegunaan**:
+  - Mengambil produk yang mengandung semua keywords pada kolom `keywords`.
   - Jika tidak ada produk, sistem otomatis mencari nama seller.
 
 **Response Contoh** (produk ditemukan):
@@ -674,7 +674,7 @@ GET /search/suggest?q=<partial>&limit=<n>
 - **Parameter**:
   - `q` → potongan kata yang sedang diketik user (contoh: `"nas"`).
   - `limit` *(opsional)* → jumlah hasil (default: 10).
-- **Kegunaan**: 
+- **Kegunaan**:
   - Mengembalikan daftar suggestion keyword, produk yang mirip, dan nama seller terkait.
   - Produk sudah otomatis memiliki data variant & total stok.
 
@@ -782,9 +782,332 @@ sequenceDiagram
     API-->>Frontend: Produk tambahan
 ```
 ---
+# Event & Discount API
+
+## Overview
+
+API ini mengelola event promosi, flash sale, dan diskon toko beserta integrasi stok produk. Menggunakan **Supabase** untuk penyimpanan data dan file, serta **cron job** untuk reset stok otomatis.
+
+---
+
+## Dependencies
+
+* **Express.js** - Router & handling endpoint
+* **Supabase** - Database & file storage
+* **Multer** - Upload file (banner event)
+* **Sharp** - Konversi gambar ke WebP
+* **Luxon** - Manajemen waktu & zona waktu
+* **UUID** - Penamaan unik file
+* **Node-cron** - Menjadwalkan tugas otomatis
+
+---
+
+## Endpoint
+
+### 1. **Create Event**
+
+**POST** `/event`
+
+**Form Data**:
+
+* `title` *(string)* - Nama event
+* `description` *(string, optional)* - Deskripsi event
+* `start_time` *(ISO date)* - Waktu mulai
+* `end_time` *(ISO date)* - Waktu selesai
+* `timezone` *(string, default: Asia/Jakarta)* - Zona waktu
+* `banner` *(file, optional)* - Gambar banner event (maks 10MB)
+
+**Response**:
+
+```json
+{
+  "message": "✅ Event berhasil ditambahkan",
+  "data": { ...event }
+}
+```
+
+---
+
+### 2. **Register Product ke Event**
+
+**POST** `/event/register`
+
+**Body JSON**:
+
+```json
+{
+  "seller_id": "uuid",
+  "event_id": "uuid",
+  "products": [
+    {
+      "product_id": "uuid",
+      "variant_id": "uuid (optional)",
+      "discount_percentage": 10,
+      "event_stock": 20
+    }
+  ]
+}
+```
+
+**Response**:
+
+```json
+{
+  "message": "✅ Produk berhasil didaftarkan ke event"
+}
+```
+
+---
+
+### 3. **List Event**
+
+**GET** `/event/list`
+
+**Response**:
+
+```json
+{
+  "message": "✅ Daftar event",
+  "data": [ ... ]
+}
+```
+
+---
+
+### 4. **Create Flash Sale**
+
+**POST** `/flash-sale/create`
+
+**Body JSON**:
+
+```json
+{
+  "product_id": "uuid",
+  "variant_id": "uuid (optional)",
+  "discount_percentage": 50,
+  "flash_stock": 10,
+  "start_time": "2025-08-02T09:00:00.000Z",
+  "end_time": "2025-08-05T09:00:00.000Z",
+  "timezone": "Asia/Jakarta"
+}
+```
+
+**Response**:
+
+```json
+{
+  "message": "✅ Flash sale berhasil ditambahkan",
+  "data": { ...flashSale },
+  "product": { ...produkDenganDiskon }
+}
+```
+
+---
+
+### 5. **Create Store Discount**
+
+**POST** `/store-discount/create`
+
+**Body JSON**:
+
+```json
+{
+  "store_id": "uuid",
+  "name": "Promo Ramadhan",
+  "start_time": "2025-08-02T09:00:00.000Z",
+  "end_time": "2025-08-10T09:00:00.000Z",
+  "items": [
+    {
+      "product_id": "uuid",
+      "variant_id": "uuid (optional)",
+      "stock": 10,
+      "discount_percentage": 20
+    }
+  ]
+}
+```
+
+**Response**:
+
+```json
+{
+  "message": "✅ Diskon toko berhasil dibuat dengan item-target",
+  "store_discount": { ...storeDiscount }
+}
+```
+
+---
+
+### 6. **Get Event by ID (with discount detail)**
+
+**GET** `/event/:id`
+
+**Response**:
+
+```json
+{
+  "message": "✅ Detail event",
+  "event": { ...event },
+  "products": [ ...produkDenganDiskon ]
+}
+```
+
+---
+
+### 7. **Get Store Discount by Seller**
+
+**GET** `/store-discount/seller/:seller_id`
+
+**Response**:
+
+```json
+{
+  "message": "✅ Diskon per toko berhasil diambil",
+  "data": [
+    {
+      ...storeDiscount,
+      "items": [ ...produkDenganDiskon ]
+    }
+  ]
+}
+```
+
+---
+
+### 8. **Get Flash Sale by ID**
+
+**GET** `/flash-sale/:id`
+
+**Response**:
+
+```json
+{
+  "message": "✅ Detail flash sale",
+  "flash_sale": { ...flashSale },
+  "product": { ...produkDenganDiskon }
+}
+```
+
+---
+
+## Cron Job
+
+Menjalankan setiap 5 menit untuk:
+
+1. Mengembalikan stok dari event yang telah selesai.
+2. Mengembalikan stok dari flash sale yang telah selesai.
+3. Mengembalikan stok dari store discount yang telah selesai.
+4. Menghapus data promo yang sudah berakhir.
+
+---
+
+## Notes
+
+* Semua tanggal disimpan dalam format **UTC** di database.
+* Banner event disimpan dalam bucket `event-banners`.
+* Diskon produk dihitung ulang menggunakan `attachVariantsStockDiscount()` untuk menyesuaikan stok & harga final.
+
+---
+# Cart API
+
+## Overview
+
+API ini mengelola keranjang belanja (cart) termasuk integrasi harga promo dan penambahan produk. Menggunakan **Supabase** sebagai database dan memanfaatkan cookie `user_info` untuk otentikasi.
+
+---
+
+## Dependencies
+
+* **Express.js** - Router & handling endpoint
+* **Supabase** - Database
+* **Cookies** - Autentikasi user (cookie `user_info`)
+* **applyDiscountAndVariants** - Utility untuk menghitung diskon aktif
+
+---
+
+## Endpoint
+
+### 1. **Get Cart dengan Harga Promo**
+
+**GET** `/cart`
+
+**Authentication**: Cookie `user_info`
+
+**Response**:
+
+```json
+{
+  "message": "✅ Cart ditemukan",
+  "cart": [
+    {
+      "productId": "uuid",
+      "name": "Produk A",
+      "variantId": "uuid/null",
+      "variantName": "Ukuran L",
+      "qty": 2,
+      "basePrice": 50000,
+      "finalPrice": 40000,
+      "discountApplied": 20,
+      "isDiscounted": true
+    }
+  ]
+}
+```
+
+**Error Responses**:
+
+* `403` jika cookie tidak ada atau invalid
+* `500` error server
+
+---
+
+### 2. **Add to Cart**
+
+**POST** `/cart/add`
+
+**Authentication**: Cookie `user_info`
+
+**Body JSON**:
+
+```json
+{
+  "productId": "uuid",
+  "variantId": "uuid (optional)",
+  "qty": 1
+}
+```
+
+**Response**:
+
+```json
+{
+  "message": "✅ Produk ditambahkan ke cart",
+  "items": [
+    {
+      "productId": "uuid",
+      "variantId": "uuid/null",
+      "qty": 2
+    }
+  ]
+}
+```
+
+**Error Responses**:
+
+* `400` jika `productId` kosong
+* `403` jika cookie tidak ada atau invalid
+* `500` error server
+
+---
+
+## Notes
+
+* Cookie `user_info` harus berupa JSON string dengan properti minimal `{ id: "user_id" }`.
+* Harga akhir (finalPrice) otomatis menghitung diskon aktif menggunakan fungsi `getActiveDiscountForProduct()` dan `applyDiscount()`.
+
+---
 ## 📌 Catatan
 
 * Semua email akan diverifikasi menggunakan OTP sebelum akun bisa digunakan.
 * Minta izin pengguna agar bisa akses lokasi.
 * Geolocation hanya berjalan di **HTTPS** atau **localhost**.
-

@@ -471,4 +471,111 @@ cron.schedule("*/5 * * * *", async () => {
   }
 });
 
+/* ===== EVENT GET BY ID (with discount detail) ===== */
+
+/* ===== EVENT GET BY ID (with discount detail) ===== */
+router.get("/event/:id", async (req, res) => {
+  const { id } = req.params;
+  try {
+    const { data: event, error } = await supabase
+      .from("events")
+      .select("*")
+      .eq("id", id)
+      .single();
+
+    if (error || !event) {
+      return res.status(404).json({ message: "❌ Event tidak ditemukan" });
+    }
+
+    const { data: eventProducts = [] } = await supabase
+      .from("event_products")
+      .select("products(*)")
+      .eq("event_id", id);
+
+    const products = (eventProducts || [])
+      .map((p) => p.products)
+      .filter(Boolean);
+    const productsWithDiscount =
+      products.length > 0 ? await attachVariantsStockDiscount(products) : [];
+
+    return res.json({
+      message: "✅ Detail event",
+      event,
+      products: productsWithDiscount,
+    });
+  } catch (err) {
+    res.status(500).json({ message: "❌ Error server", error: err.message });
+  }
+});
+
+/* ===== STORE DISCOUNT BY SELLER (with discount detail) ===== */
+router.get("/store-discount/seller/:seller_id", async (req, res) => {
+  const { seller_id } = req.params;
+  try {
+    const { data: storeDiscounts, error } = await supabase
+      .from("store_discounts")
+      .select("*")
+      .eq("store_id", seller_id);
+
+    if (error) {
+      return res.status(500).json({ message: "❌ Gagal ambil diskon toko" });
+    }
+
+    const discountsWithItems = [];
+    for (const discount of storeDiscounts || []) {
+      const { data: items = [] } = await supabase
+        .from("store_discount_items")
+        .select("products(*)")
+        .eq("discount_id", discount.id);
+
+      const products = (items || []).map((i) => i.products).filter(Boolean);
+      const productsWithDiscount =
+        products.length > 0 ? await attachVariantsStockDiscount(products) : [];
+
+      discountsWithItems.push({ ...discount, items: productsWithDiscount });
+    }
+
+    return res.json({
+      message: "✅ Diskon per toko berhasil diambil",
+      data: discountsWithItems,
+    });
+  } catch (err) {
+    res.status(500).json({ message: "❌ Error server", error: err.message });
+  }
+});
+
+/* ===== FLASH SALE GET BY ID (with discount detail) ===== */
+router.get("/flash-sale/:id", async (req, res) => {
+  const { id } = req.params;
+  try {
+    const { data: flashSale, error } = await supabase
+      .from("flash_sales")
+      .select("*")
+      .eq("id", id)
+      .single();
+
+    if (error || !flashSale) {
+      return res.status(404).json({ message: "❌ Flash sale tidak ditemukan" });
+    }
+
+    const { data: product } = await supabase
+      .from("products")
+      .select("*")
+      .eq("id", flashSale.product_id)
+      .single();
+
+    const productsWithDiscount = product
+      ? await attachVariantsStockDiscount([product])
+      : [];
+
+    return res.json({
+      message: "✅ Detail flash sale",
+      flash_sale: flashSale,
+      product: productsWithDiscount[0] || null,
+    });
+  } catch (err) {
+    res.status(500).json({ message: "❌ Error server", error: err.message });
+  }
+});
+
 module.exports = router;
