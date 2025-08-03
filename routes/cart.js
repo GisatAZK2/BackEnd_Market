@@ -156,4 +156,108 @@ router.post("/cart/add", async (req, res) => {
   }
 });
 
+// === Update cart qty ===
+router.put("/cart/update", async (req, res) => {
+  const user = getUserFromCookie(req);
+  if (!user?.id) {
+    return res
+      .status(403)
+      .json({ message: "❌ Harus login (cookie tidak valid)" });
+  }
+
+  const { productId, variantId = null, qty } = req.body;
+  if (!productId || qty == null) {
+    return res.status(400).json({ message: "❌ productId & qty wajib diisi" });
+  }
+
+  try {
+    const { data: cart } = await supabase
+      .from("carts")
+      .select("items")
+      .eq("user_id", user.id)
+      .maybeSingle();
+
+    if (!cart || !cart.items.length) {
+      return res.status(404).json({ message: "❌ Cart kosong" });
+    }
+
+    const itemIndex = cart.items.findIndex(
+      (item) => item.productId === productId && item.variantId === variantId,
+    );
+
+    if (itemIndex === -1) {
+      return res.status(404).json({ message: "❌ Produk tidak ada di cart" });
+    }
+
+    if (qty <= 0) {
+      // hapus item jika qty <= 0
+      cart.items.splice(itemIndex, 1);
+    } else {
+      cart.items[itemIndex].qty = qty;
+    }
+
+    await supabase
+      .from("carts")
+      .update({ items: cart.items })
+      .eq("user_id", user.id);
+
+    return res.json({
+      message: "✅ Cart berhasil diupdate",
+      items: cart.items,
+    });
+  } catch (err) {
+    console.error(err);
+    return res
+      .status(500)
+      .json({ message: "❌ Error server", error: err.message });
+  }
+});
+
+// === Hapus item dari cart ===
+router.delete("/cart/remove/:productId/:variantId?", async (req, res) => {
+  const user = getUserFromCookie(req);
+  if (!user?.id) {
+    return res
+      .status(403)
+      .json({ message: "❌ Harus login (cookie tidak valid)" });
+  }
+
+  const { productId, variantId } = req.params;
+
+  try {
+    const { data: cart } = await supabase
+      .from("carts")
+      .select("items")
+      .eq("user_id", user.id)
+      .maybeSingle();
+
+    if (!cart || !cart.items.length) {
+      return res.status(404).json({ message: "❌ Cart kosong" });
+    }
+
+    const newItems = cart.items.filter(
+      (item) =>
+        !(
+          item.productId === productId &&
+          (variantId ? item.variantId === variantId : true)
+        ),
+    );
+
+    await supabase
+      .from("carts")
+      .update({ items: newItems })
+      .eq("user_id", user.id);
+
+    return res.json({
+      message: "✅ Item berhasil dihapus",
+      items: newItems,
+    });
+  } catch (err) {
+    console.error(err);
+    return res
+      .status(500)
+      .json({ message: "❌ Error server", error: err.message });
+  }
+});
+
 module.exports = router;
