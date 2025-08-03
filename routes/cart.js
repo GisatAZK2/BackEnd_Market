@@ -224,7 +224,7 @@ router.delete("/cart/remove/:productId", async (req, res) => {
   }
 
   const { productId } = req.params;
-  const { variantId } = req.query; // <-- ambil dari query string
+  const { variantId } = req.query; // optional
 
   try {
     const { data: cart } = await supabase
@@ -237,13 +237,25 @@ router.delete("/cart/remove/:productId", async (req, res) => {
       return res.status(404).json({ message: "❌ Cart kosong" });
     }
 
-    const newItems = cart.items.filter(
-      (item) =>
-        !(
-          item.productId === productId &&
-          (variantId ? item.variantId === variantId : true)
-        ),
+    // cek apakah produk di cart punya variant
+    const productHasVariant = cart.items.some(
+      (item) => item.productId === productId && item.variantId,
     );
+
+    const newItems = cart.items.filter((item) => {
+      if (productHasVariant) {
+        // produk punya variant, hapus variant spesifik jika variantId diberikan
+        if (variantId) {
+          return !(item.productId === productId && item.variantId == variantId);
+        } else {
+          // jika tidak kirim variantId, hapus semua variant produk itu
+          return item.productId !== productId;
+        }
+      } else {
+        // produk tanpa variant → hapus langsung semua
+        return item.productId !== productId;
+      }
+    });
 
     await supabase
       .from("carts")
