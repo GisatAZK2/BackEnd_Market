@@ -18,7 +18,7 @@ function getUserFromCookie(req) {
   }
 }
 
-// === Get cart ===
+// === GET CART ===
 router.get("/cart", async (req, res) => {
   const user = getUserFromCookie(req);
   if (!user?.id) {
@@ -48,7 +48,6 @@ router.get("/cart", async (req, res) => {
         const product = products.find((p) => p.id === item.productId);
         if (!product) return null;
 
-        // Ambil varian jika ada
         let variant = null;
         if (item.variantId) {
           const { data: v } = await supabase
@@ -99,7 +98,7 @@ router.get("/cart", async (req, res) => {
   }
 });
 
-// === Add to cart ===
+// === ADD TO CART ===
 router.post("/cart/add", async (req, res) => {
   const user = getUserFromCookie(req);
   if (!user?.id) {
@@ -109,9 +108,8 @@ router.post("/cart/add", async (req, res) => {
   }
 
   const { productId, variantId = null, qty = 1 } = req.body;
-  if (!productId) {
+  if (!productId)
     return res.status(400).json({ message: "❌ productId wajib diisi" });
-  }
 
   try {
     const { data: cart } = await supabase
@@ -123,7 +121,10 @@ router.post("/cart/add", async (req, res) => {
     let newItems = [];
     if (cart) {
       const existingItemIndex = cart.items.findIndex(
-        (item) => item.productId === productId && item.variantId === variantId,
+        (item) =>
+          item.productId === productId &&
+          (item.variantId == variantId ||
+            (item.variantId == null && variantId == null)),
       );
 
       if (existingItemIndex !== -1) {
@@ -141,7 +142,7 @@ router.post("/cart/add", async (req, res) => {
       newItems = [{ productId, variantId, qty }];
       await supabase
         .from("carts")
-        .insert([{ user_id: user.id, items: newItems }]); // <<=== user_id dari cookie
+        .insert([{ user_id: user.id, items: newItems }]);
     }
 
     return res.json({
@@ -156,7 +157,7 @@ router.post("/cart/add", async (req, res) => {
   }
 });
 
-// === Update cart qty ===
+// === UPDATE CART ===
 router.put("/cart/update", async (req, res) => {
   const user = getUserFromCookie(req);
   if (!user?.id) {
@@ -166,9 +167,8 @@ router.put("/cart/update", async (req, res) => {
   }
 
   const { productId, variantId = null, qty } = req.body;
-  if (!productId || qty == null) {
+  if (!productId || qty == null)
     return res.status(400).json({ message: "❌ productId & qty wajib diisi" });
-  }
 
   try {
     const { data: cart } = await supabase
@@ -177,24 +177,21 @@ router.put("/cart/update", async (req, res) => {
       .eq("user_id", user.id)
       .maybeSingle();
 
-    if (!cart || !cart.items.length) {
+    if (!cart || !cart.items.length)
       return res.status(404).json({ message: "❌ Cart kosong" });
-    }
 
     const itemIndex = cart.items.findIndex(
-      (item) => item.productId === productId && item.variantId === variantId,
+      (item) =>
+        item.productId === productId &&
+        (item.variantId == variantId ||
+          (item.variantId == null && variantId == null)),
     );
 
-    if (itemIndex === -1) {
+    if (itemIndex === -1)
       return res.status(404).json({ message: "❌ Produk tidak ada di cart" });
-    }
 
-    if (qty <= 0) {
-      // hapus item jika qty <= 0
-      cart.items.splice(itemIndex, 1);
-    } else {
-      cart.items[itemIndex].qty = qty;
-    }
+    if (qty <= 0) cart.items.splice(itemIndex, 1);
+    else cart.items[itemIndex].qty = qty;
 
     await supabase
       .from("carts")
@@ -213,8 +210,7 @@ router.put("/cart/update", async (req, res) => {
   }
 });
 
-// === Hapus item dari cart ===
-// === Hapus item dari cart ===
+// === REMOVE ITEM FROM CART ===
 router.delete("/cart/remove/:productId", async (req, res) => {
   const user = getUserFromCookie(req);
   if (!user?.id) {
@@ -224,7 +220,7 @@ router.delete("/cart/remove/:productId", async (req, res) => {
   }
 
   const { productId } = req.params;
-  const { variantId } = req.query;
+  const { variantId } = req.query; // bisa undefined, "null", atau uuid
 
   try {
     const { data: cart } = await supabase
@@ -233,27 +229,23 @@ router.delete("/cart/remove/:productId", async (req, res) => {
       .eq("user_id", user.id)
       .maybeSingle();
 
-    if (!cart || !cart.items.length) {
+    if (!cart || !cart.items.length)
       return res.status(404).json({ message: "❌ Cart kosong" });
-    }
 
-    // cek apakah produk ini punya variant di cart
     const productHasVariant = cart.items.some(
       (item) => item.productId === productId && item.variantId !== null,
     );
 
     const newItems = cart.items.filter((item) => {
-      if (!productHasVariant) {
-        // produk single → hapus semua
-        return item.productId !== productId;
-      }
-      // produk dengan variant
-      if (variantId) {
-        return !(item.productId === productId && item.variantId == variantId);
-      } else {
-        // hapus semua variant produk itu
-        return item.productId !== productId;
-      }
+      const sameProduct = item.productId === productId;
+      const sameVariant =
+        variantId === undefined || variantId === null || variantId === "null"
+          ? item.variantId === null
+          : item.variantId == variantId;
+
+      if (!productHasVariant) return item.productId !== productId; // produk single
+      if (variantId) return !(sameProduct && sameVariant); // hapus variant tertentu
+      return item.productId !== productId; // hapus semua variant
     });
 
     await supabase
@@ -261,10 +253,7 @@ router.delete("/cart/remove/:productId", async (req, res) => {
       .update({ items: newItems })
       .eq("user_id", user.id);
 
-    return res.json({
-      message: "✅ Item berhasil dihapus",
-      items: newItems,
-    });
+    return res.json({ message: "✅ Item berhasil dihapus", items: newItems });
   } catch (err) {
     console.error(err);
     return res
