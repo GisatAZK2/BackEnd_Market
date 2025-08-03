@@ -806,7 +806,7 @@ API ini mengelola event promosi, flash sale, dan diskon toko beserta integrasi s
 
 ### 1. **Create Event**
 
-**POST** `/discount/event`
+**POST** `/event`
 
 **Form Data**:
 
@@ -830,7 +830,7 @@ API ini mengelola event promosi, flash sale, dan diskon toko beserta integrasi s
 
 ### 2. **Register Product ke Event**
 
-**POST** `/discount/event/register`
+**POST** `/event/register`
 
 **Body JSON**:
 
@@ -861,7 +861,7 @@ API ini mengelola event promosi, flash sale, dan diskon toko beserta integrasi s
 
 ### 3. **List Event**
 
-**GET** `/discount/event/list`
+**GET** `/event/list`
 
 **Response**:
 
@@ -876,7 +876,7 @@ API ini mengelola event promosi, flash sale, dan diskon toko beserta integrasi s
 
 ### 4. **Create Flash Sale**
 
-**POST** `/discount/flash-sale/create`
+**POST** `/flash-sale/create`
 
 **Body JSON**:
 
@@ -906,7 +906,7 @@ API ini mengelola event promosi, flash sale, dan diskon toko beserta integrasi s
 
 ### 5. **Create Store Discount**
 
-**POST** `/discount/store-discount/create`
+**POST** `/store-discount/create`
 
 **Body JSON**:
 
@@ -940,7 +940,7 @@ API ini mengelola event promosi, flash sale, dan diskon toko beserta integrasi s
 
 ### 6. **Get Event by ID (with discount detail)**
 
-**GET** `/discount/event/:id`
+**GET** `/event/:id`
 
 **Response**:
 
@@ -956,7 +956,7 @@ API ini mengelola event promosi, flash sale, dan diskon toko beserta integrasi s
 
 ### 7. **Get Store Discount by Seller**
 
-**GET** `/discount/store-discount/seller/:seller_id`
+**GET** `/store-discount/seller/:seller_id`
 
 **Response**:
 
@@ -976,7 +976,7 @@ API ini mengelola event promosi, flash sale, dan diskon toko beserta integrasi s
 
 ### 8. **Get Flash Sale by ID**
 
-**GET** `/discount/flash-sale/:id`
+**GET** `/flash-sale/:id`
 
 **Response**:
 
@@ -1008,97 +1008,201 @@ Menjalankan setiap 5 menit untuk:
 * Diskon produk dihitung ulang menggunakan `attachVariantsStockDiscount()` untuk menyesuaikan stok & harga final.
 
 ---
-# Cart API
 
-## Overview
-
-API ini mengelola keranjang belanja (cart) termasuk integrasi harga promo dan penambahan produk. Menggunakan **Supabase** sebagai database dan memanfaatkan cookie `user_info` untuk otentikasi.
+# Cart API Documentation
 
 ---
 
-## Dependencies
+## 1. Get Cart
+**Endpoint**: `GET /cart/cart`
 
-* **Express.js** - Router & handling endpoint
-* **Supabase** - Database
-* **Cookies** - Autentikasi user (cookie `user_info`)
-* **applyDiscountAndVariants** - Utility untuk menghitung diskon aktif
+### Description
+Mengambil semua item yang ada di keranjang pengguna.
 
----
+### Headers
+- **Cookie**: `user_info` (JSON String)
 
-## Endpoint
-
-### 1. **Get Cart dengan Harga Promo**
-
-**GET** `/cart/cart`
-
-**Authentication**: Cookie `user_info`
-
-**Response**:
-
+### Response Example
 ```json
 {
   "message": "✅ Cart ditemukan",
   "cart": [
     {
-      "productId": "uuid",
+      "productId": "c6d4c5b0-6a21-11ee-b962-0242ac120002",
       "name": "Produk A",
-      "variantId": "uuid/null",
-      "variantName": "Ukuran L",
+      "variantId": null,
+      "variantName": null,
       "qty": 2,
       "basePrice": 50000,
-      "finalPrice": 40000,
-      "discountApplied": 20,
+      "finalPrice": 50000,
+      "discountApplied": null,
+      "isDiscounted": false
+    },
+    {
+      "productId": "c6d4c5b0-6a21-11ee-b962-0242ac120003",
+      "name": "Produk B",
+      "variantId": "v1b2c3",
+      "variantName": "Ukuran L",
+      "qty": 1,
+      "basePrice": 60000,
+      "finalPrice": 54000,
+      "discountApplied": 10,
       "isDiscounted": true
     }
   ]
 }
 ```
 
-**Error Responses**:
-
-* `403` jika cookie tidak ada atau invalid
-* `500` error server
-
 ---
 
-### 2. **Add to Cart**
+## 2. Add to Cart
+**Endpoint**: `POST /cart/cart/add`
 
-**POST** `/cart/cart/add`
-
-**Authentication**: Cookie `user_info`
-
-**Body JSON**:
-
+### Request Body
 ```json
 {
-  "productId": "uuid",
-  "variantId": "uuid (optional)",
+  "productId": "idproduct",
+  "variantId": "idvariant", ==>(Optional)
   "qty": 1
 }
 ```
 
-**Response**:
-
+### Response
 ```json
 {
   "message": "✅ Produk ditambahkan ke cart",
   "items": [
     {
-      "productId": "uuid",
-      "variantId": "uuid/null",
+      "productId": "uuid-product",
+      "variantId": "uuid-variant",
       "qty": 2
     }
   ]
 }
 ```
 
-**Error Responses**:
+---
 
-* `400` jika `productId` kosong
-* `403` jika cookie tidak ada atau invalid
-* `500` error server
+## 3. Update Cart
+**Endpoint**: `PUT /cart/cart/update`
+
+### Request Body
+```json
+{
+  "productId": "idproduk",
+  "variantId": "idvariant", ==> (Optional)
+  "qty": 3
+}
+```
+
+### Response
+```json
+{
+  "message": "✅ Cart berhasil diupdate",
+  "items": [
+    {
+      "productId": "uuid-product",
+      "variantId": "uuid-variant",
+      "qty": 3
+    }
+  ]
+}
+```
 
 ---
+
+## 4. Remove Item from Cart
+**Endpoint**: `DELETE /cart/cart/remove/:productId?variantId=...`
+
+### Description
+Menghapus item dalam cart:
+- **Single product** (tanpa variant)
+- **Variant tertentu** dari suatu product
+- **Seluruh variant** dari product yang memiliki variant
+
+### Parameters
+- **Path**: `productId` (UUID)
+- **Query**: `variantId` (UUID atau "null")
+
+### Case A: Hapus Produk Single (tanpa variant)
+**Request**
+```http
+DELETE /cart/cart/remove/idproduct
+```
+**Response**
+```json
+{
+  "message": "✅ Item berhasil dihapus",
+  "items": []
+}
+```
+
+### Case B: Hapus Variant Tertentu
+**Request**
+```http
+DELETE /cart/cart/remove/idproduk?variantId=idvariant
+```
+**Response**
+```json
+{
+  "message": "✅ Item berhasil dihapus",
+  "items": [
+    {
+      "productId": "idproduct",
+      "variantId": "idvariant",
+      "qty": 1
+    }
+  ]
+}
+```
+
+### Case C: Hapus Seluruh Variant Produk
+**Request**
+```http
+DELETE /cart/cart/remove/idproduct
+```
+**Response**
+```json
+{
+  "message": "✅ Item berhasil dihapus",
+  "items": []
+}
+```
+
+---
+
+### Error Responses
+- **403**: Tidak login / cookie tidak valid
+```json
+{
+  "message": "❌ Harus login (cookie tidak valid)"
+}
+```
+- **404**: Cart kosong atau item tidak ditemukan
+```json
+{
+  "message": "❌ Cart kosong"
+}
+```
+- **500**: Server error
+```json
+{
+  "message": "❌ Error server",
+  "error": "detail error"
+}
+```
+
+---
+
+## Notes
+- Semua endpoint **memerlukan login** (cookie `user_info` valid).
+- **variantId**:
+  - Jika produk **tidak punya variant** → hapus langsung dengan `productId`.
+  - Jika ingin menghapus **variant tertentu** → sertakan `?variantId=uuid`.
+  - Jika ingin hapus **semua variant** → jangan sertakan `variantId`.
+
+---
+
 
 ## Notes
 
