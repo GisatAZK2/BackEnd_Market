@@ -6,7 +6,7 @@ const {
 } = require("../utils/applyDiscountAndVariants");
 const router = express.Router();
 
-// === Cek cookie user_info langsung di setiap rute ===
+// === Ambil user dari cookie ===
 function getUserFromCookie(req) {
   if (!req.cookies.user_info) return null;
   try {
@@ -18,10 +18,10 @@ function getUserFromCookie(req) {
   }
 }
 
-// === Get cart with harga promo ===
+// === Get cart ===
 router.get("/cart", async (req, res) => {
   const user = getUserFromCookie(req);
-  if (!user || !user.id) {
+  if (!user?.id) {
     return res
       .status(403)
       .json({ message: "❌ Harus login (cookie tidak valid)" });
@@ -102,7 +102,7 @@ router.get("/cart", async (req, res) => {
 // === Add to cart ===
 router.post("/cart/add", async (req, res) => {
   const user = getUserFromCookie(req);
-  if (!user || !user.id) {
+  if (!user?.id) {
     return res
       .status(403)
       .json({ message: "❌ Harus login (cookie tidak valid)" });
@@ -141,7 +141,7 @@ router.post("/cart/add", async (req, res) => {
       newItems = [{ productId, variantId, qty }];
       await supabase
         .from("carts")
-        .insert([{ user_id: user.id, items: newItems }]);
+        .insert([{ user_id: user.id, items: newItems }]); // <<=== user_id dari cookie
     }
 
     return res.json({
