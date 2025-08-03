@@ -806,7 +806,7 @@ API ini mengelola event promosi, flash sale, dan diskon toko beserta integrasi s
 
 ### 1. **Create Event**
 
-**POST** `/event`
+**POST** `/discount/event`
 
 **Form Data**:
 
@@ -830,7 +830,7 @@ API ini mengelola event promosi, flash sale, dan diskon toko beserta integrasi s
 
 ### 2. **Register Product ke Event**
 
-**POST** `/event/register`
+**POST** `/discount/event/register`
 
 **Body JSON**:
 
@@ -861,7 +861,7 @@ API ini mengelola event promosi, flash sale, dan diskon toko beserta integrasi s
 
 ### 3. **List Event**
 
-**GET** `/event/list`
+**GET** `/discount/event/list`
 
 **Response**:
 
@@ -876,7 +876,7 @@ API ini mengelola event promosi, flash sale, dan diskon toko beserta integrasi s
 
 ### 4. **Create Flash Sale**
 
-**POST** `/flash-sale/create`
+**POST** `/discount/flash-sale/create`
 
 **Body JSON**:
 
@@ -906,7 +906,7 @@ API ini mengelola event promosi, flash sale, dan diskon toko beserta integrasi s
 
 ### 5. **Create Store Discount**
 
-**POST** `/store-discount/create`
+**POST** `/discount/store-discount/create`
 
 **Body JSON**:
 
@@ -940,7 +940,7 @@ API ini mengelola event promosi, flash sale, dan diskon toko beserta integrasi s
 
 ### 6. **Get Event by ID (with discount detail)**
 
-**GET** `/event/:id`
+**GET** `/discount/event/:id`
 
 **Response**:
 
@@ -956,7 +956,7 @@ API ini mengelola event promosi, flash sale, dan diskon toko beserta integrasi s
 
 ### 7. **Get Store Discount by Seller**
 
-**GET** `/store-discount/seller/:seller_id`
+**GET** `/discount/store-discount/seller/:seller_id`
 
 **Response**:
 
@@ -976,7 +976,7 @@ API ini mengelola event promosi, flash sale, dan diskon toko beserta integrasi s
 
 ### 8. **Get Flash Sale by ID**
 
-**GET** `/flash-sale/:id`
+**GET** `/discount/flash-sale/:id`
 
 **Response**:
 
@@ -1029,7 +1029,7 @@ API ini mengelola keranjang belanja (cart) termasuk integrasi harga promo dan pe
 
 ### 1. **Get Cart dengan Harga Promo**
 
-**GET** `/cart`
+**GET** `/cart/cart`
 
 **Authentication**: Cookie `user_info`
 
@@ -1063,7 +1063,7 @@ API ini mengelola keranjang belanja (cart) termasuk integrasi harga promo dan pe
 
 ### 2. **Add to Cart**
 
-**POST** `/cart/add`
+**POST** `/cart/cart/add`
 
 **Authentication**: Cookie `user_info`
 
