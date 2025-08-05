@@ -396,28 +396,46 @@ router.get("/flash-sale/list", async (req, res) => {
   }
 });
 
-/* ===== GET LIST FLASH SALE UNTUK CUSTOMER (PAKAI HELPER DISKON) ===== */
 router.get("/flash-sale-customer/list", async (req, res) => {
   try {
-    const today = new Date();
-    const todayStr = today.toISOString().split("T")[0];
+    const tz =
+      req.query.timezone || req.headers["x-timezone"] || "Asia/Jakarta";
+    const now = DateTime.local().setZone(tz);
+    console.log("[TIMEZONE DEVICE]", tz);
+    console.log("[NOW DEVICE TZ]", now.toISO());
 
-    // Ambil semua flash sale hari ini (active & disabled)
+    // Tentukan rentang waktu hari ini (UTC)
+    const todayStart = now.startOf("day").toUTC().toISO();
+    const todayEnd = now.endOf("day").toUTC().toISO();
+    console.log("[RANGE QUERY UTC]", todayStart, " -> ", todayEnd);
+
+    // Perbaikan query → tangkap semua flash sale yang overlap dengan hari ini
     const { data: flashSales, error } = await supabase
       .from("flash_sales")
       .select("*")
-      .gte("start_time", `${todayStr} 00:00:00`)
-      .lte("end_time", `${todayStr} 23:59:59`)
+      .lte("start_time", todayEnd) // mulai sebelum hari ini berakhir
+      .gte("end_time", todayStart) // berakhir setelah hari ini mulai
       .order("start_time", { ascending: true });
 
+    console.log("[FLASH SALES RAW]", flashSales);
+
     if (error) {
+      console.error("[DB ERROR]", error);
       return res.status(500).json({
         message: "❌ Gagal mengambil daftar flash sale",
         error,
       });
     }
 
-    // Ambil daftar produk yg ikut flash sale
+    if (!flashSales || flashSales.length === 0) {
+      console.warn("[NO FLASH SALE FOUND]");
+      return res.status(404).json({
+        message: "❌ Flash sale tidak ditemukan untuk hari ini",
+        date: now.toFormat("yyyy-LL-dd"),
+      });
+    }
+
+    // Ambil produk yang ikut flash sale
     const { data: flashSaleProducts, error: fspErr } = await supabase
       .from("flash_sale_products")
       .select(
@@ -433,7 +451,10 @@ router.get("/flash-sale-customer/list", async (req, res) => {
         flashSales.map((fs) => fs.id),
       );
 
+    console.log("[FLASH SALE PRODUCTS RAW]", flashSaleProducts);
+
     if (fspErr) {
+      console.error("[FLASH SALE PRODUCTS ERROR]", fspErr);
       return res.status(500).json({
         message: "❌ Gagal mengambil produk flash sale",
         error: fspErr,
@@ -450,6 +471,7 @@ router.get("/flash-sale-customer/list", async (req, res) => {
         flashSaleProductsMap[fsp.flash_sale_id].push(fsp.products);
       }
     }
+    console.log("[FLASH SALE PRODUCT MAP]", flashSaleProductsMap);
 
     // Bagi ke dalam 3 sesi
     const sessions = {
@@ -458,11 +480,9 @@ router.get("/flash-sale-customer/list", async (req, res) => {
       evening: { label: "18:00 - 00:00", flash_sales: [] },
     };
 
-    const now = new Date();
-
     for (const fs of flashSales) {
-      const start = new Date(fs.start_time);
-      const end = new Date(fs.end_time);
+      const start = DateTime.fromISO(fs.start_time).setZone(tz);
+      const end = DateTime.fromISO(fs.end_time).setZone(tz);
 
       // Tentukan status display
       let status = fs.status;
@@ -483,12 +503,14 @@ router.get("/flash-sale-customer/list", async (req, res) => {
 
       const flashSaleWithProducts = {
         ...fs,
+        start_time: start.toISO(),
+        end_time: end.toISO(),
         display_status: status,
         products: productsWithDiscount,
       };
 
-      // Masukkan ke sesi
-      const startHour = start.getHours();
+      // Masukkan ke sesi berdasarkan jam mulai di timezone user
+      const startHour = start.hour;
       if (startHour >= 0 && startHour < 12) {
         sessions.morning.flash_sales.push(flashSaleWithProducts);
       } else if (startHour >= 12 && startHour < 18) {
@@ -499,21 +521,25 @@ router.get("/flash-sale-customer/list", async (req, res) => {
     }
 
     // Tentukan sesi aktif sekarang
-    const currentHour = now.getHours();
+    const currentHour = now.hour;
     let currentSession = null;
     if (currentHour >= 0 && currentHour < 12) currentSession = "morning";
     else if (currentHour >= 12 && currentHour < 18)
       currentSession = "afternoon";
     else if (currentHour >= 18 && currentHour <= 23) currentSession = "evening";
 
+    console.log("[SESSION SUMMARY]", sessions);
+    console.log("[CURRENT SESSION]", currentSession);
+
     return res.json({
-      message: `✅ Flash sale untuk ${todayStr} ditemukan`,
-      date: todayStr,
+      message: `✅ Flash sale untuk ${now.toFormat("yyyy-LL-dd")} ditemukan`,
+      date: now.toFormat("yyyy-LL-dd"),
+      timezone: tz,
       current_session: currentSession,
       sessions,
     });
   } catch (err) {
-    console.error(err);
+    console.error("[SERVER ERROR]", err);
     return res.status(500).json({
       message: "❌ Terjadi kesalahan server",
       error: err.message,
