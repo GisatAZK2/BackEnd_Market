@@ -79,7 +79,6 @@ router.post("/event/register", async (req, res) => {
 
   for (const p of products) {
     if (p.variant_id) {
-      // --- Kurangi stok variant ---
       const { data: variant } = await supabase
         .from("product_variants")
         .select("*")
@@ -101,7 +100,6 @@ router.post("/event/register", async (req, res) => {
         event_stock: p.event_stock,
       });
     } else {
-      // --- Kurangi stok produk utama ---
       const { data: product } = await supabase
         .from("products")
         .select("*")
@@ -153,110 +151,90 @@ router.get("/event/list", async (req, res) => {
   }
 });
 
-/* ===== FLASH SALE CREATE ===== */
-router.post("/flash-sale/create", async (req, res) => {
-  const {
-    product_id,
-    variant_id, // optional
-    discount_percentage,
-    flash_stock,
-    start_time,
-    end_time,
-    timezone,
-  } = req.body;
-
+/* ===== SELLER REGISTER PRODUK KE FLASH SALE ===== */
+router.post("/flash-sale/register", async (req, res) => {
+  const { seller_id, flash_sale_id, products } = req.body;
   if (
-    !product_id ||
-    !discount_percentage ||
-    !flash_stock ||
-    !start_time ||
-    !end_time
+    !seller_id ||
+    !flash_sale_id ||
+    !Array.isArray(products) ||
+    !products.length
   ) {
-    return res.status(400).json({ message: "❌ Semua field wajib diisi" });
+    return res
+      .status(400)
+      .json({ message: "❌ seller_id, flash_sale_id & products wajib" });
   }
 
-  const tz = timezone || "Asia/Jakarta";
-  const startUTC = DateTime.fromISO(start_time, { zone: tz }).toUTC().toISO();
-  const endUTC = DateTime.fromISO(end_time, { zone: tz }).toUTC().toISO();
-
-  // ambil produk
-  const { data: product, error: productError } = await supabase
-    .from("products")
-    .select("*")
-    .eq("id", product_id)
-    .single();
-
-  if (productError || !product) {
-    return res.status(404).json({ message: "❌ Produk tidak ditemukan" });
-  }
-
-  // jika ada variant_id, cek varian
-  if (variant_id) {
-    const { data: variant, error: variantError } = await supabase
-      .from("product_variants")
-      .select("*")
-      .eq("id", variant_id)
-      .eq("product_id", product_id)
-      .single();
-
-    if (variantError || !variant) {
-      return res.status(404).json({ message: "❌ Varian tidak ditemukan" });
-    }
-
-    // update stok khusus varian
-    await supabase
-      .from("product_variants")
-      .update({ variant_stock: (variant.variant_stock || 0) - flash_stock })
-      .eq("id", variant_id);
-  } else {
-    // update stok produk langsung
-    await supabase
-      .from("products")
-      .update({ stock: (product.stock || 0) - flash_stock })
-      .eq("id", product_id);
-  }
-
-  const { data, error } = await supabase
+  // Pastikan flash sale ada
+  const { data: flashSale } = await supabase
     .from("flash_sales")
-    .insert([
-      {
-        product_id,
-        variant_id: variant_id || null,
-        discount_percentage,
-        flash_stock,
-        start_time: startUTC,
-        end_time: endUTC,
-      },
-    ])
-    .select()
+    .select("*")
+    .eq("id", flash_sale_id)
     .single();
+  if (!flashSale)
+    return res.status(404).json({ message: "❌ Flash sale tidak ditemukan" });
 
+  const rows = [];
+
+  for (const p of products) {
+    if (p.variant_id) {
+      const { data: variant } = await supabase
+        .from("product_variants")
+        .select("*")
+        .eq("id", p.variant_id)
+        .single();
+      if (!variant) continue;
+
+      await supabase
+        .from("product_variants")
+        .update({ variant_stock: (variant.variant_stock || 0) - p.flash_stock })
+        .eq("id", p.variant_id);
+
+      rows.push({
+        seller_id,
+        flash_sale_id,
+        product_id: p.product_id,
+        variant_id: p.variant_id,
+        flash_stock: p.flash_stock,
+        discount_percentage: flashSale.discount_percentage,
+      });
+    } else {
+      const { data: product } = await supabase
+        .from("products")
+        .select("*")
+        .eq("id", p.product_id)
+        .single();
+      if (!product) continue;
+
+      await supabase
+        .from("products")
+        .update({ stock: (product.stock || 0) - p.flash_stock })
+        .eq("id", p.product_id);
+
+      rows.push({
+        seller_id,
+        flash_sale_id,
+        product_id: p.product_id,
+        variant_id: null,
+        flash_stock: p.flash_stock,
+        discount_percentage: flashSale.discount_percentage,
+      });
+    }
+  }
+
+  const { error } = await supabase.from("flash_sale_products").insert(rows);
   if (error) {
     return res
       .status(500)
-      .json({ message: "❌ Gagal simpan flash sale", error });
+      .json({ message: "❌ Gagal daftar produk ke flash sale", error });
   }
 
-  // refresh detail produk setelah diskon
-  const productsWithDiscount = await attachVariantsStockDiscount([product]);
-
-  res.json({
-    message: "✅ Flash sale berhasil ditambahkan",
-    data,
-    product: productsWithDiscount[0],
-  });
+  res.json({ message: "✅ Produk berhasil didaftarkan ke flash sale" });
 });
 
 /* ===== STORE DISCOUNT CREATE ===== */
 router.post("/store-discount/create", async (req, res) => {
-  const {
-    store_id,
-    name, // Nama diskon
-    start_time,
-    end_time,
-    timezone,
-    items, // [{ product_id, variant_id?, stock, discount_percentage }]
-  } = req.body;
+  const { store_id, name, start_time, end_time, timezone, items } = req.body;
 
   if (!store_id || !name || !items?.length || !start_time || !end_time) {
     return res.status(400).json({
@@ -269,17 +247,9 @@ router.post("/store-discount/create", async (req, res) => {
   const endUTC = DateTime.fromISO(end_time, { zone: tz }).toUTC().toISO();
 
   try {
-    // === 1. Simpan data utama diskon (tanpa persentase global)
     const { data: storeDiscount, error: sdErr } = await supabase
       .from("store_discounts")
-      .insert([
-        {
-          store_id,
-          name,
-          start_time: startUTC,
-          end_time: endUTC,
-        },
-      ])
+      .insert([{ store_id, name, start_time: startUTC, end_time: endUTC }])
       .select()
       .single();
 
@@ -290,9 +260,7 @@ router.post("/store-discount/create", async (req, res) => {
       });
     }
 
-    // === 2. Simpan setiap item target diskon
     for (const item of items) {
-      // Kurangi stok produk/varian
       if (item.variant_id) {
         const { data: variant } = await supabase
           .from("product_variants")
@@ -328,22 +296,15 @@ router.post("/store-discount/create", async (req, res) => {
         }
       }
 
-      // Simpan detail item diskon
-      const { error: sdiErr } = await supabase
-        .from("store_discount_items")
-        .insert([
-          {
-            discount_id: storeDiscount.id,
-            product_id: item.product_id,
-            variant_id: item.variant_id || null,
-            stock: item.stock,
-            discount_percentage: item.discount_percentage,
-          },
-        ]);
-
-      if (sdiErr) {
-        console.error("Gagal simpan item diskon:", sdiErr.message);
-      }
+      await supabase.from("store_discount_items").insert([
+        {
+          discount_id: storeDiscount.id,
+          product_id: item.product_id,
+          variant_id: item.variant_id || null,
+          stock: item.stock,
+          discount_percentage: item.discount_percentage,
+        },
+      ]);
     }
 
     return res.json({
@@ -359,121 +320,144 @@ router.post("/store-discount/create", async (req, res) => {
   }
 });
 
-/* ===== CRON RESET STOK SETELAH BERAKHIR ===== */
-cron.schedule("*/5 * * * *", async () => {
+/* ===== CRON RESET STOK & NONAKTIFKAN FLASH SALE YANG HABIS ===== */
+cron.schedule("0 * * * *", async () => {
   const now = DateTime.utc().toISO();
 
-  // Event selesai
-  const { data: expiredEvents } = await supabase
-    .from("events")
-    .select("*")
-    .lt("end_time", now);
-  for (const ev of expiredEvents || []) {
-    const { data: ep } = await supabase
-      .from("event_products")
-      .select("*")
-      .eq("event_id", ev.id);
-    for (const p of ep || []) {
-      if (p.variant_id) {
-        const { data: variant } = await supabase
-          .from("product_variants")
-          .select("*")
-          .eq("id", p.variant_id)
-          .single();
-        if (variant) {
-          await supabase
-            .from("product_variants")
-            .update({
-              variant_stock: (variant.variant_stock || 0) + p.event_stock,
-            })
-            .eq("id", p.variant_id);
-        }
-      } else {
-        const { data: product } = await supabase
-          .from("products")
-          .select("*")
-          .eq("id", p.product_id)
-          .single();
-        if (product) {
-          await supabase
-            .from("products")
-            .update({ stock: (product.stock || 0) + p.event_stock })
-            .eq("id", p.product_id);
-        }
-      }
-    }
-    await supabase.from("event_products").delete().eq("event_id", ev.id);
-  }
-
-  // Flash sale selesai
-  const { data: expiredFS } = await supabase
+  // Ambil semua flash sale yang sudah berakhir tapi status masih active
+  const { data: expired, error } = await supabase
     .from("flash_sales")
-    .select("*")
-    .lt("end_time", now);
-  for (const fs of expiredFS || []) {
-    const { data: product } = await supabase
-      .from("products")
-      .select("*")
-      .eq("id", fs.product_id)
-      .single();
-    if (product) {
-      await supabase
-        .from("products")
-        .update({ stock: (product.stock || 0) + fs.flash_stock })
-        .eq("id", fs.product_id);
-    }
-    await supabase.from("flash_sales").delete().eq("id", fs.id);
+    .select("id, product_id, variant_id, flash_stock, discount_percentage")
+    .lt("end_time", now)
+    .eq("status", "active");
+
+  if (error) {
+    console.error("❌ Gagal ambil flash sale expired:", error);
+    return;
   }
+  if (!expired || expired.length === 0) return;
 
-  // Store discount selesai
-  const { data: expiredStoreDiscounts } = await supabase
-    .from("store_discounts")
-    .select("*")
-    .lt("end_time", now);
-  for (const sd of expiredStoreDiscounts || []) {
-    const { data: sdProducts } = await supabase
-      .from("store_discount_products")
-      .select("*")
-      .eq("store_discount_id", sd.id);
+  for (const sale of expired) {
+    // Reset stok & kembalikan harga normal
+    if (sale.variant_id) {
+      // Jika varian
+      const { data: variant } = await supabase
+        .from("product_variants")
+        .select("variant_stock, variant_price")
+        .eq("id", sale.variant_id)
+        .single();
 
-    for (const sp of sdProducts || []) {
-      if (sp.variant_id) {
-        const { data: variant } = await supabase
+      if (variant) {
+        // Kembalikan stok flash sale ke varian
+        await supabase
           .from("product_variants")
-          .select("*")
-          .eq("id", sp.variant_id)
-          .single();
-        if (variant) {
-          await supabase
-            .from("product_variants")
-            .update({ variant_stock: (variant.variant_stock || 0) + sp.stock })
-            .eq("id", sp.variant_id);
-        }
-      } else {
-        const { data: product } = await supabase
+          .update({
+            variant_stock: (variant.variant_stock || 0) + sale.flash_stock,
+            variant_price:
+              variant.variant_price / (1 - sale.discount_percentage / 100), // harga normal
+          })
+          .eq("id", sale.variant_id);
+      }
+    } else {
+      // Produk tanpa varian
+      const { data: product } = await supabase
+        .from("products")
+        .select("stock, price")
+        .eq("id", sale.product_id)
+        .single();
+
+      if (product) {
+        await supabase
           .from("products")
-          .select("*")
-          .eq("id", sp.product_id)
-          .single();
-        if (product) {
-          await supabase
-            .from("products")
-            .update({ stock: (product.stock || 0) + sp.stock })
-            .eq("id", sp.product_id);
-        }
+          .update({
+            stock: (product.stock || 0) + sale.flash_stock,
+            price: product.price / (1 - sale.discount_percentage / 100), // harga normal
+          })
+          .eq("id", sale.product_id);
       }
     }
+  }
+
+  // Update semua flash sale yang habis jadi disabled
+  const ids = expired.map((e) => e.id);
+  await supabase
+    .from("flash_sales")
+    .update({ status: "disabled" })
+    .in("id", ids);
+
+  console.log(`🔄 Reset stok & nonaktifkan ${expired.length} flash sale`);
+});
+
+/* ===== GENERATE FLASH SALE SESSION TIAP HARI ===== */
+async function generateSessionsForToday() {
+  const today = DateTime.now().setZone("Asia/Jakarta");
+  const isSpecialDate = today.day === today.month;
+
+  const sessions = isSpecialDate
+    ? [
+        { start: "00:00", end: "04:00" },
+        { start: "04:00", end: "08:00" },
+        { start: "08:00", end: "12:00" },
+        { start: "12:00", end: "16:00" },
+        { start: "16:00", end: "20:00" },
+        { start: "20:00", end: "00:00" },
+      ]
+    : [
+        { start: "00:00", end: "12:00" },
+        { start: "12:00", end: "18:00" },
+        { start: "18:00", end: "00:00" },
+      ];
+
+  for (const s of sessions) {
+    const startTime = today.set({
+      hour: parseInt(s.start.split(":")[0]),
+      minute: parseInt(s.start.split(":")[1]),
+    });
+    let endTime = today.set({
+      hour: parseInt(s.end.split(":")[0]),
+      minute: parseInt(s.end.split(":")[1]),
+    });
+    if (s.end === "00:00") endTime = endTime.plus({ days: 1 });
+
+    await supabase.from("flash_sales").insert([
+      {
+        product_id: 123,
+        discount_percentage: 20,
+        flash_stock: 50,
+        start_time: startTime.toUTC().toISO(),
+        end_time: endTime.toUTC().toISO(),
+        status: "active",
+      },
+    ]);
+  }
+}
+
+/* ===== CRON GENERATE SESSION BARU ===== */
+cron.schedule("0 * * * *", async () => {
+  const now = DateTime.utc().toISO();
+  const { data: expired } = await supabase
+    .from("flash_sales")
+    .select("id, product_id")
+    .lt("end_time", now)
+    .eq("status", "active");
+
+  if (expired.length) {
+    const ids = expired.map((e) => e.id);
     await supabase
-      .from("store_discount_products")
-      .delete()
-      .eq("store_discount_id", sd.id);
-    await supabase.from("store_discounts").delete().eq("id", sd.id);
+      .from("flash_sales")
+      .update({ status: "disabled" })
+      .in("id", ids);
+
+    for (const e of expired) {
+      await supabase.from("products").delete().eq("id", e.product_id);
+    }
+
+    await generateSessionsForToday();
+    console.log("Flash sale expired → generate ulang sesi baru");
   }
 });
 
-/* ===== EVENT GET BY ID (with discount detail) ===== */
-
-/* ===== EVENT GET BY ID (with discount detail) ===== */
+/* ===== EVENT GET BY ID ===== */
 router.get("/event/:id", async (req, res) => {
   const { id } = req.params;
   try {
@@ -508,7 +492,7 @@ router.get("/event/:id", async (req, res) => {
   }
 });
 
-/* ===== STORE DISCOUNT BY SELLER (with discount detail) ===== */
+/* ===== STORE DISCOUNT BY SELLER ===== */
 router.get("/store-discount/seller/:seller_id", async (req, res) => {
   const { seller_id } = req.params;
   try {
@@ -544,7 +528,7 @@ router.get("/store-discount/seller/:seller_id", async (req, res) => {
   }
 });
 
-/* ===== FLASH SALE GET BY ID (with discount detail) ===== */
+/* ===== FLASH SALE GET BY ID ===== */
 router.get("/flash-sale/:id", async (req, res) => {
   const { id } = req.params;
   try {

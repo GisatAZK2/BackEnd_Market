@@ -5,9 +5,6 @@ function applyDiscount(price, discountPercentage) {
   return Math.round(price * (1 - discountPercentage / 100));
 }
 
-/**
- * Ambil diskon aktif + detail event / flash sale / diskon toko spesifik item
- */
 async function getActiveDiscountForProduct(
   productId,
   storeId,
@@ -23,7 +20,6 @@ async function getActiveDiscountForProduct(
     .from("event_products")
     .select("event_discount,event_id,event_stock,variant_id")
     .eq("product_id", productId);
-
   if (epErr) console.error("EventProducts error:", epErr);
 
   for (const ep of eventProducts) {
@@ -32,7 +28,6 @@ async function getActiveDiscountForProduct(
       .select("id,title,start_time,end_time")
       .eq("id", ep.event_id)
       .single();
-
     if (eErr) console.error("Event error:", eErr);
 
     if (event) {
@@ -46,39 +41,53 @@ async function getActiveDiscountForProduct(
     }
   }
 
-  // === FLASH SALE ===
-  const { data: flashSales = [], error: fsErr } = await supabase
-    .from("flash_sales")
-    .select("id,discount_percentage,start_time,end_time,flash_stock")
+  // === FLASH SALE PRODUCTS ===
+  const { data: flashSaleProducts = [], error: fspErr } = await supabase
+    .from("flash_sale_products")
+    .select("flash_sale_id,discount_percentage,flash_stock,variant_id")
     .eq("product_id", productId);
+  if (fspErr) console.error("FlashSaleProducts error:", fspErr);
 
-  if (fsErr) console.error("FlashSales error:", fsErr);
+  for (const fsp of flashSaleProducts) {
+    if (variantId && fsp.variant_id && fsp.variant_id !== variantId) continue;
 
-  for (const fs of flashSales) {
-    const start = DateTime.fromISO(fs.start_time).toUTC();
-    const end = DateTime.fromISO(fs.end_time).toUTC();
-    if (start <= now && end >= now) {
-      discountPercentage = Math.max(discountPercentage, fs.discount_percentage);
-      if (!sources.includes("flash_sale")) sources.push("flash_sale");
-      details.flash_sales.push(fs);
+    const { data: flashSale, error: fsErr } = await supabase
+      .from("flash_sales")
+      .select("id,start_time,end_time")
+      .eq("id", fsp.flash_sale_id)
+      .single();
+    if (fsErr) console.error("FlashSales error:", fsErr);
+
+    if (flashSale) {
+      const start = DateTime.fromISO(flashSale.start_time).toUTC();
+      const end = DateTime.fromISO(flashSale.end_time).toUTC();
+      if (start <= now && end >= now) {
+        discountPercentage = Math.max(
+          discountPercentage,
+          fsp.discount_percentage,
+        );
+        if (!sources.includes("flash_sale")) sources.push("flash_sale");
+        details.flash_sales.push({
+          ...flashSale,
+          discount: fsp.discount_percentage,
+        });
+      }
     }
   }
 
-  // === STORE DISCOUNT (spesifik item) ===
+  // === STORE DISCOUNT ===
   const { data: storeDiscountItems = [], error: sdiErr } = await supabase
     .from("store_discount_items")
     .select(
       `
-        product_id,
-        variant_id,
-        discount_percentage,
-        store_discounts!inner(id,name,start_time,end_time)
-      `,
+      product_id,
+      variant_id,
+      discount_percentage,
+      store_discounts!inner(id,name,start_time,end_time)
+    `,
     )
     .eq("product_id", productId);
-
   if (sdiErr) console.error("StoreDiscountItems error:", sdiErr);
-  console.log("DEBUG storeDiscountItems:", storeDiscountItems);
 
   const matched =
     (variantId && storeDiscountItems.find((i) => i.variant_id === variantId)) ||
@@ -106,35 +115,34 @@ async function getActiveDiscountForProduct(
   return { discountPercentage, sources, details };
 }
 
-/**
- * Attach variants, stok promo, & diskon ke produk (event, flash sale, store item discount)
- */
 async function attachVariantsStockDiscount(products) {
   if (!products.length) return [];
 
   const productIds = products.map((p) => p.id);
   const now = DateTime.utc();
 
-  const { data: eventProducts = [], error: epErr } = await supabase
-    .from("event_products")
-    .select("product_id,variant_id,event_discount,event_stock,event_id")
+  const { data: flashSaleProducts = [], error: fspErr } = await supabase
+    .from("flash_sale_products")
+    .select(
+      "flash_sale_id,product_id,variant_id,discount_percentage,flash_stock",
+    )
     .in("product_id", productIds);
-  if (epErr) console.error("EventProducts error:", epErr);
+  if (fspErr) console.error("FlashSaleProducts error:", fspErr);
 
-  const { data: events = [], error: eErr } = await supabase
-    .from("events")
-    .select("id,title,start_time,end_time")
-    .lte("start_time", now.toISO())
-    .gte("end_time", now.toISO());
-  if (eErr) console.error("Events error:", eErr);
-
+  const flashSaleIds = flashSaleProducts.map((f) => f.flash_sale_id);
   const { data: flashSales = [], error: fsErr } = await supabase
     .from("flash_sales")
-    .select("*")
-    .in("product_id", productIds)
-    .lte("start_time", now.toISO())
-    .gte("end_time", now.toISO());
+    .select("id,start_time,end_time")
+    .in("id", flashSaleIds);
   if (fsErr) console.error("FlashSales error:", fsErr);
+
+  const activeFlashSaleProducts = flashSaleProducts.filter((fsp) => {
+    const fs = flashSales.find((f) => f.id === fsp.flash_sale_id);
+    if (!fs) return false;
+    const start = DateTime.fromISO(fs.start_time).toUTC();
+    const end = DateTime.fromISO(fs.end_time).toUTC();
+    return start <= now && end >= now;
+  });
 
   const { data: variants = [], error: vErr } = await supabase
     .from("product_variants")
@@ -142,40 +150,30 @@ async function attachVariantsStockDiscount(products) {
     .in("product_id", productIds);
   if (vErr) console.error("Variants error:", vErr);
 
+  // === Diskon toko (sama seperti sebelumnya) ===
   const { data: storeDiscountItems = [], error: sdiErr } = await supabase
     .from("store_discount_items")
     .select(
       `
-        product_id,
-        variant_id,
-        discount_percentage,
-        store_discounts!inner(id,name,start_time,end_time)
-      `,
+      product_id,
+      variant_id,
+      discount_percentage,
+      store_discounts!inner(id,name,start_time,end_time)
+    `,
     )
     .in("product_id", productIds);
   if (sdiErr) console.error("StoreDiscountItems error:", sdiErr);
-  console.log("DEBUG storeDiscountItems (bulk):", storeDiscountItems);
 
   return products.map((product) => {
-    const eventList = eventProducts.filter(
-      (ep) => ep.product_id === product.id,
+    const productVariants = variants.filter((v) => v.product_id === product.id);
+    const flashForProduct = activeFlashSaleProducts.filter(
+      (fsp) => fsp.product_id === product.id,
     );
-    const activeEventList = eventList
-      .map((ep) => ({
-        ...ep,
-        eventData: events.find((e) => e.id === ep.event_id),
-      }))
-      .filter((ep) => ep.eventData);
-    const hasEventForThisProduct = activeEventList.length > 0;
+    const flashSaleDiscount =
+      flashForProduct.length > 0
+        ? Math.max(...flashForProduct.map((fsp) => fsp.discount_percentage))
+        : 0;
 
-    const flashSaleList = flashSales.filter(
-      (fs) => fs.product_id === product.id,
-    );
-    const flashSaleDiscount = flashSaleList.length
-      ? Math.max(...flashSaleList.map((fs) => fs.discount_percentage))
-      : 0;
-
-    // Diskon toko spesifik produk
     const storeDiscountForProduct = storeDiscountItems.find(
       (i) =>
         i.product_id === product.id &&
@@ -183,42 +181,29 @@ async function attachVariantsStockDiscount(products) {
     );
     const storeDiscountProductPercentage =
       storeDiscountForProduct &&
-      // Hilangkan pengecekan start_time supaya preview diskon aktif
       DateTime.fromISO(
         storeDiscountForProduct.store_discounts.end_time,
       ).toUTC() >= now
         ? storeDiscountForProduct.discount_percentage
         : 0;
 
-    const eventStock = hasEventForThisProduct
-      ? Math.max(...activeEventList.map((ep) => ep.event_stock))
-      : null;
-    const flashSaleStock = flashSaleList.length
-      ? flashSaleList[0].flash_stock
-      : null;
-    const finalStock = flashSaleStock ?? eventStock ?? product.stock ?? 0;
-
-    const productVariants = variants.filter((v) => v.product_id === product.id);
+    const finalStock =
+      flashForProduct.length > 0
+        ? Math.max(...flashForProduct.map((fsp) => fsp.flash_stock))
+        : product.stock;
 
     // === Produk tanpa varian ===
     if (productVariants.length === 0) {
-      let discountPercentage = 0;
-      let discountSource = null;
-
-      if (hasEventForThisProduct) {
-        discountPercentage = Math.max(
-          ...activeEventList.map((ep) => ep.event_discount),
-        );
-        discountSource =
-          activeEventList.find((ep) => ep.event_discount === discountPercentage)
-            ?.eventData?.title || "event";
-      } else if (flashSaleDiscount > storeDiscountProductPercentage) {
-        discountPercentage = flashSaleDiscount;
-        discountSource = "flash_sale";
-      } else if (storeDiscountProductPercentage > 0) {
-        discountPercentage = storeDiscountProductPercentage;
-        discountSource = "store_discount";
-      }
+      const discountPercentage = Math.max(
+        flashSaleDiscount,
+        storeDiscountProductPercentage,
+      );
+      const discountSource =
+        flashSaleDiscount > storeDiscountProductPercentage
+          ? "flash_sale"
+          : storeDiscountProductPercentage > 0
+            ? "store_discount"
+            : null;
 
       return {
         ...product,
@@ -232,11 +217,11 @@ async function attachVariantsStockDiscount(products) {
 
     // === Produk dengan varian ===
     const variantsWithDiscount = productVariants.map((v) => {
-      const eventForThisVariant = activeEventList.find(
-        (ep) =>
-          ep.variant_id === v.id ||
-          (!ep.variant_id && ep.product_id === v.product_id),
+      const flashVariant = flashForProduct.find(
+        (fsp) => fsp.variant_id === v.id,
       );
+      const flashVariantDiscount =
+        flashVariant?.discount_percentage || flashSaleDiscount;
 
       const storeDiscountForVariant = storeDiscountItems.find(
         (i) => i.variant_id === v.id,
@@ -244,29 +229,21 @@ async function attachVariantsStockDiscount(products) {
       const storeDiscountVariantPercentage =
         storeDiscountForVariant &&
         DateTime.fromISO(
-          storeDiscountForVariant.store_discounts.start_time,
-        ).toUTC() <= now &&
-        DateTime.fromISO(
           storeDiscountForVariant.store_discounts.end_time,
         ).toUTC() >= now
           ? storeDiscountForVariant.discount_percentage
           : storeDiscountProductPercentage;
 
-      let discountPercentage = 0;
-      let discountSource = null;
-
-      if (eventForThisVariant) {
-        discountPercentage = eventForThisVariant.event_discount;
-        discountSource = eventForThisVariant.eventData?.title || "event";
-      } else if (!hasEventForThisProduct) {
-        if (flashSaleDiscount > storeDiscountVariantPercentage) {
-          discountPercentage = flashSaleDiscount;
-          discountSource = "flash_sale";
-        } else if (storeDiscountVariantPercentage > 0) {
-          discountPercentage = storeDiscountVariantPercentage;
-          discountSource = "store_discount";
-        }
-      }
+      const discountPercentage = Math.max(
+        flashVariantDiscount,
+        storeDiscountVariantPercentage,
+      );
+      const discountSource =
+        flashVariantDiscount > storeDiscountVariantPercentage
+          ? "flash_sale"
+          : storeDiscountVariantPercentage > 0
+            ? "store_discount"
+            : null;
 
       return {
         ...v,
@@ -280,23 +257,22 @@ async function attachVariantsStockDiscount(products) {
     const finalPrice = Math.min(
       ...variantsWithDiscount.map((v) => v.final_price),
     );
-    const productDiscountSource = hasEventForThisProduct
-      ? activeEventList[0].eventData?.title || "event"
-      : flashSaleDiscount > storeDiscountProductPercentage
-        ? "flash_sale"
-        : storeDiscountProductPercentage > 0
-          ? "store_discount"
-          : null;
 
     return {
       ...product,
       variants: variantsWithDiscount,
       finalStock,
       finalPrice,
-      discountPercentage: hasEventForThisProduct
-        ? 0
-        : Math.max(storeDiscountProductPercentage, flashSaleDiscount),
-      discountSource: productDiscountSource,
+      discountPercentage: Math.max(
+        storeDiscountProductPercentage,
+        flashSaleDiscount,
+      ),
+      discountSource:
+        flashSaleDiscount > storeDiscountProductPercentage
+          ? "flash_sale"
+          : storeDiscountProductPercentage > 0
+            ? "store_discount"
+            : null,
     };
   });
 }
