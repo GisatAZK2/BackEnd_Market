@@ -17,10 +17,12 @@ const cookieParser = require("cookie-parser");
 const apicache = require("apicache");
 const path = require("path");
 const startCronJobs = require("./utils/restoreStock");
+const flashsalecron = require("./utils/cron");
 require("dotenv").config();
 
 const app = express();
 startCronJobs();
+flashsalecron();
 
 // === CORS ORIGINS ===
 const allowedOrigins = process.env.CORS_ORIGIN
