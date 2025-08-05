@@ -371,6 +371,78 @@ router.get("/:id", async (req, res) => {
   }
 });
 
+// == Ambil Produk Berdasarkan Sugesti Produk name
+router.get("/:id/suggestions", async (req, res) => {
+  const { id } = req.params;
+  try {
+    // Ambil produk utama
+    const { data: product } = await supabase
+      .from("products")
+      .select("*")
+      .eq("id", id)
+      .single();
+
+    if (!product) {
+      return res.status(404).json({ message: "❌ Produk tidak ditemukan" });
+    }
+
+    // ✅ ambil field nama sesuai database
+    const productName = product.product_name;
+
+    if (!productName) {
+      return res.status(400).json({
+        message:
+          "❌ Produk tidak punya field product_name untuk pencarian terkait",
+      });
+    }
+
+    // Pisahkan nama jadi kata-kata unik (abaikan yg terlalu pendek)
+    const keywords = productName.split(" ").filter((w) => w.length > 2);
+
+    if (!keywords.length) {
+      return res.status(200).json({
+        message: "✅ Tidak ada keyword relevan untuk produk terkait",
+        base_product: { id: product.id, name: productName },
+        suggestions: [],
+      });
+    }
+
+    // Buat filter OR (contoh: product_name.ilike.%Wafer%,product_name.ilike.%Tango%)
+    const orFilter = keywords
+      .map((kw) => `product_name.ilike.%${kw}%`)
+      .join(",");
+
+    const { data: relatedProducts, error } = await supabase
+      .from("products")
+      .select("*")
+      .or(orFilter)
+      .neq("id", id)
+      .limit(10);
+
+    if (error) {
+      return res.status(500).json({
+        message: "❌ Gagal mengambil produk terkait",
+        error: error.message,
+      });
+    }
+
+    const productsWithVariants = relatedProducts?.length
+      ? await attachVariantsStockDiscountWithRealDiscount(relatedProducts)
+      : [];
+
+    return res.status(200).json({
+      message: `✅ ${productsWithVariants.length} produk terkait ditemukan`,
+      base_product: { id: product.id, name: productName },
+      suggestions: productsWithVariants,
+    });
+  } catch (error) {
+    return res.status(500).json({
+      message: "❌ Gagal mengambil produk terkait",
+      error: error.message,
+    });
+  }
+});
+
 // === ROUTE UPDATE PRODUK ===
 // === ROUTE UPDATE PRODUK (Konversi semua gambar ke WebP) ===
 router.put("/:id", uploadForEdit, async (req, res) => {
