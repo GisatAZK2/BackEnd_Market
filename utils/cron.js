@@ -7,7 +7,6 @@ cron.schedule("0 * * * *", async () => {
   console.log("[CRON] Reset stok & nonaktifkan sesi habis...");
   const now = DateTime.utc().toISO();
 
-  // Ambil sesi flash sale yang sudah habis
   const { data: expiredSessions, error: expiredErr } = await supabase
     .from("flash_sales")
     .select("id")
@@ -22,7 +21,6 @@ cron.schedule("0 * * * *", async () => {
 
   const expiredIds = expiredSessions.map((s) => s.id);
 
-  // Ambil semua produk yang ikut sesi
   const { data: saleProducts } = await supabase
     .from("flash_sale_products")
     .select("product_id,variant_id,flash_stock,discount_percentage")
@@ -64,7 +62,6 @@ cron.schedule("0 * * * *", async () => {
     }
   }
 
-  // Update status sesi ke disabled
   await supabase
     .from("flash_sales")
     .update({ status: "disabled" })
@@ -78,7 +75,6 @@ cron.schedule("0 * * * *", async () => {
 /* ===== GENERATE FLASH SALE SESSION HARIAN ===== */
 async function generateSessionsForDay(targetDay) {
   const isSpecialDate = targetDay.day === targetDay.month;
-
   const sessions = isSpecialDate
     ? [
         { start: "00:00", end: "04:00" },
@@ -105,11 +101,11 @@ async function generateSessionsForDay(targetDay) {
     });
     if (s.end === "00:00") endTime = endTime.plus({ days: 1 });
 
-    // Buat sesi baru
     const { data: newSession, error } = await supabase
       .from("flash_sales")
       .insert([
         {
+          name: `Flash Sale ${startTime.toFormat("dd LLL yyyy HH:mm")}`,
           start_time: startTime.toUTC().toISO(),
           end_time: endTime.toUTC().toISO(),
           status: "active",
@@ -122,11 +118,11 @@ async function generateSessionsForDay(targetDay) {
       continue;
     }
 
-    // Produk default (ubah sesuai kebutuhan)
+    // Sesuaikan product_id dengan yang ada
     await supabase.from("flash_sale_products").insert([
       {
         flash_sale_id: newSession.id,
-        product_id: 123, // ganti dengan produk yang ada
+        product_id: 1, // ganti dengan produk valid
         discount_percentage: 20,
         flash_stock: 50,
       },
@@ -156,6 +152,10 @@ cron.schedule("0 0 * * *", async () => {
   }
 });
 
-module.exports = {
-  generateSessionsForDay,
-};
+/* ===== AUTO GENERATE SAAT PERTAMA START ===== */
+(async () => {
+  console.log("[INIT] Generate sesi awal hari ini...");
+  await generateSessionsForDay(DateTime.now().setZone("Asia/Jakarta"));
+})();
+
+module.exports = { generateSessionsForDay };

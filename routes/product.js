@@ -9,6 +9,7 @@ const {
   applyDiscount,
   getActiveDiscountForProduct,
   attachVariantsStockDiscount,
+  attachVariantsStockDiscountWithRealDiscount,
 } = require("../utils/applyDiscountAndVariants");
 
 const router = express.Router();
@@ -268,11 +269,11 @@ router.get("/nearby-by-location", async (req, res) => {
   }
 });
 
-// === SEMUA PRODUK ===
 router.get("/allproduct", async (req, res) => {
   try {
     const { data: products } = await supabase.from("products").select("*");
-    const productsWithVariants = await attachVariantsStockDiscount(products);
+    const productsWithVariants =
+      await attachVariantsStockDiscountWithRealDiscount(products);
     return res.status(200).json({
       message: `✅ ${products.length} produk`,
       products: productsWithVariants,
@@ -285,7 +286,7 @@ router.get("/allproduct", async (req, res) => {
   }
 });
 
-// === PRODUK BERDASARKAN KATEGORI ===
+// === Ambil produk berdasarkan kategori ===
 router.get("/by-category/:category_id", async (req, res) => {
   const { category_id } = req.params;
   try {
@@ -303,7 +304,8 @@ router.get("/by-category/:category_id", async (req, res) => {
       .select("*")
       .eq("category_id", category_id);
 
-    const productsWithVariants = await attachVariantsStockDiscount(products);
+    const productsWithVariants =
+      await attachVariantsStockDiscountWithRealDiscount(products);
 
     return res.status(200).json({
       message: `✅ Ditemukan ${products.length} produk dalam kategori "${category.name}"`,
@@ -317,7 +319,7 @@ router.get("/by-category/:category_id", async (req, res) => {
   }
 });
 
-// === PRODUK BERDASARKAN ID ===
+// === Ambil produk berdasarkan ID ===
 router.get("/:id", async (req, res) => {
   const { id } = req.params;
   try {
@@ -330,7 +332,8 @@ router.get("/:id", async (req, res) => {
     if (!product)
       return res.status(404).json({ message: "❌ Produk tidak ditemukan" });
 
-    const productsWithVariants = await attachVariantsStockDiscount([product]);
+    const productsWithVariants =
+      await attachVariantsStockDiscountWithRealDiscount([product]);
 
     return res.status(200).json({
       message: "✅ Produk ditemukan",
