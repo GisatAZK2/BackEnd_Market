@@ -118,11 +118,10 @@ async function generateSessionsForDay(targetDay) {
       continue;
     }
 
-    // Sesuaikan product_id dengan yang ada
     await supabase.from("flash_sale_products").insert([
       {
         flash_sale_id: newSession.id,
-        product_id: 1, // ganti dengan produk valid
+        product_id: 1,
         discount_percentage: 20,
         flash_stock: 50,
       },
@@ -130,32 +129,39 @@ async function generateSessionsForDay(targetDay) {
   }
 }
 
-/* ===== CEK & GENERATE SESI 1 BULAN KE DEPAN ===== */
-cron.schedule("0 0 * * *", async () => {
-  console.log("[CRON] Cek sesi flash sale aktif...");
-  const now = DateTime.utc().toISO();
-  const { data: sessions } = await supabase
-    .from("flash_sales")
-    .select("id")
-    .gte("end_time", now);
+/* ===== INIT: CEK TERAKHIR GENERATE 1 BULAN ===== */
+(async () => {
+  console.log("[INIT] Cek apakah perlu generate sesi 1 bulan...");
+  const { data: flag } = await supabase
+    .from("system_flags")
+    .select("*")
+    .eq("key", "last_flashsale_generate")
+    .single();
 
-  if (!sessions?.length) {
-    console.log(
-      "⚡ Tidak ada sesi flash sale aktif → generate otomatis 1 bulan",
-    );
-    for (let i = 0; i < 30; i++) {
-      const targetDay = DateTime.now()
-        .setZone("Asia/Jakarta")
-        .plus({ days: i });
-      await generateSessionsForDay(targetDay);
+  const now = DateTime.now().setZone("Asia/Jakarta");
+  let needGenerate = true;
+
+  if (flag && flag.value) {
+    const lastGenerated = DateTime.fromISO(flag.value);
+    const diff = now.diff(lastGenerated, "days").toObject().days;
+    if (diff < 30) {
+      needGenerate = false;
+      console.log("⏩ Sudah generate dalam 30 hari terakhir, skip...");
     }
   }
-});
 
-/* ===== AUTO GENERATE SAAT PERTAMA START ===== */
-(async () => {
-  console.log("[INIT] Generate sesi awal hari ini...");
-  await generateSessionsForDay(DateTime.now().setZone("Asia/Jakarta"));
+  if (needGenerate) {
+    console.log("⚡ Generate sesi flash sale 1 bulan ke depan...");
+    for (let i = 0; i < 30; i++) {
+      const targetDay = now.plus({ days: i });
+      await generateSessionsForDay(targetDay);
+    }
+
+    // Simpan waktu terakhir generate
+    await supabase
+      .from("system_flags")
+      .upsert({ key: "last_flashsale_generate", value: now.toISO() });
+  }
 })();
 
 module.exports = { generateSessionsForDay };

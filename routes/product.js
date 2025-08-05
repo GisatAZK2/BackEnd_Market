@@ -287,6 +287,30 @@ router.get("/allproduct", async (req, res) => {
   }
 });
 
+router.get("/sorted", async (req, res) => {
+  try {
+    const { data: products } = await supabase.from("products").select("*");
+
+    let productsWithVariants =
+      await attachVariantsStockDiscountWithRealDiscount(products);
+
+    // Urutkan berdasarkan diskon terbesar
+    productsWithVariants = productsWithVariants.sort(
+      (a, b) => b.discountPercentage - a.discountPercentage,
+    );
+
+    return res.status(200).json({
+      message: `✅ ${productsWithVariants.length} produk (urut diskon terbesar)`,
+      products: productsWithVariants,
+    });
+  } catch (error) {
+    return res.status(500).json({
+      message: "❌ Gagal mengambil semua produk",
+      error: error.message,
+    });
+  }
+});
+
 // === Ambil produk berdasarkan kategori ===
 router.get("/by-category/:category_id", async (req, res) => {
   const { category_id } = req.params;

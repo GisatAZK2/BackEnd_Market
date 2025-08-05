@@ -105,8 +105,8 @@ app.use("/categories", cache("10 minutes"), category);
 app.use("/search", cache("2 minutes"), search);
 app.use("/clean", clean);
 app.use("/order", order);
-app.use("/cart", cart);
-app.use("/discount", discount);
+app.use("/cart", cache("10 second"), cart);
+app.use("/discount", cache("10 second"), discount);
 
 // === Start server ===
 const PORT = process.env.PORT || 3000;
