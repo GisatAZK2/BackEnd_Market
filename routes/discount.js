@@ -405,8 +405,8 @@ router.get("/flash-sale-customer/list", async (req, res) => {
     console.log("[NOW DEVICE TZ]", now.toISO());
 
     // Tentukan rentang waktu hari ini (UTC)
-    const todayStart = now.startOf("day").toUTC().toISO();
-    const todayEnd = now.endOf("day").toUTC().toISO();
+    const todayStart = now.startOf("day").toISO();
+    const todayEnd = now.endOf("day").toISO();
     console.log("[RANGE QUERY UTC]", todayStart, " -> ", todayEnd);
 
     // Perbaikan query → tangkap semua flash sale yang overlap dengan hari ini
