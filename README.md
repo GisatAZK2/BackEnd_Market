@@ -782,6 +782,203 @@ sequenceDiagram
     API-->>Frontend: Produk tambahan
 ```
 ---
+
+
+# 🚀 Sistem Flash Sale
+
+Sistem ini dipakai untuk mengatur **Flash Sale** di aplikasi, mulai dari daftar produk ke sesi flash sale, ambil daftar flash sale, sampai reset stok otomatis.
+
+---
+
+## 🔥 1. Daftar Produk ke Flash Sale
+**Endpoint:** `POST /flash-sale/register`
+
+### Request Body
+```json
+{
+  "seller_id": "123",
+  "flash_sale_id": 5,
+  "products": [
+    {
+      "product_id": "a1b2c3",
+      "variant_id": null,
+      "flash_stock": 10,
+      "discount_percentage": 20
+    }
+  ]
+}
+```
+
+### Response Sukses
+```json
+{
+  "message": "✅ Produk berhasil didaftarkan ke flash sale"
+}
+```
+
+### Catatan
+- **`flash_stock`** = stok khusus untuk flash sale.
+- **`discount_percentage`** = diskon (%) untuk produk tersebut.
+- Produk tidak bisa **double daftar** di sesi flash sale yang sama.
+
+---
+
+## 👥 2. Ambil Daftar Flash Sale (Untuk Customer)
+**Endpoint:** `GET /flash-sale-customer/list`
+
+### Response
+```json
+{
+  "message": "✅ Flash sale untuk 2025-08-05 ditemukan",
+  "date": "2025-08-05",
+  "current_session": "afternoon",
+  "sessions": {
+    "morning": {
+      "label": "00:00 - 12:00",
+      "flash_sales": []
+    },
+    "afternoon": {
+      "label": "12:00 - 18:00",
+      "flash_sales": [
+        {
+          "id": 5,
+          "name": "Flash Sale 5 Agustus",
+          "display_status": "ongoing",
+          "products": [
+            {
+              "id": "a1b2c3",
+              "product_name": "Sepatu Running",
+              "product_price": 200000,
+              "discountPercentage": 20,
+              "finalPrice": 160000
+            }
+          ]
+        }
+      ]
+    },
+    "evening": {
+      "label": "18:00 - 00:00",
+      "flash_sales": []
+    }
+  }
+}
+```
+### Status yang mungkin
+- `upcoming` → belum mulai
+- `ongoing` → sedang berlangsung
+- `disabled` → sudah selesai
+
+
+---
+
+## 🔍 3. Ambil Flash Sale Berdasarkan ID (Hari Ini)
+**Endpoint:** `GET /flash-sale-customer/:id`
+
+### Response Sukses
+```json
+{
+  "message": "✅ Flash sale ditemukan",
+  "flash_sale": {
+    "id": 5,
+    "name": "Flash Sale 5 Agustus",
+    "start_time": "2025-08-05T12:00:00.000Z",
+    "end_time": "2025-08-05T18:00:00.000Z",
+    "display_status": "ongoing",
+    "products": [
+      {
+        "id": "a1b2c3",
+        "product_name": "Sepatu Running",
+        "product_price": 200000,
+        "discountPercentage": 20,
+        "finalPrice": 160000,
+        "stock": 10
+      }
+    ]
+  }
+}
+```
+
+### Status yang mungkin
+- `upcoming` → belum mulai
+- `ongoing` → sedang berlangsung
+- `ended` → sudah selesai
+- `disabled` → sesi dinonaktifkan
+
+---
+
+## 📋 4. Ambil Daftar Flash Sale (Untuk Seller)
+**Endpoint:** `GET /flash-sale/list`
+
+### Response
+```json
+{
+  "message": "✅ 3 flash sale ditemukan",
+  "flash_sales": [
+    {
+      "id": 5,
+      "name": "Flash Sale 5 Agustus",
+      "start_time": "2025-08-05T12:00:00.000Z",
+      "end_time": "2025-08-05T18:00:00.000Z",
+      "status": "active"
+    }
+  ]
+}
+```
+
+---
+
+## ⏰ 5. Cron Job – Reset Stok & Nonaktifkan Sesi
+- Jalan otomatis **setiap 1 jam**.
+- Mengecek sesi flash sale yang **sudah berakhir**.
+- Aksi yang dilakukan:
+  1. Stok produk/variant dikembalikan.
+  2. Harga produk/variant dikembalikan ke harga normal.
+  3. Status flash sale jadi `disabled`.
+
+Tidak perlu dipanggil manual, ini otomatis.
+
+---
+
+## ⚡ 6. Generate Sesi Flash Sale Harian
+- Fungsi: `generateSessionsForDay(targetDay)`
+- Jika tanggal **sama dengan bulan** (contoh: 5 Mei → 5/5) → ada 6 sesi (setiap 4 jam).
+- Jika **tanggal biasa** → hanya 3 sesi:
+  - 00:00 – 12:00
+  - 12:00 – 18:00
+  - 18:00 – 00:00
+
+---
+
+## 🗓️ 7. Auto Generate 1 Bulan
+- Saat aplikasi start:
+  - Cek tabel `system_flags` → key `last_flashsale_generate`.
+  - Jika sudah lebih dari 30 hari → generate sesi untuk 30 hari ke depan.
+- Ini membuat jadwal flash sale selalu siap tanpa input manual.
+
+---
+
+## 📊 Database yang Dipakai
+- **flash_sales**
+  - info sesi flash sale (id, nama, jam mulai, jam selesai, status).
+- **flash_sale_products**
+  - produk yang ikut flash sale.
+- **products**
+  - data produk utama.
+- **product_variants**
+  - data variant produk.
+- **system_flags**
+  - catatan terakhir generate sesi.
+
+---
+
+## ⚠️ Penting
+- Produk hanya bisa daftar **1 kali** per sesi flash sale.
+- Selama flash sale berjalan, **stok & harga produk terkunci**.
+- Setelah sesi berakhir → stok & harga **dikembalikan otomatis** lewat cron job.
+
+
+---
+
 # Event & Discount API
 
 ## Overview
@@ -874,37 +1071,7 @@ API ini mengelola event promosi, flash sale, dan diskon toko beserta integrasi s
 
 ---
 
-### 4. **Create Flash Sale**
-
-**POST** `/flash-sale/create`
-
-**Body JSON**:
-
-```json
-{
-  "product_id": "uuid",
-  "variant_id": "uuid (optional)",
-  "discount_percentage": 50,
-  "flash_stock": 10,
-  "start_time": "2025-08-02T09:00:00.000Z",
-  "end_time": "2025-08-05T09:00:00.000Z",
-  "timezone": "Asia/Jakarta"
-}
-```
-
-**Response**:
-
-```json
-{
-  "message": "✅ Flash sale berhasil ditambahkan",
-  "data": { ...flashSale },
-  "product": { ...produkDenganDiskon }
-}
-```
-
----
-
-### 5. **Create Store Discount**
+### 4. **Create Store Discount**
 
 **POST** `/store-discount/create`
 
@@ -938,7 +1105,7 @@ API ini mengelola event promosi, flash sale, dan diskon toko beserta integrasi s
 
 ---
 
-### 6. **Get Event by ID (with discount detail)**
+### 5. **Get Event by ID (with discount detail)**
 
 **GET** `/event/:id`
 
@@ -954,7 +1121,7 @@ API ini mengelola event promosi, flash sale, dan diskon toko beserta integrasi s
 
 ---
 
-### 7. **Get Store Discount by Seller**
+### 6. **Get Store Discount by Seller**
 
 **GET** `/store-discount/seller/:seller_id`
 
@@ -974,7 +1141,7 @@ API ini mengelola event promosi, flash sale, dan diskon toko beserta integrasi s
 
 ---
 
-### 8. **Get Flash Sale by ID**
+### 7. **Get Flash Sale by ID (Khusus Untuk Detail Flash sale Seller)**
 
 **GET** `/flash-sale/:id`
 
