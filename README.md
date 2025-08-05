@@ -791,7 +791,7 @@ Sistem ini dipakai untuk mengatur **Flash Sale** di aplikasi, mulai dari daftar 
 ---
 
 ## 🔥 1. Daftar Produk ke Flash Sale
-**Endpoint:** `POST /flash-sale/register`
+**Endpoint:** `POST /discount/flash-sale/register`
 
 ### Request Body
 ```json
@@ -824,7 +824,7 @@ Sistem ini dipakai untuk mengatur **Flash Sale** di aplikasi, mulai dari daftar 
 ---
 
 ## 👥 2. Ambil Daftar Flash Sale (Untuk Customer)
-**Endpoint:** `GET /flash-sale-customer/list`
+**Endpoint:** `GET /discount/flash-sale-customer/list`
 
 ### Response
 ```json
@@ -872,7 +872,7 @@ Sistem ini dipakai untuk mengatur **Flash Sale** di aplikasi, mulai dari daftar 
 ---
 
 ## 🔍 3. Ambil Flash Sale Berdasarkan ID (Hari Ini)
-**Endpoint:** `GET /flash-sale-customer/:id`
+**Endpoint:** `GET /discount/flash-sale-customer/:id`
 
 ### Response Sukses
 ```json
@@ -901,13 +901,12 @@ Sistem ini dipakai untuk mengatur **Flash Sale** di aplikasi, mulai dari daftar 
 ### Status yang mungkin
 - `upcoming` → belum mulai
 - `ongoing` → sedang berlangsung
-- `ended` → sudah selesai
-- `disabled` → sesi dinonaktifkan
+- `disable` → sesi berakhir
 
 ---
 
 ## 📋 4. Ambil Daftar Flash Sale (Untuk Seller)
-**Endpoint:** `GET /flash-sale/list`
+**Endpoint:** `GET /discount/flash-sale/list`
 
 ### Response
 ```json
