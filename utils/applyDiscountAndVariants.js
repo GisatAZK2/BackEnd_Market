@@ -165,11 +165,6 @@ async function attachVariantsStockDiscountWithRealDiscount(products) {
           discount.discountPercentage,
         );
 
-        // kalau upcoming → tambahkan prefix 3
-        if (discount.upcomingFlashSale !== null) {
-          finalPrice = Number("3" + finalPrice);
-        }
-
         return {
           ...product,
           variants: [],
