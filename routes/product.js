@@ -256,7 +256,8 @@ router.get("/nearby-by-location", async (req, res) => {
       })
       .filter((p) => p.distanceInKm <= 40);
 
-    const mergedWithVariants = await attachVariantsStockDiscount(merged);
+    const mergedWithVariants =
+      await attachVariantsStockDiscountWithRealDiscount(merged);
 
     return res.status(200).json({
       message: `✅ Ditemukan ${mergedWithVariants.length} produk dalam radius 40 km`,
