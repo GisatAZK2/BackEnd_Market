@@ -329,12 +329,12 @@ router.get("/flash-sale-customer/list", async (req, res) => {
     const startDay = now.startOf("day").toISO(); // 00:00:00
     const endDay = now.endOf("day").toISO(); // 23:59:59
 
-    // Ambil semua flash sale sesuai hari ini (active & disabled)
+    // Ambil semua flash sale yang dimulai hari ini (abaikan kapan berakhir)
     const { data: flashSales, error } = await supabase
       .from("flash_sales")
       .select("*")
       .gte("start_time", startDay)
-      .lte("end_time", endDay)
+      .lt("start_time", endDay)
       .order("start_time", { ascending: true });
 
     if (error) {
@@ -386,11 +386,11 @@ router.get("/flash-sale-customer/list", async (req, res) => {
     };
 
     for (const fs of flashSales) {
-      const start = DateTime.fromISO(fs.start_time);
-      const end = DateTime.fromISO(fs.end_time);
+      const start = DateTime.fromISO(fs.start_time).setZone(tz);
+      const end = DateTime.fromISO(fs.end_time).setZone(tz);
+      const nowISO = DateTime.local().setZone(tz);
 
       // Status display
-      const nowISO = DateTime.local().setZone(tz);
       let status = fs.status;
       if (fs.status === "active") {
         if (nowISO < start) status = "upcoming";
@@ -398,6 +398,7 @@ router.get("/flash-sale-customer/list", async (req, res) => {
         else status = "ended";
       }
 
+      // Attach diskon ke produk
       const products = flashSaleProductsMap[fs.id] || [];
       const productsWithDiscount =
         products.length > 0
@@ -410,7 +411,8 @@ router.get("/flash-sale-customer/list", async (req, res) => {
         products: productsWithDiscount,
       };
 
-      const startHour = start.setZone(tz).hour;
+      // Tentukan sesi berdasarkan jam mulai
+      const startHour = start.hour;
       if (startHour >= 0 && startHour < 12) {
         sessions.morning.flash_sales.push(flashSaleWithProducts);
       } else if (startHour >= 12 && startHour < 18) {
@@ -420,7 +422,7 @@ router.get("/flash-sale-customer/list", async (req, res) => {
       }
     }
 
-    // Tentukan sesi aktif
+    // Tentukan sesi aktif sekarang
     const currentHour = now.hour;
     let currentSession = null;
     if (currentHour >= 0 && currentHour < 12) currentSession = "morning";
