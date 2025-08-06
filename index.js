@@ -17,6 +17,7 @@ const cookieParser = require("cookie-parser");
 const apicache = require("apicache");
 const path = require("path");
 const startCronJobs = require("./utils/restoreStock");
+const sellerWithProductsRoutes = require("./routes/seller");
 require("./utils/cron");
 require("dotenv").config();
 
@@ -105,8 +106,9 @@ app.use("/categories", cache("10 minutes"), category);
 app.use("/search", cache("2 minutes"), search);
 app.use("/clean", clean);
 app.use("/order", order);
-app.use("/cart", cache("10 second"), cart);
+app.use("/cart", cache("10 seconds"), cart);
 app.use("/discount", discount);
+app.use("/seller", cache("10 seconds"), sellerWithProductsRoutes);
 
 // === Start server ===
 const PORT = process.env.PORT || 3000;
