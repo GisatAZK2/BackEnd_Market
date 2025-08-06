@@ -290,85 +290,6 @@ router.post("/flash-sale/register", async (req, res) => {
   }
 });
 
-/* ===== GET FLASH SALE BY ID (HARI INI) ===== */
-router.get("/flash-sale-customer/:id", async (req, res) => {
-  try {
-    const { id } = req.params;
-    const today = new Date();
-    const todayStr = today.toISOString().split("T")[0];
-
-    // Ambil flash sale by ID, tapi tetap dalam rentang hari ini
-    const { data: flashSale, error: flashSaleErr } = await supabase
-      .from("flash_sales")
-      .select("*")
-      .eq("id", id)
-      .gte("start_time", `${todayStr} 00:00:00`)
-      .lte("end_time", `${todayStr} 23:59:59`)
-      .single();
-
-    if (flashSaleErr || !flashSale) {
-      return res.status(404).json({
-        message: "❌ Flash sale tidak ditemukan untuk hari ini",
-      });
-    }
-
-    // Ambil produk dalam flash sale ini
-    const { data: flashSaleProducts, error: fspErr } = await supabase
-      .from("flash_sale_products")
-      .select(
-        `
-        *,
-        products (*),
-        sellers (*),
-        product_variants (*)
-      `,
-      )
-      .eq("flash_sale_id", id);
-
-    if (fspErr) {
-      return res.status(500).json({
-        message: "❌ Gagal mengambil produk flash sale",
-        error: fspErr,
-      });
-    }
-
-    const now = new Date();
-    const start = new Date(flashSale.start_time);
-    const end = new Date(flashSale.end_time);
-
-    let status = flashSale.status;
-    if (flashSale.status === "active") {
-      if (now < start) status = "upcoming";
-      else if (now >= start && now <= end) status = "ongoing";
-      else status = "ended";
-    } else if (flashSale.status === "disabled") {
-      status = "disabled";
-    }
-
-    const products =
-      flashSaleProducts.length > 0
-        ? await attachVariantsStockDiscountWithRealDiscount(
-            flashSaleProducts.map((fsp) => fsp.products),
-          )
-        : [];
-
-    return res.json({
-      message: "✅ Flash sale ditemukan",
-      flash_sale: {
-        ...flashSale,
-        display_status: status,
-        products,
-      },
-    });
-  } catch (err) {
-    console.error(err);
-    return res.status(500).json({
-      message: "❌ Terjadi kesalahan server",
-      error: err.message,
-    });
-  }
-});
-
 /* ===== GET LIST FLASH SALE (Khusus Untuk Seller) ===== */
 router.get("/flash-sale/list", async (req, res) => {
   try {
@@ -396,46 +317,34 @@ router.get("/flash-sale/list", async (req, res) => {
   }
 });
 
+/* ===== GET LIST FLASH SALE UNTUK CUSTOMER (PAKAI HELPER DISKON) ===== */
 router.get("/flash-sale-customer/list", async (req, res) => {
   try {
+    // Ambil timezone dari device/browser (default ke Asia/Jakarta)
     const tz =
       req.query.timezone || req.headers["x-timezone"] || "Asia/Jakarta";
+
+    // Ambil tanggal hari ini sesuai timezone device
     const now = DateTime.local().setZone(tz);
-    console.log("[TIMEZONE DEVICE]", tz);
-    console.log("[NOW DEVICE TZ]", now.toISO());
+    const startDay = now.startOf("day").toISO(); // 00:00:00
+    const endDay = now.endOf("day").toISO(); // 23:59:59
 
-    // Tentukan rentang waktu hari ini (UTC)
-    const todayStart = now.startOf("day").toISO();
-    const todayEnd = now.endOf("day").toISO();
-    console.log("[RANGE QUERY UTC]", todayStart, " -> ", todayEnd);
-
-    // Perbaikan query → tangkap semua flash sale yang overlap dengan hari ini
+    // Ambil semua flash sale sesuai hari ini (active & disabled)
     const { data: flashSales, error } = await supabase
       .from("flash_sales")
       .select("*")
-      .lte("start_time", todayEnd) // mulai sebelum hari ini berakhir
-      .gte("end_time", todayStart) // berakhir setelah hari ini mulai
+      .gte("start_time", startDay)
+      .lte("end_time", endDay)
       .order("start_time", { ascending: true });
 
-    console.log("[FLASH SALES RAW]", flashSales);
-
     if (error) {
-      console.error("[DB ERROR]", error);
       return res.status(500).json({
         message: "❌ Gagal mengambil daftar flash sale",
         error,
       });
     }
 
-    if (!flashSales || flashSales.length === 0) {
-      console.warn("[NO FLASH SALE FOUND]");
-      return res.status(404).json({
-        message: "❌ Flash sale tidak ditemukan untuk hari ini",
-        date: now.toFormat("yyyy-LL-dd"),
-      });
-    }
-
-    // Ambil produk yang ikut flash sale
+    // Ambil daftar produk flash sale
     const { data: flashSaleProducts, error: fspErr } = await supabase
       .from("flash_sale_products")
       .select(
@@ -451,10 +360,7 @@ router.get("/flash-sale-customer/list", async (req, res) => {
         flashSales.map((fs) => fs.id),
       );
 
-    console.log("[FLASH SALE PRODUCTS RAW]", flashSaleProducts);
-
     if (fspErr) {
-      console.error("[FLASH SALE PRODUCTS ERROR]", fspErr);
       return res.status(500).json({
         message: "❌ Gagal mengambil produk flash sale",
         error: fspErr,
@@ -471,7 +377,6 @@ router.get("/flash-sale-customer/list", async (req, res) => {
         flashSaleProductsMap[fsp.flash_sale_id].push(fsp.products);
       }
     }
-    console.log("[FLASH SALE PRODUCT MAP]", flashSaleProductsMap);
 
     // Bagi ke dalam 3 sesi
     const sessions = {
@@ -481,20 +386,18 @@ router.get("/flash-sale-customer/list", async (req, res) => {
     };
 
     for (const fs of flashSales) {
-      const start = DateTime.fromISO(fs.start_time).setZone(tz);
-      const end = DateTime.fromISO(fs.end_time).setZone(tz);
+      const start = DateTime.fromISO(fs.start_time);
+      const end = DateTime.fromISO(fs.end_time);
 
-      // Tentukan status display
+      // Status display
+      const nowISO = DateTime.local().setZone(tz);
       let status = fs.status;
       if (fs.status === "active") {
-        if (now < start) status = "upcoming";
-        else if (now >= start && now <= end) status = "ongoing";
+        if (nowISO < start) status = "upcoming";
+        else if (nowISO >= start && nowISO <= end) status = "ongoing";
         else status = "ended";
-      } else if (fs.status === "disabled") {
-        status = "disabled";
       }
 
-      // Ambil produk flash sale lalu attach diskon
       const products = flashSaleProductsMap[fs.id] || [];
       const productsWithDiscount =
         products.length > 0
@@ -503,43 +406,134 @@ router.get("/flash-sale-customer/list", async (req, res) => {
 
       const flashSaleWithProducts = {
         ...fs,
-        start_time: start.toISO(),
-        end_time: end.toISO(),
         display_status: status,
         products: productsWithDiscount,
       };
 
-      // Masukkan ke sesi berdasarkan jam mulai di timezone user
-      const startHour = start.hour;
+      const startHour = start.setZone(tz).hour;
       if (startHour >= 0 && startHour < 12) {
         sessions.morning.flash_sales.push(flashSaleWithProducts);
       } else if (startHour >= 12 && startHour < 18) {
         sessions.afternoon.flash_sales.push(flashSaleWithProducts);
-      } else if (startHour >= 18 && startHour <= 23) {
+      } else {
         sessions.evening.flash_sales.push(flashSaleWithProducts);
       }
     }
 
-    // Tentukan sesi aktif sekarang
+    // Tentukan sesi aktif
     const currentHour = now.hour;
     let currentSession = null;
     if (currentHour >= 0 && currentHour < 12) currentSession = "morning";
     else if (currentHour >= 12 && currentHour < 18)
       currentSession = "afternoon";
-    else if (currentHour >= 18 && currentHour <= 23) currentSession = "evening";
-
-    console.log("[SESSION SUMMARY]", sessions);
-    console.log("[CURRENT SESSION]", currentSession);
+    else currentSession = "evening";
 
     return res.json({
-      message: `✅ Flash sale untuk ${now.toFormat("yyyy-LL-dd")} ditemukan`,
-      date: now.toFormat("yyyy-LL-dd"),
-      timezone: tz,
+      message: `✅ Flash sale untuk ${now.toISODate()} ditemukan`,
+      date: now.toISODate(),
       current_session: currentSession,
       sessions,
     });
   } catch (err) {
-    console.error("[SERVER ERROR]", err);
+    console.error(err);
+    return res.status(500).json({
+      message: "❌ Terjadi kesalahan server",
+      error: err.message,
+    });
+  }
+});
+
+router.get("/flash-sale-customer/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const tz =
+      req.query.timezone || req.headers["x-timezone"] || "Asia/Jakarta";
+
+    // Ambil tanggal hari ini sesuai timezone
+    const now = DateTime.local().setZone(tz);
+    const startDay = now.startOf("day");
+    const endDay = now.endOf("day");
+
+    // Ambil detail flash sale berdasarkan ID
+    const { data: flashSale, error } = await supabase
+      .from("flash_sales")
+      .select("*")
+      .eq("id", id)
+      .single();
+
+    if (error || !flashSale) {
+      return res.status(404).json({
+        message: "❌ Flash sale tidak ditemukan",
+        error,
+      });
+    }
+
+    const flashSaleStart = DateTime.fromISO(flashSale.start_time).setZone(tz);
+    const flashSaleEnd = DateTime.fromISO(flashSale.end_time).setZone(tz);
+
+    // Pastikan flash sale dalam range hari ini
+    if (flashSaleStart < startDay || flashSaleEnd > endDay) {
+      return res.status(404).json({
+        message: "❌ Flash sale ini bukan untuk hari ini",
+      });
+    }
+
+    // Ambil semua produk dalam flash sale ini
+    const { data: flashSaleProducts, error: fspErr } = await supabase
+      .from("flash_sale_products")
+      .select(
+        `
+        *,
+        products (*),
+        sellers (*),
+        product_variants (*)
+      `,
+      )
+      .eq("flash_sale_id", flashSale.id);
+
+    if (fspErr) {
+      return res.status(500).json({
+        message: "❌ Gagal mengambil produk flash sale",
+        error: fspErr,
+      });
+    }
+
+    // Tentukan status display
+    let status = flashSale.status;
+    if (flashSale.status === "active") {
+      if (now < flashSaleStart) status = "upcoming";
+      else if (now >= flashSaleStart && now <= flashSaleEnd) status = "ongoing";
+      else status = "ended";
+    }
+
+    // Tentukan sesi berdasarkan jam mulai
+    let session = null;
+    const startHour = flashSaleStart.hour;
+    if (startHour >= 0 && startHour < 12) session = "morning";
+    else if (startHour >= 12 && startHour < 18) session = "afternoon";
+    else session = "evening";
+
+    // Attach diskon ke produk
+    const products = flashSaleProducts.map((p) => p.products).filter(Boolean);
+    const productsWithDiscount =
+      products.length > 0
+        ? await attachVariantsStockDiscountWithRealDiscount(products)
+        : [];
+
+    const response = {
+      ...flashSale,
+      display_status: status,
+      session,
+      products: productsWithDiscount,
+    };
+
+    return res.json({
+      message: "✅ Detail flash sale ditemukan",
+      date: now.toISODate(),
+      flash_sale: response,
+    });
+  } catch (err) {
+    console.error(err);
     return res.status(500).json({
       message: "❌ Terjadi kesalahan server",
       error: err.message,

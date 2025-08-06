@@ -138,142 +138,83 @@ router.post("/register", upload.single("avatar"), async (req, res) => {
 });
 
 // ======================== VERIFIKASI OTP ========================
-router.get("/flash-sale-customer/list", async (req, res) => {
+router.post("/verify-otp", async (req, res) => {
+  const { email, otp, mode = "email" } = req.body;
+
   try {
-    const tz =
-      req.query.timezone || req.headers["x-timezone"] || "Asia/Jakarta";
-
-    // Pakai gaya sama dengan /verify-otp (base dari Date())
-    const now = new Date();
-    const isoNow = now.toISOString();
-
-    // Tentukan rentang hari (berdasarkan timezone device)
-    const startOfDay = new Date(now.setHours(0, 0, 0, 0)).toISOString();
-    const endOfDay = new Date(now.setHours(23, 59, 59, 999)).toISOString();
-
-    console.log("[TIMEZONE DEVICE]", tz);
-    console.log("[NOW ISO]", isoNow);
-    console.log("[RANGE QUERY UTC]", startOfDay, " -> ", endOfDay);
-
-    // Ambil semua flash sale yang overlap dengan hari ini
-    const { data: flashSales, error } = await supabase
-      .from("flash_sales")
+    // === Cek user ===
+    const { data: user, error: userErr } = await supabase
+      .from("users")
       .select("*")
-      .lte("start_time", endOfDay) // mulai sebelum hari ini berakhir
-      .gte("end_time", startOfDay) // berakhir setelah hari ini mulai
-      .order("start_time", { ascending: true });
+      .eq("email", email)
+      .single();
 
-    if (error) {
-      console.error("[DB ERROR]", error);
+    if (userErr || !user) {
       return res
-        .status(500)
-        .json({ message: "❌ Gagal mengambil daftar flash sale", error });
+        .status(404)
+        .json({ success: false, message: "User tidak ditemukan." });
     }
 
-    if (!flashSales || flashSales.length === 0) {
-      console.warn("[NO FLASH SALE FOUND]");
-      return res.status(404).json({
-        message: "❌ Flash sale tidak ditemukan untuk hari ini",
-        date: isoNow.split("T")[0],
+    const now = new Date().toISOString();
+    if (user.otp_code !== otp || user.otp_expires_at <= now) {
+      return res
+        .status(400)
+        .json({ success: false, message: "OTP salah atau kadaluarsa." });
+    }
+
+    // === Update verified ===
+    const { error: updateErr } = await supabase
+      .from("users")
+      .update({
+        verified: true,
+        otp_code: null,
+        otp_expires_at: null,
+      })
+      .eq("email", email);
+
+    if (updateErr) throw updateErr;
+
+    // === Hanya Google yang login otomatis ===
+    if (mode === "google") {
+      const token = jwt.sign({ id: user.id }, process.env.JWT_SECRET, {
+        expiresIn: "7d",
+      });
+
+      res.cookie(
+        "user_info",
+        JSON.stringify({
+          id: user.id,
+          email: user.email,
+          username: user.username,
+        }),
+        {
+          httpOnly: true,
+          secure: process.env.NODE_ENV === "production",
+          sameSite: "None",
+          maxAge: 7 * 24 * 60 * 60 * 1000,
+        },
+      );
+
+      return res.json({
+        success: true,
+        step: "redirect_dashboard",
+        message: "OTP valid. Akun diaktifkan & login otomatis.",
+        token,
+        id: user.id,
       });
     }
 
-    // Ambil produk yang ikut flash sale
-    const { data: flashSaleProducts, error: fspErr } = await supabase
-      .from("flash_sale_products")
-      .select(`*, products (*), sellers (*), product_variants (*)`)
-      .in(
-        "flash_sale_id",
-        flashSales.map((fs) => fs.id),
-      );
-
-    if (fspErr) {
-      console.error("[FLASH SALE PRODUCTS ERROR]", fspErr);
-      return res
-        .status(500)
-        .json({
-          message: "❌ Gagal mengambil produk flash sale",
-          error: fspErr,
-        });
-    }
-
-    // Group produk per flash sale
-    const flashSaleProductsMap = {};
-    for (const fsp of flashSaleProducts) {
-      if (!flashSaleProductsMap[fsp.flash_sale_id]) {
-        flashSaleProductsMap[fsp.flash_sale_id] = [];
-      }
-      if (fsp.products) {
-        flashSaleProductsMap[fsp.flash_sale_id].push(fsp.products);
-      }
-    }
-
-    // Bagi ke sesi
-    const sessions = {
-      morning: { label: "00:00 - 12:00", flash_sales: [] },
-      afternoon: { label: "12:00 - 18:00", flash_sales: [] },
-      evening: { label: "18:00 - 00:00", flash_sales: [] },
-    };
-
-    for (const fs of flashSales) {
-      const start = new Date(fs.start_time);
-      const end = new Date(fs.end_time);
-
-      // Tentukan status display
-      let status = fs.status;
-      if (fs.status === "active") {
-        if (new Date(isoNow) < start) status = "upcoming";
-        else if (new Date(isoNow) >= start && new Date(isoNow) <= end)
-          status = "ongoing";
-        else status = "ended";
-      } else if (fs.status === "disabled") {
-        status = "disabled";
-      }
-
-      const products = flashSaleProductsMap[fs.id] || [];
-      const productsWithDiscount =
-        products.length > 0
-          ? await attachVariantsStockDiscountWithRealDiscount(products)
-          : [];
-
-      const flashSaleWithProducts = {
-        ...fs,
-        start_time: start.toISOString(),
-        end_time: end.toISOString(),
-        display_status: status,
-        products: productsWithDiscount,
-      };
-
-      // Tentukan sesi berdasarkan jam mulai
-      const startHour = start.getHours();
-      if (startHour >= 0 && startHour < 12)
-        sessions.morning.flash_sales.push(flashSaleWithProducts);
-      else if (startHour >= 12 && startHour < 18)
-        sessions.afternoon.flash_sales.push(flashSaleWithProducts);
-      else if (startHour >= 18 && startHour <= 23)
-        sessions.evening.flash_sales.push(flashSaleWithProducts);
-    }
-
-    // Sesi aktif sekarang
-    const currentHour = new Date(isoNow).getHours();
-    let currentSession = null;
-    if (currentHour >= 0 && currentHour < 12) currentSession = "morning";
-    else if (currentHour >= 12 && currentHour < 18)
-      currentSession = "afternoon";
-    else if (currentHour >= 18 && currentHour <= 23) currentSession = "evening";
-
+    // === Email biasa tidak auto-login ===
     return res.json({
-      message: `✅ Flash sale untuk ${isoNow.split("T")[0]} ditemukan`,
-      date: isoNow.split("T")[0],
-      timezone: tz,
-      current_session: currentSession,
-      sessions,
+      success: true,
+      step: "login_manual",
+      message: "OTP valid. Akun diaktifkan. Silakan login manual.",
     });
   } catch (err) {
-    console.error("[SERVER ERROR]", err);
+    console.error("OTP Error:", err);
     return res
       .status(500)
-      .json({ message: "❌ Terjadi kesalahan server", error: err.message });
+      .json({ success: false, message: "Terjadi kesalahan pada server." });
   }
 });
 
