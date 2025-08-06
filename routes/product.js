@@ -11,6 +11,8 @@ const {
   attachVariantsStockDiscount,
   attachVariantsStockDiscountWithRealDiscount,
 } = require("../utils/applyDiscountAndVariants");
+const NodeCache = require("node-cache");
+const cache = new NodeCache({ stdTTL: 10 });
 
 const router = express.Router();
 
@@ -346,8 +348,16 @@ router.get("/by-category/:category_id", async (req, res) => {
 
 router.get("/:id", async (req, res) => {
   const { id } = req.params;
+
+  // Cek cache
+  const cached = cache.get(`product_${id}`);
+  if (cached) {
+    return res
+      .status(200)
+      .json({ message: "✅ Produk ditemukan (cache)", product: cached });
+  }
+
   try {
-    // Ambil produk tanpa kolom seller lama
     const { data: product, error } = await supabase
       .from("products")
       .select(
@@ -381,23 +391,18 @@ router.get("/:id", async (req, res) => {
       return res.status(404).json({ message: "❌ Produk tidak ditemukan" });
     }
 
-    // Tambahkan varian, stok, diskon
     const productsWithVariants =
       await attachVariantsStockDiscountWithRealDiscount([product]);
+    const result = { ...productsWithVariants[0], seller: product.seller };
 
-    // Kirim hasil
-    return res.status(200).json({
-      message: "✅ Produk ditemukan",
-      product: {
-        ...productsWithVariants[0], // produk lengkap
-        seller: product.seller, // objek seller hasil join
-      },
-    });
-  } catch (error) {
-    return res.status(500).json({
-      message: "❌ Gagal mengambil produk",
-      error: error.message,
-    });
+    cache.set(`product_${id}`, result);
+    return res
+      .status(200)
+      .json({ message: "✅ Produk ditemukan", product: result });
+  } catch (err) {
+    return res
+      .status(500)
+      .json({ message: "❌ Gagal mengambil produk", error: err.message });
   }
 });
 

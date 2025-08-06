@@ -6,17 +6,22 @@ const {
   attachVariantsStockDiscountWithRealDiscount,
 } = require("../utils/applyDiscountAndVariants");
 const { DateTime } = require("luxon");
+const NodeCache = require("node-cache");
+const cache = new NodeCache({ stdTTL: 10 });
 
 // GET Seller beserta produk-produknya
 router.get("/:id", async (req, res) => {
   const sellerId = req.params.id;
 
-  if (!sellerId) {
-    return res.status(400).json({ message: "❌ seller_id wajib diisi" });
+  const cached = cache.get(`seller_${sellerId}`);
+  if (cached) {
+    return res.status(200).json({
+      message: `✅ Seller & ${cached.products.length} produk berhasil diambil (cache)`,
+      ...cached,
+    });
   }
 
   try {
-    // Ambil detail seller
     const { data: seller, error: sellerError } = await supabase
       .from("sellers")
       .select("*")
@@ -27,7 +32,6 @@ router.get("/:id", async (req, res) => {
       return res.status(404).json({ message: "❌ Seller tidak ditemukan" });
     }
 
-    // Ambil semua produk milik seller
     const { data: products, error: productError } = await supabase
       .from("products")
       .select("*")
@@ -40,19 +44,19 @@ router.get("/:id", async (req, res) => {
       });
     }
 
-    // Tambahkan varian, stok, dan diskon
     const productsWithVariants =
       await attachVariantsStockDiscountWithRealDiscount(products);
+    const result = { seller, products: productsWithVariants };
 
+    cache.set(`seller_${sellerId}`, result);
     return res.status(200).json({
       message: `✅ Seller & ${productsWithVariants.length} produk berhasil diambil`,
-      seller,
-      products: productsWithVariants,
+      ...result,
     });
-  } catch (error) {
+  } catch (err) {
     return res.status(500).json({
       message: "❌ Gagal mengambil data seller beserta produk",
-      error: error.message,
+      error: err.message,
     });
   }
 });
