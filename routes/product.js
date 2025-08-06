@@ -344,30 +344,60 @@ router.get("/by-category/:category_id", async (req, res) => {
   }
 });
 
-// === Ambil produk berdasarkan ID ===
 router.get("/:id", async (req, res) => {
   const { id } = req.params;
   try {
-    const { data: product } = await supabase
+    // Ambil produk tanpa kolom seller lama
+    const { data: product, error } = await supabase
       .from("products")
-      .select("*")
+      .select(
+        `
+        id,
+        product_name,
+        product_description,
+        product_price,
+        product_image_url,
+        stock,
+        min_price,
+        max_price,
+        created_at,
+        category_id,
+        keywords,
+        seller:sellers (
+          id,
+          name,
+          email,
+          phone,
+          store_name,
+          store_address,
+          store_image_url
+        )
+      `,
+      )
       .eq("id", id)
       .single();
 
-    if (!product)
+    if (error || !product) {
       return res.status(404).json({ message: "❌ Produk tidak ditemukan" });
+    }
 
+    // Tambahkan varian, stok, diskon
     const productsWithVariants =
       await attachVariantsStockDiscountWithRealDiscount([product]);
 
+    // Kirim hasil
     return res.status(200).json({
       message: "✅ Produk ditemukan",
-      product: productsWithVariants[0],
+      product: {
+        ...productsWithVariants[0], // produk lengkap
+        seller: product.seller, // objek seller hasil join
+      },
     });
   } catch (error) {
-    return res
-      .status(500)
-      .json({ message: "❌ Gagal mengambil produk", error: error.message });
+    return res.status(500).json({
+      message: "❌ Gagal mengambil produk",
+      error: error.message,
+    });
   }
 });
 
