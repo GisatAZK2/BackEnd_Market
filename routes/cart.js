@@ -1,7 +1,7 @@
 const express = require("express");
 const supabase = require("../config/supabase");
 const {
-  getActiveDiscountForProduct,
+  attachVariantsStockDiscountWithRealDiscount,
   applyDiscount,
 } = require("../utils/applyDiscountAndVariants");
 const router = express.Router();
@@ -58,11 +58,9 @@ router.get("/cart", async (req, res) => {
           variant = v;
         }
 
-        const { discountPercentage } = await getActiveDiscountForProduct(
-          product.id,
-          product.store_id,
-          variant?.id || null,
-        );
+        const [productWithDiscount] =
+          await attachVariantsStockDiscountWithRealDiscount([product]);
+        const discountPercentage = productWithDiscount.discountPercentage;
 
         const basePrice = variant
           ? variant.variant_price
