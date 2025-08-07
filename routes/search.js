@@ -64,28 +64,64 @@ router.get("/", async (req, res) => {
 // ===== Meta =====
 router.get("/meta", async (req, res) => {
   try {
-    const { data: products, error } = await supabase
+    const q = req.query.q || "";
+
+    // Cari produk berdasarkan nama & keywords
+    const { data: mainProducts, error: mainError } = await supabase
       .from("products")
-      .select("id, product_name, seller_name, keywords");
+      .select("*")
+      .or(`product_name.ilike.%${q}%,keywords.cs.{${q}}`);
 
-    if (error) throw error;
+    if (mainError) throw mainError;
 
-    const keywords = [...new Set(products.flatMap((p) => p.keywords))];
-    const productNames = products.map((p) => ({
-      id: p.id,
-      name: p.product_name,
-      seller: p.seller_name,
-    }));
+    // Cari produk berdasarkan nama varian
+    const { data: variantProducts, error: variantError } = await supabase
+      .from("product_variants")
+      .select("product_id, variant_name")
+      .ilike("variant_name", `%${q}%`);
 
-    res.status(200).json({
-      message: "✅ Data meta berhasil diambil",
-      keywords,
-      productNames,
+    if (variantError) throw variantError;
+
+    // Ambil id produk dari hasil variant search
+    const variantProductIds = [
+      ...new Set(variantProducts.map((v) => v.product_id)),
+    ];
+
+    // Ambil produk yang berasal dari variant search tapi belum ada di mainProducts
+    let additionalProducts = [];
+    if (variantProductIds.length > 0) {
+      const mainProductIds = mainProducts.map((p) => p.id);
+      const missingProductIds = variantProductIds.filter(
+        (id) => !mainProductIds.includes(id),
+      );
+
+      if (missingProductIds.length > 0) {
+        const { data: missingProducts, error: missingError } = await supabase
+          .from("products")
+          .select("*")
+          .in("id", missingProductIds);
+
+        if (missingError) throw missingError;
+        additionalProducts = missingProducts;
+      }
+    }
+
+    // Gabungkan hasil produk
+    const products = [...mainProducts, ...additionalProducts];
+
+    // Proses meta (diskon, varian, stok)
+    const productsWithVariants =
+      await attachVariantsStockDiscountWithRealDiscount(products);
+
+    return res.status(200).json({
+      message: `✅ ${productsWithVariants.length} produk ditemukan`,
+      products: productsWithVariants,
     });
   } catch (error) {
-    res
-      .status(500)
-      .json({ message: "❌ Gagal mengambil data meta", error: error.message });
+    return res.status(500).json({
+      message: "❌ Gagal mencari produk meta",
+      error: error.message,
+    });
   }
 });
 
