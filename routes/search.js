@@ -5,7 +5,9 @@ const {
   attachVariantsStockDiscountWithRealDiscount,
 } = require("../utils/applyDiscountAndVariants");
 
-// ===== Search produk / seller =====
+// ===============================
+// 🔍 Search Produk by Keyword
+// ===============================
 router.get("/", async (req, res) => {
   const { q, limit = 20, offset = 0 } = req.query;
 
@@ -28,20 +30,10 @@ router.get("/", async (req, res) => {
 
     if (productErr) throw productErr;
 
-    // fallback ke seller_name
     if (!productResults || productResults.length === 0) {
-      const searchTerm = `%${q.toLowerCase()}%`;
-      const { data: sellerResults, error: sellerErr } = await supabase
-        .from("products")
-        .select("seller_name")
-        .ilike("seller_name", searchTerm);
-
-      if (sellerErr) throw sellerErr;
-
-      const sellers = [...new Set(sellerResults.map((p) => p.seller_name))];
       return res.status(200).json({
-        message: `✅ Tidak ada produk dengan kata kunci tersebut, tetapi ditemukan ${sellers.length} toko`,
-        sellers,
+        message: "❌ Tidak ditemukan produk dengan kata kunci tersebut",
+        products: [],
       });
     }
 
@@ -57,16 +49,52 @@ router.get("/", async (req, res) => {
   } catch (error) {
     res
       .status(500)
-      .json({ message: "❌ Gagal mencari data", error: error.message });
+      .json({ message: "❌ Gagal mencari data produk", error: error.message });
   }
 });
 
-// ===== Meta =====
+// ===============================
+// 🧑 Search Toko (seller_name)
+// ===============================
+// routes/seller.js
+router.get("/seller", async (req, res) => {
+  const { q, limit = 20, offset = 0 } = req.query;
+
+  if (!q || q.trim().length === 0) {
+    return res.status(400).json({ message: '❌ Parameter "q" wajib diisi' });
+  }
+
+  try {
+    const searchTerm = `%${q.toLowerCase()}%`;
+
+    const { data: sellers, error } = await supabase
+      .from("sellers")
+      .select("*")
+      .ilike("store_name", searchTerm)
+      .range(parseInt(offset), parseInt(offset) + parseInt(limit) - 1);
+
+    if (error) throw error;
+
+    return res.status(200).json({
+      message: `✅ Ditemukan ${sellers.length} seller`,
+      sellers,
+      pagination: { limit: parseInt(limit), offset: parseInt(offset) },
+    });
+  } catch (error) {
+    return res.status(500).json({
+      message: "❌ Gagal mencari seller",
+      error: error.message,
+    });
+  }
+});
+
+// ===============================
+// 🧠 Meta Produk (nama / keyword / varian)
+// ===============================
 router.get("/meta", async (req, res) => {
   try {
     const q = req.query.q || "";
 
-    // Cari produk berdasarkan nama & keywords
     const { data: mainProducts, error: mainError } = await supabase
       .from("products")
       .select("*")
@@ -74,7 +102,6 @@ router.get("/meta", async (req, res) => {
 
     if (mainError) throw mainError;
 
-    // Cari produk berdasarkan nama varian
     const { data: variantProducts, error: variantError } = await supabase
       .from("product_variants")
       .select("product_id, variant_name")
@@ -82,12 +109,10 @@ router.get("/meta", async (req, res) => {
 
     if (variantError) throw variantError;
 
-    // Ambil id produk dari hasil variant search
     const variantProductIds = [
       ...new Set(variantProducts.map((v) => v.product_id)),
     ];
 
-    // Ambil produk yang berasal dari variant search tapi belum ada di mainProducts
     let additionalProducts = [];
     if (variantProductIds.length > 0) {
       const mainProductIds = mainProducts.map((p) => p.id);
@@ -106,10 +131,7 @@ router.get("/meta", async (req, res) => {
       }
     }
 
-    // Gabungkan hasil produk
     const products = [...mainProducts, ...additionalProducts];
-
-    // Proses meta (diskon, varian, stok)
     const productsWithVariants =
       await attachVariantsStockDiscountWithRealDiscount(products);
 
@@ -125,7 +147,9 @@ router.get("/meta", async (req, res) => {
   }
 });
 
-// ===== Suggest =====
+// ===============================
+// 💡 Keyword Suggestion
+// ===============================
 router.get("/suggest", async (req, res) => {
   const { q, limit = 10 } = req.query;
 
@@ -166,7 +190,9 @@ router.get("/suggest", async (req, res) => {
   }
 });
 
-// ===== All product =====
+// ===============================
+// 📦 Get All Produk (Paginated)
+// ===============================
 router.get("/allproduct", async (req, res) => {
   const { limit = 50, offset = 0 } = req.query;
 
