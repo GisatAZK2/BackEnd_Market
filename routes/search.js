@@ -67,22 +67,61 @@ router.get("/seller", async (req, res) => {
   try {
     const searchTerm = `%${q.toLowerCase()}%`;
 
-    const { data: sellers, error } = await supabase
+    // Ambil seller yang cocok
+    const { data: sellers, error: sellerError } = await supabase
       .from("sellers")
       .select("*")
       .ilike("store_name", searchTerm)
       .range(parseInt(offset), parseInt(offset) + parseInt(limit) - 1);
 
-    if (error) throw error;
+    if (sellerError) throw sellerError;
+
+    // Kalau kosong, langsung balikin aja
+    if (!sellers || sellers.length === 0) {
+      return res.status(200).json({
+        message: "✅ Tidak ada seller ditemukan",
+        sellers: [],
+        pagination: { limit: parseInt(limit), offset: parseInt(offset) },
+      });
+    }
+
+    // Ambil semua seller_id dari hasil pencarian
+    const sellerIds = sellers.map((s) => s.id);
+
+    // Ambil semua produk yang seller_id-nya masuk dari hasil pencarian
+    const { data: products, error: productError } = await supabase
+      .from("products")
+      .select("*")
+      .in("seller_id", sellerIds);
+
+    if (productError) throw productError;
+
+    const productsWithVariants =
+      await attachVariantsStockDiscountWithRealDiscount(products);
+
+    // Kelompokkan produk berdasarkan seller_id
+    const groupedProducts = {};
+    for (const product of productsWithVariants) {
+      if (!groupedProducts[product.seller_id]) {
+        groupedProducts[product.seller_id] = [];
+      }
+      groupedProducts[product.seller_id].push(product);
+    }
+
+    // Gabungkan seller dengan produknya
+    const sellersWithProducts = sellers.map((seller) => ({
+      ...seller,
+      products: groupedProducts[seller.id] || [],
+    }));
 
     return res.status(200).json({
-      message: `✅ Ditemukan ${sellers.length} seller`,
-      sellers,
+      message: `✅ Ditemukan ${sellers.length} seller beserta produk`,
+      sellers: sellersWithProducts,
       pagination: { limit: parseInt(limit), offset: parseInt(offset) },
     });
   } catch (error) {
     return res.status(500).json({
-      message: "❌ Gagal mencari seller",
+      message: "❌ Gagal mencari seller beserta produk",
       error: error.message,
     });
   }
