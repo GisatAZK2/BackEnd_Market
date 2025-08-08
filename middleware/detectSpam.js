@@ -1,12 +1,14 @@
 const supabase = require("../config/supabase");
 
-// Limit: 5 request per 5 menit per IP per endpoint
 const RATE_LIMIT = 5;
 const WINDOW_MINUTES = 5;
 
 async function rateLimiter(req, res, next) {
-  const ip =
+  const rawIp =
     req.ip || req.headers["x-forwarded-for"] || req.connection.remoteAddress;
+
+  // Format IP: hilangkan ::ffff: jika ada (IPv6 mapped)
+  const ip = rawIp.replace(/^::ffff:/, "");
   const endpoint = req.originalUrl;
 
   const windowStart = new Date(
@@ -20,15 +22,20 @@ async function rateLimiter(req, res, next) {
     .eq("ip_address", ip)
     .eq("endpoint", endpoint);
 
-  if (error) return res.status(500).json({ error: "Rate limiter error" });
-
-  if (count >= RATE_LIMIT) {
-    return res
-      .status(429)
-      .json({ error: "Too many requests, please try again later." });
+  if (error) {
+    console.error("Rate limiter error:", error.message);
+    req.requireCaptcha = false;
+    return next();
   }
 
-  // Log request
+  req.requireCaptcha = count >= RATE_LIMIT;
+
+  // Debugging
+  console.log(
+    `📶 IP: ${ip} | Endpoint: ${endpoint} | Count: ${count} | Captcha? ${req.requireCaptcha}`,
+  );
+
+  // Simpan log
   await supabase.from("rate_limit_logs").insert({
     ip_address: ip,
     endpoint,
