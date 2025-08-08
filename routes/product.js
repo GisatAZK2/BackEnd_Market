@@ -8,7 +8,6 @@ const generateKeywords = require("../utils/keywordGenerator");
 const {
   applyDiscount,
   getActiveDiscountForProduct,
-  attachVariantsStockDiscount,
   attachVariantsStockDiscountWithRealDiscount,
 } = require("../utils/applyDiscountAndVariants");
 const NodeCache = require("node-cache");
