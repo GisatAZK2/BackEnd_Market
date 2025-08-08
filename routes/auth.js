@@ -23,8 +23,8 @@ const upload = multer({ storage });
 router.post(
   "/register",
   detectSpam,
-  verifyCaptcha,
   upload.single("avatar"),
+  verifyCaptcha,
   async (req, res) => {
     const { email, password, username } = req.body;
     console.log("Body register:", req.body);
