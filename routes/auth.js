@@ -8,6 +8,7 @@ const path = require("path");
 const fs = require("fs");
 const { createClient } = require("@supabase/supabase-js");
 const { generateOtp, sendPasswordResetEmail } = require("../utils/otp");
+const detectSpam = require("../middleware/detectSpam");
 const verifyCaptcha = require("../middleware/verifyCaptcha");
 
 const router = express.Router();
@@ -21,6 +22,7 @@ const upload = multer({ storage });
 // ======================== REGISTER ========================
 router.post(
   "/register",
+  detectSpam,
   verifyCaptcha,
   upload.single("avatar"),
   async (req, res) => {
@@ -146,7 +148,7 @@ router.post(
 );
 
 // ======================== VERIFIKASI OTP ========================
-router.post("/verify-otp", verifyCaptcha, async (req, res) => {
+router.post("/verify-otp", detectSpam, verifyCaptcha, async (req, res) => {
   const { email, otp, mode = "email" } = req.body;
 
   try {
@@ -227,7 +229,7 @@ router.post("/verify-otp", verifyCaptcha, async (req, res) => {
 });
 
 // ======================== LOGIN ========================
-router.post("/login", verifyCaptcha, async (req, res) => {
+router.post("/login", detectSpam, verifyCaptcha, async (req, res) => {
   const { email, password } = req.body;
 
   try {
@@ -283,7 +285,7 @@ router.post("/login", verifyCaptcha, async (req, res) => {
 });
 
 // ======================== LUPA PASSWORD ========================
-router.post("/forgot-password", verifyCaptcha, async (req, res) => {
+router.post("/forgot-password", detectSpam, verifyCaptcha, async (req, res) => {
   const { email, resetLink } = req.body;
 
   try {
@@ -312,7 +314,7 @@ router.post("/forgot-password", verifyCaptcha, async (req, res) => {
 // lanjutan forgot password
 
 // ======================== RESET PASSWORD ========================
-router.post("/reset-password", verifyCaptcha, async (req, res) => {
+router.post("/reset-password", detectSpam, verifyCaptcha, async (req, res) => {
   const { email, newPassword } = req.body;
 
   try {
@@ -376,6 +378,7 @@ router.get("/user/:id", async (req, res) => {
 // ======================== UPDATE USER ========================
 router.put(
   "/user/:id",
+  detectSpam,
   verifyCaptcha,
   upload.single("avatar"),
   async (req, res) => {
@@ -500,7 +503,7 @@ router.delete("/user/:id", async (req, res) => {
   }
 });
 
-router.post("/login/google", verifyCaptcha, async (req, res) => {
+router.post("/login/google", detectSpam, verifyCaptcha, async (req, res) => {
   const { provider_token } = req.body;
   if (!provider_token) {
     return res.status(400).json({ error: "Token Google tidak ditemukan." });
