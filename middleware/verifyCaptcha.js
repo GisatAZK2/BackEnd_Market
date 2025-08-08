@@ -2,8 +2,13 @@ const axios = require("axios");
 
 const verifyCaptcha = async (req, res, next) => {
   const token = req.body.captchaToken;
+
   const isCaptchaRequired = req.requireCaptcha === true;
 
+  // Bypass CAPTCHA jika:
+  // - CAPTCHA tidak diwajibkan
+  // - Bukan production
+  // - Token adalah "test-dev-bypass"
   const skipCaptcha =
     !isCaptchaRequired ||
     process.env.NODE_ENV !== "production" ||
@@ -45,7 +50,7 @@ const verifyCaptcha = async (req, res, next) => {
     }
 
     console.log("✅ CAPTCHA verified");
-    next(); // Lolos
+    return next(); // Lolos CAPTCHA
   } catch (err) {
     console.error("CAPTCHA verification error:", err.message);
     return res.status(500).json({
