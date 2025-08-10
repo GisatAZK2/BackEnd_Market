@@ -10,6 +10,7 @@ const {
 
 const NodeCache = require("node-cache");
 const cache = new NodeCache({ stdTTL: 60, checkperiod: 120 });
+const orderCache = new NodeCache({ stdTTL: 30, checkperiod: 60 });
 
 // Helper: parsing aman untuk URL gambar
 function safeParseImageUrl(data) {
@@ -264,8 +265,8 @@ router.post("/cart/checkout", detectspam, verifyCaptcha, async (req, res) => {
   }
 });
 
-// === List semua order milik user login ===
-router.get("/cart/orders", async (req, res) => {
+// === List semua order milik user login (pakai cache) ===
+router.get("/all", async (req, res) => {
   try {
     const userInfo = req.cookies?.user_info
       ? JSON.parse(req.cookies.user_info)
@@ -277,22 +278,88 @@ router.get("/cart/orders", async (req, res) => {
         .json({ message: "❌ Harus login untuk melihat daftar order." });
     }
 
-    const { data: orders, error } = await supabase
-      .from("orders")
-      .select("*, users(*)") // ambil info user
-      .eq("user_id", userInfo.id)
-      .order("created_at", { ascending: false });
+    const cacheKey = `orders:list:${userInfo.id}`;
+    let orders = orderCache.get(cacheKey);
 
-    if (error) {
-      return res
-        .status(500)
-        .json({ message: "❌ Gagal mengambil data order.", error });
+    if (!orders) {
+      const { data: ordersData, error } = await supabase
+        .from("orders")
+        .select(
+          `
+          id,
+          created_at,
+          total_price,
+          delivery_fee,
+          status,
+          pickup_method,
+          pickup_deadline,
+          order_items (
+            id,
+            product_id,
+            variant_id,
+            quantity,
+            products (
+              id,
+              product_name,
+              product_image_url
+            )
+          )
+        `,
+        )
+        .eq("user_id", userInfo.id)
+        .order("created_at", { ascending: false });
+
+      if (error) {
+        return res
+          .status(500)
+          .json({ message: "❌ Gagal mengambil data order.", error });
+      }
+
+      const allProducts = [];
+      ordersData.forEach((order) => {
+        order.order_items.forEach((item) => {
+          if (item.products) {
+            allProducts.push(item.products);
+          }
+        });
+      });
+
+      const uniqueProducts = [
+        ...new Map(allProducts.map((p) => [p.id, p])).values(),
+      ];
+
+      const enrichedProducts =
+        await attachVariantsStockDiscountWithRealDiscount(uniqueProducts);
+
+      orders = ordersData.map((order) => ({
+        id: order.id,
+        created_at: order.created_at,
+        total_price: order.total_price,
+        delivery_fee:
+          order.pickup_method === "diantar" ? order.delivery_fee : 0,
+        status: order.status,
+        pickup_method: order.pickup_method,
+        pickup_deadline: order.pickup_deadline,
+        order_items: order.order_items.map((item) => {
+          const product = enrichedProducts.find(
+            (p) => p.id === item.product_id,
+          );
+          return {
+            id: item.id,
+            quantity: item.quantity,
+            variant_id: item.variant_id,
+            product: product || null,
+          };
+        }),
+      }));
+
+      orderCache.set(cacheKey, orders);
     }
 
     return res.status(200).json({
       message: "✅ Daftar order berhasil diambil.",
-      user_info: userInfo,
       orders,
+      cache: !!orderCache.get(cacheKey),
     });
   } catch (err) {
     console.error("❌ Server error:", err);
@@ -302,8 +369,9 @@ router.get("/cart/orders", async (req, res) => {
   }
 });
 
-// === Get detail order by ID ===
-router.get("/cart/orders/:id", async (req, res) => {
+// === Get detail order by ID (pakai cache) ===
+// === Get detail order by ID (pakai cache) ===
+router.get("/:id", async (req, res) => {
   try {
     const userInfo = req.cookies?.user_info
       ? JSON.parse(req.cookies.user_info)
@@ -312,41 +380,143 @@ router.get("/cart/orders/:id", async (req, res) => {
     if (!userInfo?.id) {
       return res
         .status(401)
-        .json({ message: "❌ Harus login untuk melihat detail order." });
+        .json({ message: "❌ Harus login untuk melihat order." });
     }
 
-    const { id } = req.params;
+    const orderId = req.params.id;
+    const cacheKey = `order:${userInfo.id}:${orderId}`;
 
-    // Ambil order + items + produk
-    const { data: order, error } = await supabase
-      .from("orders")
-      .select(
-        `
-        *,
-        users(*),
-        order_items(
-          *,
-          products(*),
-          variants(*)
-        )
-      `,
-      )
-      .eq("id", id)
-      .eq("user_id", userInfo.id) // pastikan order milik user ini
-      .single();
-
-    if (error || !order) {
-      return res.status(404).json({
-        message: "❌ Order tidak ditemukan.",
-        error: error?.message,
+    // Cek cache
+    let orderResponse = orderCache.get(cacheKey);
+    if (orderResponse) {
+      return res.status(200).json({
+        message: "✅ Order berhasil diambil (cache).",
+        order: orderResponse,
       });
     }
 
-    return res.status(200).json({
-      message: "✅ Detail order berhasil diambil.",
-      user_info: userInfo,
-      order,
+    // Ambil 1 order + item yang dipesan + produk (hanya kolom perlu)
+    const { data: orderData, error } = await supabase
+      .from("orders")
+      .select(
+        `
+        id,
+        created_at,
+        total_price,
+        delivery_fee,
+        status,
+        pickup_method,
+        pickup_deadline,
+        order_items (
+          id,
+          product_id,
+          variant_id,
+          quantity,
+          products (
+            id,
+            product_name,
+            product_image_url
+          )
+        )
+      `,
+      )
+      .eq("user_id", userInfo.id)
+      .eq("id", orderId)
+      .single();
+
+    if (error) {
+      return res
+        .status(500)
+        .json({ message: "❌ Gagal mengambil data order.", error });
+    }
+    if (!orderData) {
+      return res.status(404).json({ message: "❌ Order tidak ditemukan." });
+    }
+
+    // Ambil semua produk unik dan enrich sekaligus
+    const productMap = {};
+    orderData.order_items.forEach((item) => {
+      if (item.products && !productMap[item.products.id]) {
+        productMap[item.products.id] = item.products;
+      }
     });
+
+    const enrichedProducts = await attachVariantsStockDiscountWithRealDiscount(
+      Object.values(productMap),
+    );
+    const enrichedMap = Object.fromEntries(
+      enrichedProducts.map((p) => [p.id, p]),
+    );
+
+    // Mapping item langsung
+    const mappedItems = orderData.order_items
+      .map((item) => {
+        const productData = enrichedMap[item.product_id];
+        if (!productData) return null;
+
+        if (item.variant_id) {
+          const variantData = productData.variants?.find(
+            (v) => v.id === item.variant_id,
+          );
+          return {
+            type: "variant",
+            id_product: productData.id,
+            id: variantData?.id || null,
+            product_name: productData.product_name,
+            variant_name: variantData?.variant_name || null,
+            variant_image_url: variantData?.variant_image_url || null,
+            quantity: item.quantity,
+            original_price: variantData?.price || 0,
+            applied_discount: variantData?.discount || 0,
+            final_price:
+              variantData?.finalPrice ??
+              Math.max(
+                0,
+                variantData?.price -
+                  (variantData?.price * (variantData?.discount || 0)) / 100,
+              ),
+          };
+        }
+
+        return {
+          type: "single",
+          id_product: productData.id,
+          product_name: productData.product_name,
+          product_image_url: productData.product_image_url,
+          quantity: item.quantity,
+          product_price: productData.price,
+          discountPercentage: productData.discount || 0,
+          finalPrice:
+            productData.finalPrice ??
+            Math.max(
+              0,
+              productData.price -
+                (productData.price * (productData.discount || 0)) / 100,
+            ),
+        };
+      })
+      .filter(Boolean);
+
+    // Buat response
+    orderResponse = {
+      id: orderData.id,
+      created_at: orderData.created_at,
+      total_price: orderData.total_price,
+      delivery_fee: orderData.delivery_fee,
+      status: orderData.status,
+      order_items: mappedItems,
+    };
+
+    if (orderData.pickup_method === "diambil") {
+      orderResponse.pickup_deadline = orderData.pickup_deadline;
+    }
+
+    // Simpan ke cache
+    orderCache.set(cacheKey, orderResponse);
+
+    return res
+      .status(200)
+      .json({ message: "✅ Order berhasil diambil.", order: orderResponse });
   } catch (err) {
     console.error("❌ Server error:", err);
     return res

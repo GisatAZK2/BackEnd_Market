@@ -1,4 +1,5 @@
 const nodemailer = require("nodemailer");
+const QRCodeGen = require("qrcode-generator");
 
 const FROM_EMAIL = "gisatazk2@gmail.com";
 const EMAIL_PASSWORD = "kpld krrk ratp hbyl"; // App password Gmail
@@ -18,15 +19,35 @@ async function sendOrderNotification({
   seller_email,
   buyer_username,
 }) {
-  const htmlEmailTemplate = (title, message, isBuyer) => {
+  const generateQRCode = (text) => {
+    try {
+      const qr = QRCodeGen(0, "M"); // typeNumber 0 = auto, Error Correction M
+      qr.addData(text);
+      qr.make();
+      return qr.createDataURL(6); // 6 = ukuran pixel per modul
+    } catch (err) {
+      console.error("Error generating QR code:", err);
+      return null;
+    }
+  };
+
+  const htmlEmailTemplate = (title, message, isBuyer, qrCodeUrl) => {
     const productListHTML = products
       .map(
         (p) => `
       <div class="product">
-        <div><strong>${p.product_name}</strong> ${p.variant_name ? `- ${p.variant_name}` : ""}</div>
+        <div><strong>${p.product_name}</strong> ${
+          p.variant_name ? `- ${p.variant_name}` : ""
+        }</div>
         <div>Jumlah: ${p.quantity}</div>
-        <div>Total Harga: <span class="highlight">Rp${p.total_price.toLocaleString("id-ID")}</span></div>
-        ${p.product_image_url ? `<img src="${p.product_image_url}" alt="${p.product_name}" style="max-width:120px;border-radius:6px;margin-top:5px;">` : ""}
+        <div>Total Harga: <span class="highlight">Rp${p.total_price.toLocaleString(
+          "id-ID",
+        )}</span></div>
+        ${
+          p.product_image_url
+            ? `<img src="${p.product_image_url}" alt="${p.product_name}" style="max-width:120px;border-radius:6px;margin-top:5px;">`
+            : ""
+        }
       </div>
       <hr>
     `,
@@ -46,6 +67,7 @@ async function sendOrderNotification({
           .highlight { color: ${isBuyer ? "#4CAF50" : "#2196F3"}; font-weight: bold; }
           img { display:block; margin-top:10px; }
           hr { border: none; border-top: 1px solid #ddd; margin: 10px 0; }
+          .qr-code { margin-top: 20px; }
         </style>
       </head>
       <body>
@@ -53,13 +75,24 @@ async function sendOrderNotification({
           <div class="header"><h2>${title}</h2></div>
           <p>${message}</p>
           ${productListHTML}
-          ${!isBuyer ? `<p>Pembeli: <span class="highlight">${buyer_username}</span></p>` : ""}
+          ${
+            !isBuyer
+              ? `<p>Pembeli: <span class="highlight">${buyer_username}</span></p>`
+              : ""
+          }
           <p><strong>ID Pesanan:</strong> ${order_id}</p>
+          ${
+            qrCodeUrl
+              ? `<img src="${qrCodeUrl}" alt="QR Code" class="qr-code" style="max-width:150px;">`
+              : ""
+          }
         </div>
       </body>
       </html>
     `;
   };
+
+  const qrCodeUrl = generateQRCode(order_id);
 
   const tasks = [];
 
@@ -73,6 +106,7 @@ async function sendOrderNotification({
           "🎉 Terima kasih sudah memesan!",
           "Pesanan Anda sedang diproses dan siap diambil dalam 6 jam.",
           true,
+          qrCodeUrl,
         ),
       }),
     );
@@ -88,6 +122,7 @@ async function sendOrderNotification({
           "📢 Pesanan Baru Diterima!",
           "Segera proses pesanan ini agar pembeli puas.",
           false,
+          qrCodeUrl,
         ),
       }),
     );

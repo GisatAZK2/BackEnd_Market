@@ -18,6 +18,7 @@ const apicache = require("apicache");
 const path = require("path");
 const startCronJobs = require("./utils/restoreStock");
 const sellerWithProductsRoutes = require("./routes/seller");
+const { router: wilayah } = require("./utils/wilayahutils");
 require("./utils/cron");
 require("dotenv").config();
 
@@ -102,6 +103,7 @@ const cache = apicache.middleware;
 app.use("/auth", authRoutes);
 app.use("/forum-pendaftaran", forumpendaftaran);
 app.use("/product", productRoutes);
+app.use(wilayah);
 app.use("/categories", cache("10 minutes"), category);
 app.use("/search", cache("2 minutes"), search);
 app.use("/clean", clean);
