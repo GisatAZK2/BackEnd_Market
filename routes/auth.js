@@ -10,6 +10,7 @@ const { createClient } = require("@supabase/supabase-js");
 const { generateOtp, sendPasswordResetEmail } = require("../utils/otp");
 const detectSpam = require("../middleware/detectSpam");
 const verifyCaptcha = require("../middleware/verifyCaptcha");
+const fetch = require("node-fetch");
 
 const router = express.Router();
 const supabaseAdmin = createClient(
@@ -374,99 +375,125 @@ router.get("/user/:id", async (req, res) => {
   res.json({ user });
 });
 
-// ======================== UPDATE USER ========================
-// ======================== UPDATE USER ========================
+// ====================== UPDATE USER ======================
+async function getWilayahName(url, id) {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error("Gagal fetch data wilayah");
+  const list = await res.json();
+  const found = list.find((item) => item.id == id);
+  if (!found) throw new Error(`Wilayah dengan id ${id} tidak ditemukan`);
+  return found.name;
+}
+
 router.put(
   "/user/:id",
+  upload.single("avatar"),
   detectSpam,
   verifyCaptcha,
-  upload.single("avatar"),
   async (req, res) => {
-    const cookie = req.cookies.user_info;
-    if (!cookie)
-      return res.status(401).json({ error: "Tidak ada sesi login." });
+    // Pastikan user sudah login dan ID cocok (kalau perlu validasi session/cookie di sini)
 
-    let userInfo;
-    try {
-      userInfo = JSON.parse(cookie);
-    } catch (e) {
-      return res.status(400).json({ error: "Cookie tidak valid." });
-    }
+    // Ambil semua field dari body, dukung nama field dengan dan tanpa `_id`
+    const username = req.body.username;
+    const password = req.body.password;
+    const nama_penerima = req.body.nama_penerima;
+    const no_telepon = req.body.no_telepon;
+    const alamat_lengkap = req.body.alamat_lengkap;
+    const kode_pos = req.body.kode_pos;
 
-    if (userInfo.id !== req.params.id) {
-      return res
-        .status(403)
-        .json({ error: "Tidak boleh update data user lain." });
-    }
+    const provinsi_id = req.body.provinsi_id || req.body.provinsi;
+    const kota_id = req.body.kota_id || req.body.kota;
+    const kecamatan_id = req.body.kecamatan_id || req.body.kecamatan;
+    const kelurahan_id = req.body.kelurahan_id || req.body.kelurahan;
 
-    const { username, password } = req.body;
+    const updatePayload = {};
 
     try {
-      // Ambil user lama
-      const { data: oldUser, error: oldUserErr } = await supabase
-        .from("users")
-        .select("avatar")
-        .eq("id", req.params.id)
-        .single();
-      if (oldUserErr || !oldUser) {
-        return res.status(404).json({ error: "User tidak ditemukan." });
-      }
-
-      const updatePayload = {};
-
-      // === Update username & password ===
+      // Username
       if (username) updatePayload.username = username;
-      if (password) {
-        const hashed = await bcrypt.hash(password, 10);
-        updatePayload.password = hashed;
+
+      // Password (hash)
+      if (password) updatePayload.password = await bcrypt.hash(password, 10);
+
+      // Provinsi
+      if (provinsi_id) {
+        const provinsi_name = await getWilayahName(
+          "https://www.emsifa.com/api-wilayah-indonesia/api/provinces.json",
+          provinsi_id,
+        );
+        updatePayload.provinsi = provinsi_name;
       }
 
-      // === Update avatar jika ada file baru ===
+      // Kota/Kabupaten
+      if (kota_id && provinsi_id) {
+        const kota_name = await getWilayahName(
+          `https://www.emsifa.com/api-wilayah-indonesia/api/regencies/${provinsi_id}.json`,
+          kota_id,
+        );
+        updatePayload.kota_kabupaten = kota_name;
+      }
+
+      // Kecamatan
+      if (kecamatan_id && kota_id) {
+        const kecamatan_name = await getWilayahName(
+          `https://www.emsifa.com/api-wilayah-indonesia/api/districts/${kota_id}.json`,
+          kecamatan_id,
+        );
+        updatePayload.kecamatan = kecamatan_name;
+      }
+
+      // Kelurahan
+      if (kelurahan_id && kecamatan_id) {
+        const kelurahan_name = await getWilayahName(
+          `https://www.emsifa.com/api-wilayah-indonesia/api/villages/${kecamatan_id}.json`,
+          kelurahan_id,
+        );
+        updatePayload.kelurahan = kelurahan_name;
+      }
+
+      // Data lain
+      if (kode_pos) updatePayload.kode_pos = kode_pos;
+      if (nama_penerima) updatePayload.nama_penerima = nama_penerima;
+      if (no_telepon) updatePayload.no_telepon = no_telepon;
+      if (alamat_lengkap) updatePayload.alamat_lengkap = alamat_lengkap;
+
+      // Avatar update
       if (req.file) {
-        const filename = `avatar_${Date.now()}.webp`;
-
-        // Hapus avatar lama kalau ada dan bukan default
-        if (oldUser.avatar && !oldUser.avatar.includes("avatar_default")) {
-          const oldPath = oldUser.avatar.split("/").pop(); // ambil nama file saja
-          await supabase.storage.from("avatars").remove([oldPath]);
-        }
-
-        const buffer = await sharp(req.file.buffer)
-          .webp({ quality: 80 })
-          .toBuffer();
-
-        const { error: uploadErr } = await supabase.storage
+        const fileExt = path.extname(req.file.originalname);
+        const fileName = `avatar_${Date.now()}${fileExt}`;
+        const { data: uploadData, error: uploadError } = await supabase.storage
           .from("avatars")
-          .upload(filename, buffer, {
-            contentType: "image/webp",
+          .upload(fileName, req.file.buffer, {
+            contentType: req.file.mimetype,
             upsert: true,
           });
 
-        if (uploadErr) {
-          console.error("Upload avatar error:", uploadErr);
-          return res.status(500).json({ error: "Gagal upload avatar baru." });
-        }
+        if (uploadError) throw uploadError;
 
-        const { data: publicUrl } = supabase.storage
+        const { data: publicUrlData } = supabase.storage
           .from("avatars")
-          .getPublicUrl(filename);
+          .getPublicUrl(fileName);
 
-        updatePayload.avatar = publicUrl.publicUrl;
+        updatePayload.avatar = publicUrlData.publicUrl;
       }
 
-      // Update ke database
+      // Simpan ke database
       const { data, error } = await supabase
         .from("users")
         .update(updatePayload)
         .eq("id", req.params.id)
-        .select("id, email, username, avatar");
+        .select(
+          "id, email, username, avatar, provinsi, kota_kabupaten, kecamatan, kelurahan, kode_pos, nama_penerima, no_telepon, alamat_lengkap",
+        );
 
       if (error) throw error;
 
-      res.json({ message: "User berhasil diupdate.", user: data[0] });
+      res.json({ message: "✅ User berhasil diupdate.", user: data[0] });
     } catch (err) {
       console.error("Update user error:", err);
-      res.status(500).json({ error: "Gagal update user." });
+      res
+        .status(500)
+        .json({ error: "Gagal update user.", detail: err.message });
     }
   },
 );
