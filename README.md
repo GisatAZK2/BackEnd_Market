@@ -10,18 +10,6 @@ Proyek ini menyediakan API berbasis Express.js untuk mengambil data wilayah admi
 2. **Memperbarui Profil Pengguna**:
    - Kirim permintaan `PUT` ke `https://backendmarket-production.up.railway.app/auth/user/:id` dengan field yang diperlukan.
    - Sertakan cookie `user_info` untuk otentikasi.
-   - Sertakan file avatar (opsional) dan ID wilayah untuk pembaruan Gambar.
-   - Contoh menggunakan `curl`:
-     ```bash
-     curl -X PUT http://localhost:3000/user/123 \
-       -H "Cookie: user_info=nilai_cookie_anda" \
-       -F "username=nama_pengguna_baru" \
-       -F "provinsi_id=11" \
-       -F "kota_id=1101" \
-       -F "kecamatan_id=110101" \
-       -F "kelurahan_id=1101012001" \
-       -F "avatar=@/path/to/avatar.jpg"
-     ```
 
 ## Daftar Isi
 - [Fitur](#fitur)
