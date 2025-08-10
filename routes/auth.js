@@ -357,22 +357,38 @@ router.get("/user/:id", async (req, res) => {
     return res.status(400).json({ error: "Cookie tidak valid." });
   }
 
-  // Pastikan cookie user_info.id sama dengan param id
   if (userInfo.id !== req.params.id) {
     return res.status(403).json({ error: "Sesi login tidak valid." });
   }
 
-  // === Tambahin avatar di select ===
   const { data: user, error } = await supabase
     .from("users")
-    .select("id, email, username, verified, avatar")
+    .select(
+      `id, email, username, verified, avatar, provinsi, kota_kabupaten, kecamatan, kelurahan, kode_pos, nama_penerima, no_telepon, alamat_lengkap`,
+    )
     .eq("id", req.params.id)
     .single();
 
   if (error || !user)
     return res.status(404).json({ error: "User tidak ditemukan." });
 
-  res.json({ user });
+  // Gabungkan alamat
+  const alamat_lengkap_combine = [
+    user.alamat_lengkap,
+    user.kelurahan,
+    user.kecamatan,
+    user.kota_kabupaten,
+    user.kode_pos,
+  ]
+    .filter(Boolean) // buang yg falsy/null/undefined
+    .join(", ");
+
+  res.json({
+    user: {
+      ...user,
+      alamat_lengkap_combine,
+    },
+  });
 });
 
 // ====================== UPDATE USER ======================
