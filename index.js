@@ -19,10 +19,13 @@ const path = require("path");
 const startCronJobs = require("./utils/restoreStock");
 const sellerWithProductsRoutes = require("./routes/seller");
 const { router: wilayah } = require("./utils/wilayahutils");
+const authseller = require("./routes/seller/auth.js");
+const orderseller = require("./routes/seller/order.js");
 require("./utils/cron");
 require("dotenv").config();
 
 const app = express();
+const sellerRouter = express.Router();
 startCronJobs();
 
 // === CORS ORIGINS ===
