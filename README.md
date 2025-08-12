@@ -255,7 +255,33 @@ Membuat order berdasarkan item yang di-checkout, mengelompokkan berdasarkan sell
 
 **Response**:
 ```json
-
+{
+    "message": "✅ Berhasil checkout 2 order. (⏱ 0.281s)",
+    "orders": [
+        {
+            "id": "fb06073f-6276-4755-8f82-3827afbd06ff",
+            "user_id": "7bd2b9bf-231b-487b-a372-471f12fa990c",
+            "seller_id": "f664dffe-184c-4aeb-a37f-f16ea4adef84",
+            "total_price": 74500,
+            "delivery_fee": 12000,
+            "pickup_method": "diantar",
+            "status": "pending",
+            "pickup_deadline": null,
+            "created_at": "2025-08-12T23:03:14.748796"
+        },
+        {
+            "id": "ba9c4643-ee6c-4de5-8099-a38f33cd9cda",
+            "user_id": "7bd2b9bf-231b-487b-a372-471f12fa990c",
+            "seller_id": "f6480e57-017c-47a1-be8e-b85f33882f6c",
+            "total_price": 70000,
+            "delivery_fee": 10000,
+            "pickup_method": "diantar",
+            "status": "pending",
+            "pickup_deadline": null,
+            "created_at": "2025-08-12T23:03:14.845837"
+        }
+    ]
+}
 ```
 
 ### Kasus 2: Semua Produk Diambil (Root `pickupMethod = "diambil"`)
