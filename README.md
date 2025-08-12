@@ -1,8 +1,6 @@
 # Dokumentasi API Checkout & Delivery Fee
 
-Dokumentasi ini线索
-
-System: ini menjelaskan dua endpoint API untuk menghitung biaya ongkir dan memproses checkout berdasarkan produk serta metode pengambilan (`pickupMethod`).
+Dokumentasi System: ini menjelaskan dua endpoint API untuk menghitung biaya ongkir dan memproses checkout berdasarkan produk serta metode pengambilan (`pickupMethod`), Serta Pengamilan Seluruh Order Yang Di pesan oleh Customer Beserta Detail Order V1.
 
 ## Penting!
 
