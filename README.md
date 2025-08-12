@@ -7,7 +7,7 @@ Dokumentasi System: ini menjelaskan dua endpoint API untuk menghitung biaya ongk
 **⚠️ Harap Untuk Membaca Kasus Lebih Lanjut Untuk Rute Checkout Dan delivery_fee ⚠️**
 
 ## Daftar Isi
-- [POST `/cart/delivery-fee`](#1-post-cartdelivery-fee)
+- [POST `/order/cart/delivery-fee`](#1-post-cartdelivery-fee)
   - [Deskripsi](#deskripsi)
   - [Request Body](#request-body)
   - [Response Sukses (200)](#response-sukses-200)
@@ -15,7 +15,7 @@ Dokumentasi System: ini menjelaskan dua endpoint API untuk menghitung biaya ongk
   - [Kasus 1: Semua Produk Diantar](#kasus-1-semua-produk-diantar)
   - [Kasus 2: Semua Produk Diambil (Pickup)](#kasus-2-semua-produk-diambil-pickup)
   - [Kasus 3: Campuran Produk Diantar dan Diambil](#kasus-3-campuran-produk-diantar-dan-diambil)
-- [POST `/cart/checkout`](#2-post-cartcheckout)
+- [POST `/order/cart/checkout`](#2-post-cartcheckout)
   - [Deskripsi](#deskripsi-1)
   - [Request Body](#request-body-1)
   - [Response Sukses (200)](#response-sukses-200-1)
@@ -23,13 +23,13 @@ Dokumentasi System: ini menjelaskan dua endpoint API untuk menghitung biaya ongk
   - [Kasus 1: Semua Produk Diantar](#kasus-1-semua-produk-diantar)
   - [Kasus 2: Semua Produk Diambil (Pickup)](#kasus-2-semua-produk-diambil-pickup)
   - [Kasus 3: Campuran Produk Diantar dan Diambil](#kasus-3-campuran-produk-diantar-dan-diambil)
-- [GET `/all`](#3-get-all)
+- [GET `/order/all`](#3-get-all)
   - [Deskripsi](#deskripsi-3)
-- [GET `/:id`](#4-get-id)
+- [GET `/order/:id`](#4-get-id)
   - [Deskripsi](#deskripsi-4)
 - [Catatan](#catatan)
 
-## 1. POST `/cart/delivery-fee` (Default)
+## 1. POST `/order/cart/delivery-fee` (Default)
 
 ### Deskripsi
 Menghitung biaya ongkir dan total harga per seller berdasarkan produk yang di-checkout dan metode pengambilan (`pickupMethod`).
@@ -85,7 +85,7 @@ Menghitung biaya ongkir dan total harga per seller berdasarkan produk yang di-ch
 }
 ```
 
-## 2. POST `/cart/checkout`
+## 2. POST `/order/cart/checkout`
 
 ### Deskripsi
 Membuat order berdasarkan item yang di-checkout, mengelompokkan berdasarkan seller dan metode pengambilan. Mengirim notifikasi email dan menghapus item dari keranjang.
