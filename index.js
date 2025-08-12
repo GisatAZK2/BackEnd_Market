@@ -1,10 +1,19 @@
 const express = require("express");
 const cors = require("cors");
 const bodyParser = require("body-parser");
+const cookieParser = require("cookie-parser");
+const apicache = require("apicache");
+const path = require("path");
+require("dotenv").config();
+
+// === Middleware & Utils ===
 const requireApiKey = require("./middleware/requireApiKey");
 const rateLimiter = require("./middleware/ratelimiter");
+const startCronJobs = require("./utils/restoreStock");
+require("./utils/cron");
+
+// === Routes ===
 const authRoutes = require("./routes/auth");
-const forumpendaftaran = require("./routes/forum-pendaftaran");
 const productRoutes = require("./routes/product");
 const category = require("./routes/category");
 const search = require("./routes/search");
@@ -13,19 +22,15 @@ const order = require("./routes/orderRoutes");
 const share = require("./routes/ogpmeta");
 const cart = require("./routes/cart");
 const discount = require("./routes/discount");
-const cookieParser = require("cookie-parser");
-const apicache = require("apicache");
-const path = require("path");
-const startCronJobs = require("./utils/restoreStock");
 const sellerWithProductsRoutes = require("./routes/seller");
 const { router: wilayah } = require("./utils/wilayahutils");
+
+// === Seller sub-routes ===
 const authseller = require("./routes/seller/auth.js");
 const orderseller = require("./routes/seller/order.js");
-require("./utils/cron");
-require("dotenv").config();
+const formseller = require("./routes/seller/forum-pendaftaran.js");
 
 const app = express();
-const sellerRouter = express.Router();
 startCronJobs();
 
 // === CORS ORIGINS ===
@@ -40,10 +45,12 @@ const corsOptions = {
     if (!origin) return callback(null, true);
 
     const cleanedOrigin = origin.replace(/\/$/, "");
+
     // khusus share
     if (cleanedOrigin === "https://sharecihuy.sytes.net") {
       return callback(null, true);
     }
+
     // dev local bebas
     if (
       process.env.NODE_ENV !== "production" &&
@@ -51,10 +58,12 @@ const corsOptions = {
     ) {
       return callback(null, true);
     }
+
     // check daftar allowed
     if (allowedOrigins.includes(cleanedOrigin)) {
       return callback(null, true);
     }
+
     console.warn("❌ CORS blocked for origin:", origin);
     return callback(new Error("Not allowed by CORS"));
   },
@@ -75,7 +84,6 @@ app.get("/favicon.ico", (req, res) => {
 });
 
 // === khusus endpoint /share ===
-// hanya izinkan https://sharecihuy.sytes.net
 app.use(
   "/share",
   (req, res, next) => {
@@ -102,9 +110,9 @@ app.use((req, res, next) => {
 // === Cache Middleware ===
 const cache = apicache.middleware;
 
-// === Routes ===
+// === Routes utama ===
 app.use("/auth", authRoutes);
-app.use("/forum-pendaftaran", forumpendaftaran);
+
 app.use("/product", productRoutes);
 app.use(wilayah);
 app.use("/categories", cache("10 minutes"), category);
@@ -114,6 +122,16 @@ app.use("/order", order);
 app.use("/cart", cache("10 seconds"), cart);
 app.use("/discount", discount);
 app.use("/seller", cache("10 seconds"), sellerWithProductsRoutes);
+
+// === Seller V1 routes (nested router) ===
+const sellerRouter = express.Router();
+sellerRouter.use("/auth", authseller);
+sellerRouter.use("/order", orderseller);
+sellerRouter.use("/forum-pendaftaran", formseller);
+sellerRouter.get("/test", (req, res) => {
+  res.json({ message: "Seller V1 API aktif 🚀" });
+});
+app.use("/seller/V1", sellerRouter);
 
 // === Start server ===
 const PORT = process.env.PORT || 3000;
