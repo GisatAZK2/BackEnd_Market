@@ -288,7 +288,7 @@ router.post("/cart/checkout", detectspam, verifyCaptcha, async (req, res) => {
 // === DELIVERY FEE ===
 router.post("/cart/delivery-fee", async (req, res) => {
   try {
-    const { itemsToCheckout } = req.body;
+    const { itemsToCheckout, pickupMethod } = req.body;
 
     if (!itemsToCheckout?.length) {
       return res.status(400).json({
@@ -355,7 +355,13 @@ router.post("/cart/delivery-fee", async (req, res) => {
       const product = productMap.get(item.productId);
       if (!product) return acc;
 
-      const method = (item.pickupMethod || "diambil").toLowerCase();
+      // Kalau ada pickupMethod root, override semua item jadi itu
+      const method = (
+        pickupMethod ||
+        item.pickupMethod ||
+        "diambil"
+      ).toLowerCase();
+
       const key = `${product.seller_id}-${method}`;
 
       if (!acc[key]) {
