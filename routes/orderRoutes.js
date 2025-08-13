@@ -429,6 +429,13 @@ router.post("/cart/delivery-fee", async (req, res) => {
   }
 });
 
+// Fungsi bantu untuk hitung persen diskon dari harga dasar dan harga diskon
+function calculateDiscountFromPrice(basePrice, discountedPrice) {
+  if (!basePrice || !discountedPrice || basePrice === 0) return 0;
+  const discount = ((basePrice - discountedPrice) / basePrice) * 100;
+  return discount > 0 ? discount : 0;
+}
+
 router.get("/all", async (req, res) => {
   try {
     const userInfo = req.cookies?.user_info
@@ -464,7 +471,16 @@ router.get("/all", async (req, res) => {
             products (
               id,
               product_name,
-              product_image_url
+              product_image_url,
+              price,
+              discount,
+              variants (
+                id,
+                variant_name,
+                variant_image_url,
+                price,
+                discount
+              )
             )
           )
         `,
@@ -478,6 +494,7 @@ router.get("/all", async (req, res) => {
           .json({ message: "❌ Gagal mengambil data order.", error });
       }
 
+      // Ambil semua produk unik
       const allProducts = [];
       ordersData.forEach((order) => {
         order.order_items.forEach((item) => {
@@ -491,6 +508,7 @@ router.get("/all", async (req, res) => {
         ...new Map(allProducts.map((p) => [p.id, p])).values(),
       ];
 
+      // Enrich produk (attach varian, stok, diskon, dll)
       const enrichedProducts =
         await attachVariantsStockDiscountWithRealDiscount(uniqueProducts);
 
@@ -507,11 +525,74 @@ router.get("/all", async (req, res) => {
           const product = enrichedProducts.find(
             (p) => p.id === item.product_id,
           );
+
+          if (!product) {
+            return {
+              id: item.id,
+              quantity: item.quantity,
+              variant_id: item.variant_id,
+              product: null,
+            };
+          }
+
+          if (item.variant_id) {
+            const variant = product.variants?.find(
+              (v) => v.id === item.variant_id,
+            );
+
+            const discountPercentage = 
+              variant?.discount !== undefined && variant?.discount !== null
+                ? variant.discount
+                : calculateDiscountFromPrice(variant?.price, variant?.finalPrice || variant?.price);
+
+            const finalPrice =
+              variant?.finalPrice ??
+              Math.max(
+                0,
+                variant?.price -
+                  (variant?.price * discountPercentage) / 100,
+              );
+
+            return {
+              id: item.id,
+              quantity: item.quantity,
+              variant_id: item.variant_id,
+              product: {
+                ...product,
+                variants: [
+                  {
+                    ...variant,
+                    discount: discountPercentage,
+                    finalPrice: finalPrice,
+                  },
+                ],
+              },
+            };
+          }
+
+          // Kalau produk tanpa varian
+          const discountPercentage = 
+            product.discount !== undefined && product.discount !== null
+              ? product.discount
+              : calculateDiscountFromPrice(product.price, product.finalPrice || product.price);
+
+          const finalPrice =
+            product.finalPrice ??
+            Math.max(
+              0,
+              product.price -
+                (product.price * discountPercentage) / 100,
+            );
+
           return {
             id: item.id,
             quantity: item.quantity,
             variant_id: item.variant_id,
-            product: product || null,
+            product: {
+              ...product,
+              discount: discountPercentage,
+              finalPrice: finalPrice,
+            },
           };
         }),
       }));
@@ -533,7 +614,12 @@ router.get("/all", async (req, res) => {
 });
 
 // === Get detail order by ID (pakai cache) ===
-// === Get detail order by ID (pakai cache) ===
+// Fungsi bantu gabungkan alamat jadi satu string komplit
+function combineFullAddress(user) {
+  // Contoh gabungan format alamat
+  return `${user.alamat_lengkap}, Kec. ${user.kecamatan}, Kel. ${user.kelurahan}, ${user.kota_kabupaten}, ${user.provinsi}, Kode Pos: ${user.kode_pos}`;
+}
+
 router.get("/:id", async (req, res) => {
   try {
     const userInfo = req.cookies?.user_info
@@ -549,7 +635,6 @@ router.get("/:id", async (req, res) => {
     const orderId = req.params.id;
     const cacheKey = `order:${userInfo.id}:${orderId}`;
 
-    // Cek cache
     let orderResponse = orderCache.get(cacheKey);
     if (orderResponse) {
       return res.status(200).json({
@@ -558,7 +643,7 @@ router.get("/:id", async (req, res) => {
       });
     }
 
-    // Ambil 1 order + item yang dipesan + produk (hanya kolom perlu)
+    // Ambil data order
     const { data: orderData, error } = await supabase
       .from("orders")
       .select(
@@ -578,7 +663,16 @@ router.get("/:id", async (req, res) => {
           products (
             id,
             product_name,
-            product_image_url
+            product_image_url,
+            price,
+            discount,
+            variants (
+              id,
+              variant_name,
+              variant_image_url,
+              price,
+              discount
+            )
           )
         )
       `,
@@ -596,7 +690,21 @@ router.get("/:id", async (req, res) => {
       return res.status(404).json({ message: "❌ Order tidak ditemukan." });
     }
 
-    // Ambil semua produk unik dan enrich sekaligus
+    // Ambil data user (pembeli)
+    const { data: userData, error: userError } = await supabase
+      .from("users")
+      .select(
+        `Nama_penerima, No_telepon, alamat_lengkap, provinsi, kota_kabupaten, kecamatan, kelurahan, kode_pos`
+      )
+      .eq("id", userInfo.id)
+      .single();
+
+    if (userError || !userData) {
+      // Kalau gagal ambil user, kita ignore, tapi log error
+      console.error("❌ Gagal mengambil data user:", userError);
+    }
+
+    // Map produk unik
     const productMap = {};
     orderData.order_items.forEach((item) => {
       if (item.products && !productMap[item.products.id]) {
@@ -611,7 +719,7 @@ router.get("/:id", async (req, res) => {
       enrichedProducts.map((p) => [p.id, p]),
     );
 
-    // Mapping item langsung
+    // Mapping item order
     const mappedItems = orderData.order_items
       .map((item) => {
         const productData = enrichedMap[item.product_id];
@@ -621,25 +729,48 @@ router.get("/:id", async (req, res) => {
           const variantData = productData.variants?.find(
             (v) => v.id === item.variant_id,
           );
+
+          if (!variantData) return null;
+
+          const discountPercentage = 
+            variantData.discount !== undefined && variantData.discount !== null
+              ? variantData.discount
+              : calculateDiscountFromPrice(variantData.price, variantData.finalPrice || variantData.price);
+
+          const finalPrice =
+            variantData.finalPrice ??
+            Math.max(
+              0,
+              variantData.price -
+                (variantData.price * discountPercentage) / 100,
+            );
+
           return {
             type: "variant",
             id_product: productData.id,
-            id: variantData?.id || null,
+            id: variantData.id,
             product_name: productData.product_name,
-            variant_name: variantData?.variant_name || null,
-            variant_image_url: variantData?.variant_image_url || null,
+            variant_name: variantData.variant_name,
+            variant_image_url: variantData.variant_image_url,
             quantity: item.quantity,
-            original_price: variantData?.price || 0,
-            applied_discount: variantData?.discount || 0,
-            final_price:
-              variantData?.finalPrice ??
-              Math.max(
-                0,
-                variantData?.price -
-                  (variantData?.price * (variantData?.discount || 0)) / 100,
-              ),
+            original_price: variantData.price,
+            applied_discount: discountPercentage,
+            final_price: finalPrice,
           };
         }
+
+        const discountPercentage = 
+          productData.discount !== undefined && productData.discount !== null
+            ? productData.discount
+            : calculateDiscountFromPrice(productData.price, productData.finalPrice || productData.price);
+
+        const finalPrice =
+          productData.finalPrice ??
+          Math.max(
+            0,
+            productData.price -
+              (productData.price * discountPercentage) / 100,
+          );
 
         return {
           type: "single",
@@ -648,19 +779,13 @@ router.get("/:id", async (req, res) => {
           product_image_url: productData.product_image_url,
           quantity: item.quantity,
           product_price: productData.price,
-          discountPercentage: productData.discount || 0,
-          finalPrice:
-            productData.finalPrice ??
-            Math.max(
-              0,
-              productData.price -
-                (productData.price * (productData.discount || 0)) / 100,
-            ),
+          discountPercentage: discountPercentage,
+          finalPrice: finalPrice,
         };
       })
       .filter(Boolean);
 
-    // Buat response
+    // Build response order + pembeli
     orderResponse = {
       id: orderData.id,
       created_at: orderData.created_at,
@@ -668,13 +793,14 @@ router.get("/:id", async (req, res) => {
       delivery_fee: orderData.delivery_fee,
       status: orderData.status,
       order_items: mappedItems,
+      buyer_info_v1: userData || null, // versi field terpisah
+      buyer_info_alamat_lengkap: userData ? combineFullAddress(userData) : null, // versi gabungan alamat
     };
 
     if (orderData.pickup_method === "diambil") {
       orderResponse.pickup_deadline = orderData.pickup_deadline;
     }
 
-    // Simpan ke cache
     orderCache.set(cacheKey, orderResponse);
 
     return res
@@ -687,5 +813,6 @@ router.get("/:id", async (req, res) => {
       .json({ message: "❌ Terjadi kesalahan server", error: err.message });
   }
 });
+
 
 module.exports = router;
