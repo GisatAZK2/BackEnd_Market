@@ -429,6 +429,7 @@ router.post("/cart/delivery-fee", async (req, res) => {
   }
 });
 
+
 // Fungsi bantu untuk hitung persen diskon dari harga dasar dan harga diskon
 function calculateDiscountFromPrice(basePrice, discountedPrice) {
   if (!basePrice || !discountedPrice || basePrice === 0) return 0;
@@ -436,6 +437,12 @@ function calculateDiscountFromPrice(basePrice, discountedPrice) {
   return discount > 0 ? discount : 0;
 }
 
+// Gabung alamat lengkap jadi string utuh
+function combineFullAddress(user) {
+  return `${user.alamat_lengkap}, Kec. ${user.kecamatan}, Kel. ${user.kelurahan}, ${user.kota_kabupaten}, ${user.provinsi}, Kode Pos: ${user.kode_pos}`;
+}
+
+// Route GET /all - daftar order user
 router.get("/all", async (req, res) => {
   try {
     const userInfo = req.cookies?.user_info
@@ -443,9 +450,7 @@ router.get("/all", async (req, res) => {
       : null;
 
     if (!userInfo?.id) {
-      return res
-        .status(401)
-        .json({ message: "❌ Harus login untuk melihat daftar order." });
+      return res.status(401).json({ message: "❌ Harus login untuk melihat daftar order." });
     }
 
     const cacheKey = `orders:list:${userInfo.id}`;
@@ -474,7 +479,7 @@ router.get("/all", async (req, res) => {
               product_image_url,
               price,
               discount,
-              variants (
+              product_variants (
                 id,
                 variant_name,
                 variant_image_url,
@@ -483,50 +488,43 @@ router.get("/all", async (req, res) => {
               )
             )
           )
-        `,
+        `
         )
         .eq("user_id", userInfo.id)
         .order("created_at", { ascending: false });
 
       if (error) {
-        return res
-          .status(500)
-          .json({ message: "❌ Gagal mengambil data order.", error });
+        return res.status(500).json({ message: "❌ Gagal mengambil data order.", error });
       }
 
-      // Ambil semua produk unik
+      // Ambil semua produk unik dari semua order_items
       const allProducts = [];
-      ordersData.forEach((order) => {
-        order.order_items.forEach((item) => {
-          if (item.products) {
-            allProducts.push(item.products);
-          }
+      ordersData.forEach(order => {
+        order.order_items.forEach(item => {
+          if (item.products) allProducts.push(item.products);
         });
       });
 
-      const uniqueProducts = [
-        ...new Map(allProducts.map((p) => [p.id, p])).values(),
-      ];
+      // Hapus duplikat produk berdasarkan id
+      const uniqueProducts = [...new Map(allProducts.map(p => [p.id, p])).values()];
 
       // Enrich produk (attach varian, stok, diskon, dll)
-      const enrichedProducts =
-        await attachVariantsStockDiscountWithRealDiscount(uniqueProducts);
+      const enrichedProducts = await attachVariantsStockDiscountWithRealDiscount(uniqueProducts);
 
-      orders = ordersData.map((order) => ({
+      // Mapping ulang order dengan produk yang sudah enriched
+      orders = ordersData.map(order => ({
         id: order.id,
         created_at: order.created_at,
         total_price: order.total_price,
-        delivery_fee:
-          order.pickup_method === "diantar" ? order.delivery_fee : 0,
+        delivery_fee: order.pickup_method === "diantar" ? order.delivery_fee : 0,
         status: order.status,
         pickup_method: order.pickup_method,
         pickup_deadline: order.pickup_deadline,
-        order_items: order.order_items.map((item) => {
-          const product = enrichedProducts.find(
-            (p) => p.id === item.product_id,
-          );
+        order_items: order.order_items.map(item => {
+          const product = enrichedProducts.find(p => p.id === item.product_id);
 
           if (!product) {
+            // Produk hilang / gak ditemukan
             return {
               id: item.id,
               quantity: item.quantity,
@@ -536,22 +534,16 @@ router.get("/all", async (req, res) => {
           }
 
           if (item.variant_id) {
-            const variant = product.variants?.find(
-              (v) => v.id === item.variant_id,
-            );
+            const variant = product.product_variants?.find(v => v.id === item.variant_id);
 
             const discountPercentage = 
-              variant?.discount !== undefined && variant?.discount !== null
+              variant?.discount != null
                 ? variant.discount
                 : calculateDiscountFromPrice(variant?.price, variant?.finalPrice || variant?.price);
 
             const finalPrice =
               variant?.finalPrice ??
-              Math.max(
-                0,
-                variant?.price -
-                  (variant?.price * discountPercentage) / 100,
-              );
+              Math.max(0, variant?.price - (variant?.price * discountPercentage) / 100);
 
             return {
               id: item.id,
@@ -559,30 +551,26 @@ router.get("/all", async (req, res) => {
               variant_id: item.variant_id,
               product: {
                 ...product,
-                variants: [
+                product_variants: [
                   {
                     ...variant,
                     discount: discountPercentage,
-                    finalPrice: finalPrice,
-                  },
+                    finalPrice,
+                  }
                 ],
               },
             };
           }
 
-          // Kalau produk tanpa varian
+          // Produk tanpa varian
           const discountPercentage = 
-            product.discount !== undefined && product.discount !== null
+            product.discount != null
               ? product.discount
               : calculateDiscountFromPrice(product.price, product.finalPrice || product.price);
 
           const finalPrice =
             product.finalPrice ??
-            Math.max(
-              0,
-              product.price -
-                (product.price * discountPercentage) / 100,
-            );
+            Math.max(0, product.price - (product.price * discountPercentage) / 100);
 
           return {
             id: item.id,
@@ -591,7 +579,7 @@ router.get("/all", async (req, res) => {
             product: {
               ...product,
               discount: discountPercentage,
-              finalPrice: finalPrice,
+              finalPrice,
             },
           };
         }),
@@ -607,19 +595,11 @@ router.get("/all", async (req, res) => {
     });
   } catch (err) {
     console.error("❌ Server error:", err);
-    return res
-      .status(500)
-      .json({ message: "❌ Terjadi kesalahan server", error: err.message });
+    return res.status(500).json({ message: "❌ Terjadi kesalahan server", error: err.message });
   }
 });
 
-// === Get detail order by ID (pakai cache) ===
-// Fungsi bantu gabungkan alamat jadi satu string komplit
-function combineFullAddress(user) {
-  // Contoh gabungan format alamat
-  return `${user.alamat_lengkap}, Kec. ${user.kecamatan}, Kel. ${user.kelurahan}, ${user.kota_kabupaten}, ${user.provinsi}, Kode Pos: ${user.kode_pos}`;
-}
-
+// Route GET /:id - detail order + buyer info
 router.get("/:id", async (req, res) => {
   try {
     const userInfo = req.cookies?.user_info
@@ -627,9 +607,7 @@ router.get("/:id", async (req, res) => {
       : null;
 
     if (!userInfo?.id) {
-      return res
-        .status(401)
-        .json({ message: "❌ Harus login untuk melihat order." });
+      return res.status(401).json({ message: "❌ Harus login untuk melihat order." });
     }
 
     const orderId = req.params.id;
@@ -666,7 +644,7 @@ router.get("/:id", async (req, res) => {
             product_image_url,
             price,
             discount,
-            variants (
+            product_variants (
               id,
               variant_name,
               variant_image_url,
@@ -675,22 +653,20 @@ router.get("/:id", async (req, res) => {
             )
           )
         )
-      `,
+      `
       )
       .eq("user_id", userInfo.id)
       .eq("id", orderId)
       .single();
 
     if (error) {
-      return res
-        .status(500)
-        .json({ message: "❌ Gagal mengambil data order.", error });
+      return res.status(500).json({ message: "❌ Gagal mengambil data order.", error });
     }
     if (!orderData) {
       return res.status(404).json({ message: "❌ Order tidak ditemukan." });
     }
 
-    // Ambil data user (pembeli)
+    // Ambil data user pembeli
     const { data: userData, error: userError } = await supabase
       .from("users")
       .select(
@@ -700,13 +676,12 @@ router.get("/:id", async (req, res) => {
       .single();
 
     if (userError || !userData) {
-      // Kalau gagal ambil user, kita ignore, tapi log error
       console.error("❌ Gagal mengambil data user:", userError);
     }
 
-    // Map produk unik
+    // Map produk unik dari order_items
     const productMap = {};
-    orderData.order_items.forEach((item) => {
+    orderData.order_items.forEach(item => {
       if (item.products && !productMap[item.products.id]) {
         productMap[item.products.id] = item.products;
       }
@@ -716,34 +691,27 @@ router.get("/:id", async (req, res) => {
       Object.values(productMap),
     );
     const enrichedMap = Object.fromEntries(
-      enrichedProducts.map((p) => [p.id, p]),
+      enrichedProducts.map(p => [p.id, p]),
     );
 
-    // Mapping item order
+    // Mapping item order dengan produk yang sudah enriched
     const mappedItems = orderData.order_items
-      .map((item) => {
+      .map(item => {
         const productData = enrichedMap[item.product_id];
         if (!productData) return null;
 
         if (item.variant_id) {
-          const variantData = productData.variants?.find(
-            (v) => v.id === item.variant_id,
-          );
-
+          const variantData = productData.product_variants?.find(v => v.id === item.variant_id);
           if (!variantData) return null;
 
           const discountPercentage = 
-            variantData.discount !== undefined && variantData.discount !== null
+            variantData.discount != null
               ? variantData.discount
               : calculateDiscountFromPrice(variantData.price, variantData.finalPrice || variantData.price);
 
           const finalPrice =
             variantData.finalPrice ??
-            Math.max(
-              0,
-              variantData.price -
-                (variantData.price * discountPercentage) / 100,
-            );
+            Math.max(0, variantData.price - (variantData.price * discountPercentage) / 100);
 
           return {
             type: "variant",
@@ -760,17 +728,13 @@ router.get("/:id", async (req, res) => {
         }
 
         const discountPercentage = 
-          productData.discount !== undefined && productData.discount !== null
+          productData.discount != null
             ? productData.discount
             : calculateDiscountFromPrice(productData.price, productData.finalPrice || productData.price);
 
         const finalPrice =
           productData.finalPrice ??
-          Math.max(
-            0,
-            productData.price -
-              (productData.price * discountPercentage) / 100,
-          );
+          Math.max(0, productData.price - (productData.price * discountPercentage) / 100);
 
         return {
           type: "single",
@@ -779,13 +743,13 @@ router.get("/:id", async (req, res) => {
           product_image_url: productData.product_image_url,
           quantity: item.quantity,
           product_price: productData.price,
-          discountPercentage: discountPercentage,
-          finalPrice: finalPrice,
+          discountPercentage,
+          finalPrice,
         };
       })
       .filter(Boolean);
 
-    // Build response order + pembeli
+    // Build response order + buyer info
     orderResponse = {
       id: orderData.id,
       created_at: orderData.created_at,
@@ -793,8 +757,8 @@ router.get("/:id", async (req, res) => {
       delivery_fee: orderData.delivery_fee,
       status: orderData.status,
       order_items: mappedItems,
-      buyer_info_v1: userData || null, // versi field terpisah
-      buyer_info_alamat_lengkap: userData ? combineFullAddress(userData) : null, // versi gabungan alamat
+      buyer_info_v1: userData || null,
+      buyer_info_alamat_lengkap: userData ? combineFullAddress(userData) : null,
     };
 
     if (orderData.pickup_method === "diambil") {
@@ -803,14 +767,10 @@ router.get("/:id", async (req, res) => {
 
     orderCache.set(cacheKey, orderResponse);
 
-    return res
-      .status(200)
-      .json({ message: "✅ Order berhasil diambil.", order: orderResponse });
+    return res.status(200).json({ message: "✅ Order berhasil diambil.", order: orderResponse });
   } catch (err) {
     console.error("❌ Server error:", err);
-    return res
-      .status(500)
-      .json({ message: "❌ Terjadi kesalahan server", error: err.message });
+    return res.status(500).json({ message: "❌ Terjadi kesalahan server", error: err.message });
   }
 });
 
