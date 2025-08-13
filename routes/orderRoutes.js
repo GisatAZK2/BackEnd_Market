@@ -437,7 +437,6 @@ function calculateDiscountFromPrice(basePrice, discountedPrice) {
   return discount > 0 ? discount : 0;
 }
 
-// Gabung alamat lengkap jadi string utuh
 function combineFullAddress(user) {
   return `${user.alamat_lengkap}, Kec. ${user.kecamatan}, Kel. ${user.kelurahan}, ${user.kota_kabupaten}, ${user.provinsi}, Kode Pos: ${user.kode_pos}`;
 }
@@ -445,9 +444,7 @@ function combineFullAddress(user) {
 // Route GET /all - daftar order user
 router.get("/all", async (req, res) => {
   try {
-    const userInfo = req.cookies?.user_info
-      ? JSON.parse(req.cookies.user_info)
-      : null;
+    const userInfo = req.cookies?.user_info ? JSON.parse(req.cookies.user_info) : null;
 
     if (!userInfo?.id) {
       return res.status(401).json({ message: "❌ Harus login untuk melihat daftar order." });
@@ -459,8 +456,7 @@ router.get("/all", async (req, res) => {
     if (!orders) {
       const { data: ordersData, error } = await supabase
         .from("orders")
-        .select(
-          `
+        .select(`
           id,
           created_at,
           total_price,
@@ -477,19 +473,18 @@ router.get("/all", async (req, res) => {
               id,
               product_name,
               product_image_url,
-              price,
+              product_price,
               discount,
               product_variants (
                 id,
                 variant_name,
                 variant_image_url,
-                price,
+                variant_price,
                 discount
               )
             )
           )
-        `
-        )
+        `)
         .eq("user_id", userInfo.id)
         .order("created_at", { ascending: false });
 
@@ -497,7 +492,7 @@ router.get("/all", async (req, res) => {
         return res.status(500).json({ message: "❌ Gagal mengambil data order.", error });
       }
 
-      // Ambil semua produk unik dari semua order_items
+      // Ambil semua produk unik
       const allProducts = [];
       ordersData.forEach(order => {
         order.order_items.forEach(item => {
@@ -505,13 +500,11 @@ router.get("/all", async (req, res) => {
         });
       });
 
-      // Hapus duplikat produk berdasarkan id
       const uniqueProducts = [...new Map(allProducts.map(p => [p.id, p])).values()];
 
       // Enrich produk (attach varian, stok, diskon, dll)
       const enrichedProducts = await attachVariantsStockDiscountWithRealDiscount(uniqueProducts);
 
-      // Mapping ulang order dengan produk yang sudah enriched
       orders = ordersData.map(order => ({
         id: order.id,
         created_at: order.created_at,
@@ -524,7 +517,6 @@ router.get("/all", async (req, res) => {
           const product = enrichedProducts.find(p => p.id === item.product_id);
 
           if (!product) {
-            // Produk hilang / gak ditemukan
             return {
               id: item.id,
               quantity: item.quantity,
@@ -536,14 +528,12 @@ router.get("/all", async (req, res) => {
           if (item.variant_id) {
             const variant = product.product_variants?.find(v => v.id === item.variant_id);
 
-            const discountPercentage = 
-              variant?.discount != null
-                ? variant.discount
-                : calculateDiscountFromPrice(variant?.price, variant?.finalPrice || variant?.price);
+            const discountPercentage = variant?.discount != null
+              ? variant.discount
+              : calculateDiscountFromPrice(variant?.variant_price, variant?.finalPrice || variant?.variant_price);
 
-            const finalPrice =
-              variant?.finalPrice ??
-              Math.max(0, variant?.price - (variant?.price * discountPercentage) / 100);
+            const finalPrice = variant?.finalPrice ??
+              Math.max(0, variant?.variant_price - (variant?.variant_price * discountPercentage) / 100);
 
             return {
               id: item.id,
@@ -556,21 +546,19 @@ router.get("/all", async (req, res) => {
                     ...variant,
                     discount: discountPercentage,
                     finalPrice,
-                  }
+                  },
                 ],
               },
             };
           }
 
           // Produk tanpa varian
-          const discountPercentage = 
-            product.discount != null
-              ? product.discount
-              : calculateDiscountFromPrice(product.price, product.finalPrice || product.price);
+          const discountPercentage = product.discount != null
+            ? product.discount
+            : calculateDiscountFromPrice(product.product_price, product.finalPrice || product.product_price);
 
-          const finalPrice =
-            product.finalPrice ??
-            Math.max(0, product.price - (product.price * discountPercentage) / 100);
+          const finalPrice = product.finalPrice ??
+            Math.max(0, product.product_price - (product.product_price * discountPercentage) / 100);
 
           return {
             id: item.id,
@@ -602,9 +590,7 @@ router.get("/all", async (req, res) => {
 // Route GET /:id - detail order + buyer info
 router.get("/:id", async (req, res) => {
   try {
-    const userInfo = req.cookies?.user_info
-      ? JSON.parse(req.cookies.user_info)
-      : null;
+    const userInfo = req.cookies?.user_info ? JSON.parse(req.cookies.user_info) : null;
 
     if (!userInfo?.id) {
       return res.status(401).json({ message: "❌ Harus login untuk melihat order." });
@@ -624,8 +610,7 @@ router.get("/:id", async (req, res) => {
     // Ambil data order
     const { data: orderData, error } = await supabase
       .from("orders")
-      .select(
-        `
+      .select(`
         id,
         created_at,
         total_price,
@@ -642,19 +627,18 @@ router.get("/:id", async (req, res) => {
             id,
             product_name,
             product_image_url,
-            price,
+            product_price,
             discount,
             product_variants (
               id,
               variant_name,
               variant_image_url,
-              price,
+              variant_price,
               discount
             )
           )
         )
-      `
-      )
+      `)
       .eq("user_id", userInfo.id)
       .eq("id", orderId)
       .single();
@@ -669,9 +653,7 @@ router.get("/:id", async (req, res) => {
     // Ambil data user pembeli
     const { data: userData, error: userError } = await supabase
       .from("users")
-      .select(
-        `Nama_penerima, No_telepon, alamat_lengkap, provinsi, kota_kabupaten, kecamatan, kelurahan, kode_pos`
-      )
+      .select(`Nama_penerima, No_telepon, alamat_lengkap, provinsi, kota_kabupaten, kecamatan, kelurahan, kode_pos`)
       .eq("id", userInfo.id)
       .single();
 
@@ -679,7 +661,7 @@ router.get("/:id", async (req, res) => {
       console.error("❌ Gagal mengambil data user:", userError);
     }
 
-    // Map produk unik dari order_items
+    // Map produk unik
     const productMap = {};
     orderData.order_items.forEach(item => {
       if (item.products && !productMap[item.products.id]) {
@@ -687,14 +669,10 @@ router.get("/:id", async (req, res) => {
       }
     });
 
-    const enrichedProducts = await attachVariantsStockDiscountWithRealDiscount(
-      Object.values(productMap),
-    );
-    const enrichedMap = Object.fromEntries(
-      enrichedProducts.map(p => [p.id, p]),
-    );
+    const enrichedProducts = await attachVariantsStockDiscountWithRealDiscount(Object.values(productMap));
+    const enrichedMap = Object.fromEntries(enrichedProducts.map(p => [p.id, p]));
 
-    // Mapping item order dengan produk yang sudah enriched
+    // Mapping item order
     const mappedItems = orderData.order_items
       .map(item => {
         const productData = enrichedMap[item.product_id];
@@ -704,14 +682,12 @@ router.get("/:id", async (req, res) => {
           const variantData = productData.product_variants?.find(v => v.id === item.variant_id);
           if (!variantData) return null;
 
-          const discountPercentage = 
-            variantData.discount != null
-              ? variantData.discount
-              : calculateDiscountFromPrice(variantData.price, variantData.finalPrice || variantData.price);
+          const discountPercentage = variantData.discount != null
+            ? variantData.discount
+            : calculateDiscountFromPrice(variantData.variant_price, variantData.finalPrice || variantData.variant_price);
 
-          const finalPrice =
-            variantData.finalPrice ??
-            Math.max(0, variantData.price - (variantData.price * discountPercentage) / 100);
+          const finalPrice = variantData.finalPrice ??
+            Math.max(0, variantData.variant_price - (variantData.variant_price * discountPercentage) / 100);
 
           return {
             type: "variant",
@@ -721,20 +697,18 @@ router.get("/:id", async (req, res) => {
             variant_name: variantData.variant_name,
             variant_image_url: variantData.variant_image_url,
             quantity: item.quantity,
-            original_price: variantData.price,
+            original_price: variantData.variant_price,
             applied_discount: discountPercentage,
             final_price: finalPrice,
           };
         }
 
-        const discountPercentage = 
-          productData.discount != null
-            ? productData.discount
-            : calculateDiscountFromPrice(productData.price, productData.finalPrice || productData.price);
+        const discountPercentage = productData.discount != null
+          ? productData.discount
+          : calculateDiscountFromPrice(productData.product_price, productData.finalPrice || productData.product_price);
 
-        const finalPrice =
-          productData.finalPrice ??
-          Math.max(0, productData.price - (productData.price * discountPercentage) / 100);
+        const finalPrice = productData.finalPrice ??
+          Math.max(0, productData.product_price - (productData.product_price * discountPercentage) / 100);
 
         return {
           type: "single",
@@ -742,7 +716,7 @@ router.get("/:id", async (req, res) => {
           product_name: productData.product_name,
           product_image_url: productData.product_image_url,
           quantity: item.quantity,
-          product_price: productData.price,
+          product_price: productData.product_price,
           discountPercentage,
           finalPrice,
         };
