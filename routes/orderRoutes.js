@@ -640,7 +640,7 @@ router.get("/:id", async (req, res) => {
     // Ambil data user pembeli berdasarkan user_id dari orderData (bukan userInfo.id)
     const { data: userData, error: userError } = await supabase
       .from("users")
-      .select(`Nama_penerima, No_telepon, alamat_lengkap, provinsi, kota_kabupaten, kecamatan, kelurahan, kode_pos`)
+      .select(`nama_penerima, no_telepon, alamat_lengkap, provinsi, kota_kabupaten, kecamatan, kelurahan, kode_pos`)
       .eq("id", orderData.user_id)   // <- ini yang bener
       .single();
 
