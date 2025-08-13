@@ -594,41 +594,41 @@ router.get("/:id", async (req, res) => {
       });
     }
 
-    // Ambil data order tanpa kolom virtual
+    // Ambil data order lengkap dengan user_id
     const { data: orderData, error } = await supabase
-  .from("orders")
-  .select(`
-    id,
-    user_id,
-    created_at,
-    total_price,
-    delivery_fee,
-    status,
-    pickup_method,
-    pickup_deadline,
-    order_items (
-      id,
-      product_id,
-      variant_id,
-      quantity,
-      products (
+      .from("orders")
+      .select(`
         id,
-        product_name,
-        product_image_url,
-        product_price,
-        stock,
-        product_variants (
+        user_id,
+        created_at,
+        total_price,
+        delivery_fee,
+        status,
+        pickup_method,
+        pickup_deadline,
+        order_items (
           id,
-          variant_name,
-          variant_image_url,
-          variant_price
+          product_id,
+          variant_id,
+          quantity,
+          products (
+            id,
+            product_name,
+            product_image_url,
+            product_price,
+            stock,
+            product_variants (
+              id,
+              variant_name,
+              variant_image_url,
+              variant_price
+            )
+          )
         )
-      )
-    )
-  `)
-  .eq("user_id", userInfo.id)
-  .eq("id", orderId)
-  .single();
+      `)
+      .eq("user_id", userInfo.id)
+      .eq("id", orderId)
+      .single();
 
     if (error) {
       return res.status(500).json({ message: "❌ Gagal mengambil data order.", error });
@@ -637,18 +637,18 @@ router.get("/:id", async (req, res) => {
       return res.status(404).json({ message: "❌ Order tidak ditemukan." });
     }
 
-    // Ambil data user pembeli
+    // Ambil data user pembeli berdasarkan user_id dari orderData (bukan userInfo.id)
     const { data: userData, error: userError } = await supabase
       .from("users")
       .select(`Nama_penerima, No_telepon, alamat_lengkap, provinsi, kota_kabupaten, kecamatan, kelurahan, kode_pos`)
-      .eq("id", userInfo.id)
+      .eq("id", orderData.user_id)   // <- ini yang bener
       .single();
 
     if (userError || !userData) {
       console.error("❌ Gagal mengambil data user:", userError);
     }
 
-    // Ambil produk unik
+    // Buat map produk unik dari order_items
     const productMap = {};
     orderData.order_items.forEach(item => {
       if (item.products && !productMap[item.products.id]) {
@@ -656,11 +656,11 @@ router.get("/:id", async (req, res) => {
       }
     });
 
-    // Enrich produk
+    // Enrich produk dengan fungsi yang sudah kamu punya
     const enrichedProducts = await attachVariantsStockDiscountWithRealDiscount(Object.values(productMap));
     const enrichedMap = Object.fromEntries(enrichedProducts.map(p => [p.id, p]));
 
-    // Mapping item order dengan hasil enrich
+    // Mapping item order berdasarkan hasil enrich
     const mappedItems = orderData.order_items
       .map(item => {
         const productData = enrichedMap[item.product_id];
@@ -721,6 +721,7 @@ router.get("/:id", async (req, res) => {
     return res.status(500).json({ message: "❌ Terjadi kesalahan server", error: err.message });
   }
 });
+
 
 
 module.exports = router;
