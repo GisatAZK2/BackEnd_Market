@@ -596,38 +596,39 @@ router.get("/:id", async (req, res) => {
 
     // Ambil data order tanpa kolom virtual
     const { data: orderData, error } = await supabase
-      .from("orders")
-      .select(`
+  .from("orders")
+  .select(`
+    id,
+    user_id,
+    created_at,
+    total_price,
+    delivery_fee,
+    status,
+    pickup_method,
+    pickup_deadline,
+    order_items (
+      id,
+      product_id,
+      variant_id,
+      quantity,
+      products (
         id,
-        created_at,
-        total_price,
-        delivery_fee,
-        status,
-        pickup_method,
-        pickup_deadline,
-        order_items (
+        product_name,
+        product_image_url,
+        product_price,
+        stock,
+        product_variants (
           id,
-          product_id,
-          variant_id,
-          quantity,
-          products (
-            id,
-            product_name,
-            product_image_url,
-            product_price,
-            stock,
-            product_variants (
-              id,
-              variant_name,
-              variant_image_url,
-              variant_price
-            )
-          )
+          variant_name,
+          variant_image_url,
+          variant_price
         )
-      `)
-      .eq("user_id", userInfo.id)
-      .eq("id", orderId)
-      .single();
+      )
+    )
+  `)
+  .eq("user_id", userInfo.id)
+  .eq("id", orderId)
+  .single();
 
     if (error) {
       return res.status(500).json({ message: "❌ Gagal mengambil data order.", error });
