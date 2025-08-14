@@ -546,18 +546,18 @@ router.delete("/user/:id", async (req, res) => {
   }
 });
 
-router.post("/login/google", detectSpam, verifyCaptcha, async (req, res) => {
-  const { provider_token } = req.body;
-  if (!provider_token) {
-    return res.status(400).json({ error: "Token Google tidak ditemukan." });
+router.post("/login/google", async (req, res) => {
+  const { id_token } = req.body;
+  if (!id_token) {
+    return res.status(400).json({ error: "ID token Google tidak ditemukan." });
   }
 
   try {
-    // 1. Verifikasi token Google ke Supabase
+    // 1. Login ke Supabase pakai ID token Google
     const { data: session, error: signInError } =
       await supabase.auth.signInWithIdToken({
         provider: "google",
-        token: provider_token,
+        token: id_token,
       });
 
     if (signInError || !session?.user) {
@@ -568,30 +568,28 @@ router.post("/login/google", detectSpam, verifyCaptcha, async (req, res) => {
     const { email, user_metadata } = session.user;
     const googleAvatar = user_metadata?.avatar_url || null;
 
-    // 2. Cek apakah user sudah ada di tabel users
+    // 2. Cek user di DB
     const { data: user } = await supabase
       .from("users")
       .select("*")
       .eq("email", email)
       .single();
 
-    // 3. User belum ada → buat baru + OTP
+    // 3. User belum ada → buat user + OTP
     if (!user) {
       const username = email.split("@")[0];
       const otp = Math.floor(100000 + Math.random() * 900000).toString();
       const expiresAt = new Date(Date.now() + 5 * 60 * 1000).toISOString();
 
-      const { error: insertErr } = await supabase.from("users").insert([
-        {
-          email,
-          username,
-          password: null, // tidak perlu password
-          otp_code: otp,
-          otp_expires_at: expiresAt,
-          verified: false,
-          avatar: googleAvatar, // langsung simpan avatar dari Google
-        },
-      ]);
+      const { error: insertErr } = await supabase.from("users").insert([{
+        email,
+        username,
+        password: null,
+        otp_code: otp,
+        otp_expires_at: expiresAt,
+        verified: false,
+        avatar: googleAvatar,
+      }]);
 
       if (insertErr) {
         console.error("Insert user error:", insertErr);
@@ -608,7 +606,7 @@ router.post("/login/google", detectSpam, verifyCaptcha, async (req, res) => {
       });
     }
 
-    // 4. User belum diverifikasi → kirim OTP ulang
+    // 4. User belum verified → OTP ulang
     if (!user.verified) {
       const otp = Math.floor(100000 + Math.random() * 900000).toString();
       const expiresAt = new Date(Date.now() + 5 * 60 * 1000).toISOString();
@@ -633,12 +631,11 @@ router.post("/login/google", detectSpam, verifyCaptcha, async (req, res) => {
       });
     }
 
-    // 5. User sudah verified → buat JWT + cookie
+    // 5. User verified → buat JWT + set cookie (mirip login manual)
     const token = jwt.sign({ id: user.id }, process.env.JWT_SECRET, {
       expiresIn: "7d",
     });
 
-    const isProd = process.env.NODE_ENV === "production";
     res.cookie(
       "user_info",
       JSON.stringify({
@@ -648,12 +645,18 @@ router.post("/login/google", detectSpam, verifyCaptcha, async (req, res) => {
         avatar: user.avatar || googleAvatar,
       }),
       {
-        httpOnly: true,
-        secure: false, // ❌ ubah ke false di development
-        sameSite: "Lax", // ✅ Lax cukup untuk localhost
+        httpOnly: true, // keamanan lebih, sama kayak login manual
+        secure: process.env.NODE_ENV === "production" ? true : false,
+        sameSite: "None", // biar bisa cross-origin di browser modern
         maxAge: 7 * 24 * 60 * 60 * 1000,
-      },
+      }
     );
+
+    console.log("✅ Cookie terkirim ke browser/Postman:", {
+      id: user.id,
+      email: user.email,
+      username: user.username,
+    });
 
     return res.json({
       message: "Login Google sukses.",
@@ -666,6 +669,19 @@ router.post("/login/google", detectSpam, verifyCaptcha, async (req, res) => {
   } catch (err) {
     console.error("Google login error:", err);
     return res.status(500).json({ error: "Kesalahan server." });
+  }
+});
+
+
+router.get("/whoami", async (req, res) => {
+  // Cookie yang dikirim browser akan ada di req.cookies
+  console.log("Cookies from browser:", req.cookies);
+  try {
+    const raw = req.cookies?.user_info;
+    const user = raw ? JSON.parse(raw) : null;
+    return res.json({ user });
+  } catch {
+    return res.json({ user: null });
   }
 });
 

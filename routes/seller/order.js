@@ -1,131 +1,166 @@
 const express = require("express");
 const supabase = require("../../config/supabase");
-const {
-  attachVariantsStockDiscountWithRealDiscount,
-  applyDiscount,
-} = require("../../utils/applyDiscountAndVariants");
+const sendOrderNotification = require("../../utils/statusorder");
+const QRCode = require("qrcode");
 const router = express.Router();
 
-// Seller update order status (1 route untuk semua aksi)
-router.put("/seller/orders/:id/status", async (req, res) => {
+
+// ==================== UPDATE STATUS ORDER ====================
+router.put("/orders/:id/status", async (req, res) => {
   try {
     const sellerInfo = req.cookies?.seller_info
       ? JSON.parse(req.cookies.seller_info)
       : null;
 
     if (!sellerInfo?.id) {
-      return res
-        .status(401)
-        .json({ message: "❌ Harus login sebagai seller." });
+      return res.status(401).json({ message: "❌ Harus login sebagai seller." });
     }
 
     const orderId = req.params.id;
-    const { action, latitude, longitude, barcodeId, paid } = req.body;
+    const { action, barcodeId, paid } = req.body;
 
-    // Ambil order dulu
     const { data: order, error: fetchError } = await supabase
       .from("orders")
-      .select("id, pickup_method, status, buyer_id, seller_id")
+      .select("*, seller: sellers(*)")
       .eq("id", orderId)
       .eq("seller_id", sellerInfo.id)
       .single();
 
     if (fetchError || !order) {
+      console.error("❌ Order tidak ditemukan:", fetchError);
       return res.status(404).json({ message: "❌ Order tidak ditemukan." });
     }
 
-    let updatePayload = {};
     let newStatus = "";
+    let updatePayload = {};
     let validationError = null;
 
-    switch (action) {
-      case "accept":
-        if (order.status !== "pending") {
-          validationError = "⚠️ Order tidak dalam status pending.";
-        } else {
-          newStatus = "sedang di packing";
-          if (order.pickup_method === "diambil") {
-            if (!latitude || !longitude) {
-              validationError = "⚠️ Lokasi toko wajib diisi untuk pickup.";
-            } else {
-              updatePayload.pickup_deadline = new Date(
-                Date.now() + 6 * 60 * 60 * 1000,
-              ).toISOString();
-              updatePayload.latitude = latitude;
-              updatePayload.longitude = longitude;
-            }
-          }
-        }
-        break;
+    const now = new Date();
 
-      case "cancel":
-        if (!["pending", "sedang di packing"].includes(order.status)) {
-          validationError = "⚠️ Order tidak bisa dibatalkan pada status ini.";
-        } else {
-          newStatus = "dibatalkan";
-        }
-        break;
-
-      case "complete":
-        if (order.status !== "sedang di packing") {
-          validationError = "⚠️ Order tidak dalam status sedang di packing.";
-        } else if (!paid) {
-          validationError = "⚠️ Pembayaran belum dilakukan.";
-        } else if (
-          order.pickup_method === "diambil" &&
-          (!barcodeId || barcodeId !== order.id.toString())
-        ) {
-          validationError = "⚠️ Barcode ID tidak valid.";
-        } else {
-          newStatus = "selesai";
-        }
-        break;
-
-      default:
-        validationError = "⚠️ Aksi tidak dikenali.";
+    if (action === "accept") {
+      if (order.pickup_method === "diantar") {
+        newStatus = "sedang di antar";
+        updatePayload.delivery_deadline = new Date(now.getTime() + 24 * 60 * 60 * 1000).toISOString();
+      } else {
+        newStatus = "sedang di packing";
+        updatePayload.pickup_deadline = new Date(now.getTime() + 12 * 60 * 60 * 1000).toISOString();
+        updatePayload.latitude = order.seller.latitude;
+        updatePayload.longitude = order.seller.longitude;
+        updatePayload.alamat_lengkap = order.seller.alamat_lengkap;
+      }
     }
 
-    if (validationError) {
-      return res.status(400).json({ message: validationError });
+    if (action === "complete") {
+      if (!paid) validationError = "⚠️ Pembayaran belum dilakukan.";
+      if (order.pickup_method === "diambil" && (!barcodeId || barcodeId !== order.id.toString()))
+        validationError = "⚠️ Barcode ID tidak valid.";
+      if (!validationError) newStatus = "selesai";
     }
 
-    // Update status
+    if (action === "cancel") {
+      newStatus = "dibatalkan";
+      updatePayload.cancel_reason = "❌ Dibatalkan sistem karena timeout";
+    }
+
+    if (validationError) return res.status(400).json({ message: validationError });
+
     updatePayload.status = newStatus;
+
     const { error: updateError } = await supabase
       .from("orders")
       .update(updatePayload)
-      .eq("id", orderId)
-      .eq("seller_id", sellerInfo.id);
+      .eq("id", orderId);
 
-    if (updateError) {
-      return res
-        .status(500)
-        .json({
-          message: "❌ Gagal update order.",
-          error: updateError.message,
-        });
-    }
+    if (updateError) return res.status(500).json({ message: "❌ Gagal update order.", error: updateError.message });
 
-    // Kirim notifikasi/email
-    try {
-      await sendOrderNotification({
-        order_id: orderId,
-        status: newStatus,
-        buyer_id: order.buyer_id,
-        seller_id: order.seller_id,
-      });
-    } catch (notifyErr) {
-      console.error("❌ Gagal kirim notifikasi:", notifyErr.message);
-    }
+    // Kirim notifikasi
+    await sendOrderNotification({
+      order_id: orderId,
+      products: order.products,
+      buyer_email: order.buyer_email,
+      seller_email: order.seller.email,
+      buyer_username: order.buyer_username,
+      pickup_method: order.pickup_method,
+    });
 
-    return res
-      .status(200)
-      .json({ message: `✅ Status order diubah menjadi '${newStatus}'.` });
+    return res.status(200).json({ message: `✅ Status order diubah menjadi '${newStatus}'`, ...updatePayload });
+
   } catch (err) {
-    return res
-      .status(500)
-      .json({ message: "❌ Terjadi kesalahan server.", error: err.message });
+    console.error("❌ Terjadi kesalahan server:", err);
+    return res.status(500).json({ message: "❌ Terjadi kesalahan server.", error: err.message });
   }
 });
+
+// ==================== VALIDASI BARCODE ====================
+router.post("/orders/validate-barcode", async (req, res) => {
+  const { barcodeId } = req.body;
+  if (!barcodeId) return res.status(400).json({ message: "❌ Barcode ID diperlukan" });
+
+  const { data: order, error } = await supabase
+    .from("orders")
+    .select("*")
+    .eq("id", barcodeId)
+    .single();
+
+  if (error || !order) return res.status(404).json({ message: "❌ Order tidak ditemukan" });
+
+  return res.status(200).json({
+    order_id: order.id,
+    paid: order.paid,
+    status: order.status,
+    message: order.paid ? "✅ Pesanan sudah dibayar" : "⚠️ Belum dibayar",
+  });
+});
+
+// ==================== CRON JOB SIMPEL ====================
+setInterval(async () => {
+  const now = new Date().toISOString();
+
+  // Cancel orders diantar lewat 1 hari
+  const { data: expiredDiantar } = await supabase
+    .from("orders")
+    .select("*")
+    .lt("delivery_deadline", now)
+    .eq("status", "sedang di antar");
+
+  for (const order of expiredDiantar) {
+    await supabase.from("orders").update({
+      status: "dibatalkan",
+      cancel_reason: "❌ Dibatalkan sistem karena timeout pengiriman",
+    }).eq("id", order.id);
+
+    await sendOrderNotification({
+      order_id: order.id,
+      products: order.products,
+      buyer_email: order.buyer_email,
+      seller_email: order.seller.email,
+      buyer_username: order.buyer_username,
+      pickup_method: order.pickup_method,
+    });
+  }
+
+  // Cancel orders diambil lewat 12 jam
+  const { data: expiredDiambil } = await supabase
+    .from("orders")
+    .select("*")
+    .lt("pickup_deadline", now)
+    .eq("status", "sedang di packing");
+
+  for (const order of expiredDiambil) {
+    await supabase.from("orders").update({
+      status: "dibatalkan",
+      cancel_reason: "❌ Dibatalkan sistem karena timeout pengambilan",
+    }).eq("id", order.id);
+
+    await sendOrderNotification({
+      order_id: order.id,
+      products: order.products,
+      buyer_email: order.buyer_email,
+      seller_email: order.seller.email,
+      buyer_username: order.buyer_username,
+      pickup_method: order.pickup_method,
+    });
+  }
+}, 10 * 60 * 1000); // tiap 10 menit
 
 module.exports = router;

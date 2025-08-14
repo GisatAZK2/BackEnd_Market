@@ -194,10 +194,6 @@ router.post("/cart/checkout", detectspam, verifyCaptcha, async (req, res) => {
 
       if (pickup_method === "diantar") {
         orderPayload.delivery_fee = deliveryFee;
-      } else {
-        orderPayload.pickup_deadline = new Date(
-          Date.now() + 6 * 60 * 60 * 1000,
-        ).toISOString();
       }
 
       const { data: order, error: orderError } = await supabase
@@ -287,6 +283,9 @@ router.post("/cart/checkout", detectspam, verifyCaptcha, async (req, res) => {
 
 // === DELIVERY FEE ===
 router.post("/cart/delivery-fee", async (req, res) => {
+
+  // Bisa Ditambahkan Payment Gateway
+
   try {
     const { itemsToCheckout, pickupMethod } = req.body;
 
@@ -641,7 +640,7 @@ router.get("/:id", async (req, res) => {
     const { data: userData, error: userError } = await supabase
       .from("users")
       .select(`nama_penerima, no_telepon, alamat_lengkap, provinsi, kota_kabupaten, kecamatan, kelurahan, kode_pos`)
-      .eq("id", orderData.user_id)   // <- ini yang bener
+      .eq("id", orderData.user_id)   
       .single();
 
     if (userError || !userData) {
@@ -721,6 +720,7 @@ router.get("/:id", async (req, res) => {
     return res.status(500).json({ message: "❌ Terjadi kesalahan server", error: err.message });
   }
 });
+
 
 
 
