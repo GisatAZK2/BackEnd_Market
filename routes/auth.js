@@ -2,6 +2,8 @@ const express = require("express");
 const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
 const supabase = require("../config/supabase");
+const { OAuth2Client } = require("google-auth-library");
+const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 const multer = require("multer");
 const sharp = require("sharp");
 const path = require("path");
@@ -548,40 +550,33 @@ router.delete("/user/:id", async (req, res) => {
 
 router.post("/login/google", async (req, res) => {
   const { id_token } = req.body;
-  if (!id_token) {
-    return res.status(400).json({ error: "ID token Google tidak ditemukan." });
-  }
+  if (!id_token) return res.status(400).json({ error: "ID token Google tidak ditemukan." });
 
   try {
-    // 1. Login ke Supabase pakai ID token Google
-    const { data: session, error: signInError } =
-      await supabase.auth.signInWithIdToken({
-        provider: "google",
-        token: id_token,
-      });
+    // 1. Verify token langsung ke Google
+    const ticket = await client.verifyIdToken({
+      idToken: id_token,
+      audience: process.env.GOOGLE_CLIENT_ID,
+    });
 
-    if (signInError || !session?.user) {
-      console.error("Google sign-in error:", signInError);
-      return res.status(401).json({ error: "Login Google gagal." });
-    }
+    const payload = ticket.getPayload();
+    const email = payload.email;
+    const googleAvatar = payload.picture || null;
 
-    const { email, user_metadata } = session.user;
-    const googleAvatar = user_metadata?.avatar_url || null;
-
-    // 2. Cek user di DB
-    const { data: user } = await supabase
+    // 2. Cek user di Supabase
+    let { data: user, error } = await supabase
       .from("users")
       .select("*")
       .eq("email", email)
       .single();
 
-    // 3. User belum ada → buat user + OTP
+    // 3. User baru → buat user + OTP
     if (!user) {
       const username = email.split("@")[0];
       const otp = Math.floor(100000 + Math.random() * 900000).toString();
       const expiresAt = new Date(Date.now() + 5 * 60 * 1000).toISOString();
 
-      const { error: insertErr } = await supabase.from("users").insert([{
+      const { error: insertErr, data: newUser } = await supabase.from("users").insert([{
         email,
         username,
         password: null,
@@ -589,12 +584,9 @@ router.post("/login/google", async (req, res) => {
         otp_expires_at: expiresAt,
         verified: false,
         avatar: googleAvatar,
-      }]);
+      }]).select().single();
 
-      if (insertErr) {
-        console.error("Insert user error:", insertErr);
-        return res.status(500).json({ error: "Gagal menyimpan user." });
-      }
+      if (insertErr) return res.status(500).json({ error: "Gagal menyimpan user." });
 
       await generateOtp(email, otp);
       return res.status(201).json({
@@ -616,10 +608,7 @@ router.post("/login/google", async (req, res) => {
         .update({ otp_code: otp, otp_expires_at: expiresAt })
         .eq("email", email);
 
-      if (updateErr) {
-        console.error("Update OTP error:", updateErr);
-        return res.status(500).json({ error: "Gagal memperbarui OTP." });
-      }
+      if (updateErr) return res.status(500).json({ error: "Gagal memperbarui OTP." });
 
       await generateOtp(email, otp);
       return res.json({
@@ -632,14 +621,12 @@ router.post("/login/google", async (req, res) => {
     }
 
     // 5. User verified → buat JWT + set cookie
-    const token = jwt.sign({ id: user.id }, process.env.JWT_SECRET, {
-      expiresIn: "7d",
-    });
+    const token = jwt.sign({ id: user.id }, process.env.JWT_SECRET, { expiresIn: "7d" });
 
     const cookieOptions = {
       httpOnly: true,
       secure: process.env.NODE_ENV === "production",
-      sameSite: "None", 
+      sameSite: "None",
       maxAge: 7 * 24 * 60 * 60 * 1000,
     };
 
@@ -653,12 +640,6 @@ router.post("/login/google", async (req, res) => {
       }),
       cookieOptions
     );
-
-    console.log("✅ Cookie terkirim:", {
-      id: user.id,
-      email: user.email,
-      username: user.username,
-    });
 
     return res.json({
       message: "Login Google sukses.",

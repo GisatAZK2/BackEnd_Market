@@ -6,6 +6,7 @@ const apicache = require("apicache");
 const path = require("path");
 require("dotenv").config();
 
+
 // === Middleware & Utils ===
 const requireApiKey = require("./middleware/requireApiKey");
 const rateLimiter = require("./middleware/ratelimiter");
@@ -32,6 +33,9 @@ const formseller = require("./routes/seller/forum-pendaftaran.js");
 
 const app = express();
 startCronJobs();
+
+
+app.use("/product", productRoutes);
 
 // === CORS ORIGINS ===
 const allowedOrigins = process.env.CORS_ORIGIN
@@ -113,7 +117,6 @@ const cache = apicache.middleware;
 // === Routes utama ===
 app.use("/auth", authRoutes);
 
-app.use("/product", productRoutes);
 app.use(wilayah);
 app.use("/categories", cache("10 minutes"), category);
 app.use("/search", cache("2 minutes"), search);
