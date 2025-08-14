@@ -7,6 +7,9 @@ const detectSpam = require("../../middleware/detectSpam");
 const verifyCaptcha = require("../../middleware/verifyCaptcha");
 const router = express.Router();
 
+
+
+
 // ======================== VERIFY OTP ========================
 router.post("/verify-otp", detectSpam, verifyCaptcha, async (req, res) => {
   const { email, otp, mode = "email" } = req.body;
