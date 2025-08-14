@@ -35,8 +35,6 @@ const app = express();
 startCronJobs();
 
 
-app.use("/product", productRoutes);
-
 // === CORS ORIGINS ===
 const allowedOrigins = process.env.CORS_ORIGIN
   ? process.env.CORS_ORIGIN.split(",").map((link) =>
@@ -116,7 +114,7 @@ const cache = apicache.middleware;
 
 // === Routes utama ===
 app.use("/auth", authRoutes);
-
+app.use("/product", productRoutes);
 app.use(wilayah);
 app.use("/categories", cache("10 minutes"), category);
 app.use("/search", cache("2 minutes"), search);
