@@ -631,10 +631,17 @@ router.post("/login/google", async (req, res) => {
       });
     }
 
-    // 5. User verified → buat JWT + set cookie (mirip login manual)
+    // 5. User verified → buat JWT + set cookie
     const token = jwt.sign({ id: user.id }, process.env.JWT_SECRET, {
       expiresIn: "7d",
     });
+
+    const cookieOptions = {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "None", 
+      maxAge: 7 * 24 * 60 * 60 * 1000,
+    };
 
     res.cookie(
       "user_info",
@@ -644,15 +651,10 @@ router.post("/login/google", async (req, res) => {
         username: user.username,
         avatar: user.avatar || googleAvatar,
       }),
-      {
-        httpOnly: true, // keamanan lebih, sama kayak login manual
-        secure: process.env.NODE_ENV === "production" ? true : false,
-        sameSite: "None", // biar bisa cross-origin di browser modern
-        maxAge: 7 * 24 * 60 * 60 * 1000,
-      }
+      cookieOptions
     );
 
-    console.log("✅ Cookie terkirim ke browser/Postman:", {
+    console.log("✅ Cookie terkirim:", {
       id: user.id,
       email: user.email,
       username: user.username,
