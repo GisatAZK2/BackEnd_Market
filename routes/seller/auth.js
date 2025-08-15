@@ -278,35 +278,42 @@ router.post("/login", detectSpam, verifyCaptcha, async (req, res) => {
       .eq("email", email)
       .single();
 
-    // Jika belum ada seller, buat otomatis
-    if (!seller) {
-      const { data: newSeller, error: sellerError } = await supabase
-        .from("sellers")
-        .insert([
-          {
-            email,
-            store_name: user.username || "Toko Baru",
-            store_image_url: null,
-            phone: user.phone || null
-          }
-        ])
-        .select()
-        .single();
-
-      if (sellerError) {
-        console.error("Gagal membuat seller:", sellerError);
-        return res.status(500).json({ error: "Gagal membuat data seller." });
-      }
-
-      seller = newSeller;
-    }
-
     // Token tetap berdasarkan user.id
     const token = jwt.sign({ id: user.id }, process.env.JWT_SECRET, {
       expiresIn: "7d",
     });
 
-    // Cookie seller_info
+    if (!seller) {
+      // Kalau seller belum terdaftar → pakai user_info sementara
+      res.cookie(
+        "user_info",
+        JSON.stringify({
+          id: user.id,
+          email: user.email,
+          username: user.username,
+          avatar: user.avatar || null,
+        }),
+        {
+          httpOnly: true,
+          secure: process.env.NODE_ENV === "production",
+          sameSite: "None",
+          maxAge: 7 * 24 * 60 * 60 * 1000,
+        }
+      );
+
+      return res.status(409).json({
+        message: "User ini belum terdaftar sebagai seller",
+        token,
+        user_info: {
+          id: user.id,
+          email: user.email,
+          username: user.username,
+          avatar: user.avatar || null,
+        },
+      });
+    }
+
+    // Kalau seller sudah ada → pakai seller_info
     res.cookie(
       "seller_info",
       JSON.stringify({
@@ -316,7 +323,7 @@ router.post("/login", detectSpam, verifyCaptcha, async (req, res) => {
       }),
       {
         httpOnly: true,
-        secure: process.env.NODE_ENV === "production" ? true : false,
+        secure: process.env.NODE_ENV === "production",
         sameSite: "None",
         maxAge: 7 * 24 * 60 * 60 * 1000,
       }
@@ -335,6 +342,7 @@ router.post("/login", detectSpam, verifyCaptcha, async (req, res) => {
     res.status(500).json({ error: "Terjadi kesalahan pada server." });
   }
 });
+
 
 router.get("/profile/:id", async (req, res) => {
   try {
