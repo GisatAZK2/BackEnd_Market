@@ -100,7 +100,7 @@ Dokumentasi ini mencakup alur untuk pengguna baru dan pengguna yang sudah terdaf
 ---
 
 ### 3. Pendaftaran Seller
-**Endpoint:** `POST /forum-pendaftaran/seller`
+**Endpoint:** `POST https://backendmarket-production.up.railway.app/seller/V1/forum-pendaftaran/seller`
 
 **Deskripsi:** Mendaftarkan pengguna sebagai seller setelah verifikasi OTP. Memerlukan detail toko dan gambar.
 
