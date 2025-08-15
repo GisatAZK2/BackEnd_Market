@@ -630,107 +630,118 @@ router.delete("/seller/:id", async (req, res) => {
 
 router.post("/login/google", async (req, res) => {
   const { id_token } = req.body;
-  if (!id_token) return res.status(400).json({ error: "ID token Google tidak ditemukan." });
+  if (!id_token)
+    return res.status(400).json({ error: "ID token Google tidak ditemukan." });
 
   try {
-    // 1. Verify token langsung ke Google
+    // 1. Verifikasi token Google
     const ticket = await client.verifyIdToken({
       idToken: id_token,
       audience: process.env.GOOGLE_CLIENT_ID,
     });
-
     const payload = ticket.getPayload();
     const email = payload.email;
     const googleAvatar = payload.picture || null;
 
-    // 2. Cek user di Supabase
-    let { data: user, error } = await supabase
+    // 2. Cek user
+    let { data: user } = await supabase
       .from("users")
       .select("*")
       .eq("email", email)
       .single();
 
-    // 3. User baru → buat user + OTP
+    // 3. Kalau user belum ada → buat user baru
     if (!user) {
       const username = email.split("@")[0];
-      const otp = Math.floor(100000 + Math.random() * 900000).toString();
-      const expiresAt = new Date(Date.now() + 5 * 60 * 1000).toISOString();
-
-      const { error: insertErr, data: newUser } = await supabase.from("users").insert([{
-        email,
-        username,
-        password: null,
-        otp_code: otp,
-        otp_expires_at: expiresAt,
-        verified: false,
-        avatar: googleAvatar,
-      }]).select().single();
-
-      if (insertErr) return res.status(500).json({ error: "Gagal menyimpan user." });
-
-      await generateOtp(email, otp);
-      return res.status(201).json({
-        success: true,
-        step: "verify_otp",
-        message: "User baru dibuat. OTP dikirim ke email.",
-        email,
-        avatar: googleAvatar,
-      });
-    }
-
-    // 4. User belum verified → OTP ulang
-    if (!user.verified) {
-      const otp = Math.floor(100000 + Math.random() * 900000).toString();
-      const expiresAt = new Date(Date.now() + 5 * 60 * 1000).toISOString();
-
-      const { error: updateErr } = await supabase
+      const { data: newUser, error: insertErr } = await supabase
         .from("users")
-        .update({ otp_code: otp, otp_expires_at: expiresAt })
-        .eq("email", email);
+        .insert([
+          {
+            email,
+            username,
+            password: null,
+            verified: true, // Google login dianggap verified
+            avatar: googleAvatar,
+          },
+        ])
+        .select()
+        .single();
 
-      if (updateErr) return res.status(500).json({ error: "Gagal memperbarui OTP." });
+      if (insertErr) {
+        console.error(insertErr);
+        return res.status(500).json({ error: "Gagal membuat user baru." });
+      }
+      user = newUser;
+    }
 
-      await generateOtp(email, otp);
-      return res.json({
-        success: true,
-        step: "verify_otp",
-        message: "OTP dikirim ulang. Silakan verifikasi.",
-        email,
-        avatar: user.avatar || googleAvatar,
+    // 4. Cek seller
+    let { data: seller } = await supabase
+      .from("sellers")
+      .select("*")
+      .eq("email", email)
+      .single();
+
+    // Buat token (tetap pakai user.id)
+    const token = jwt.sign({ id: user.id }, process.env.JWT_SECRET, {
+      expiresIn: "7d",
+    });
+
+    // 5. Kalau belum terdaftar seller → kasih info user saja
+    if (!seller) {
+      res.cookie(
+        "user_info",
+        JSON.stringify({
+          id: user.id,
+          email: user.email,
+          username: user.username,
+          avatar: user.avatar || googleAvatar,
+        }),
+        {
+          httpOnly: true,
+          secure: process.env.NODE_ENV === "production",
+          sameSite: "None",
+          maxAge: 7 * 24 * 60 * 60 * 1000,
+        }
+      );
+
+      return res.status(409).json({
+        message: "User ini belum terdaftar sebagai seller",
+        token,
+        user_info: {
+          id: user.id,
+          email: user.email,
+          username: user.username,
+          avatar: user.avatar || googleAvatar,
+        },
       });
     }
 
-    // 5. User verified → buat JWT + set cookie
-    const token = jwt.sign({ id: user.id }, process.env.JWT_SECRET, { expiresIn: "7d" });
-
-    const cookieOptions = {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "None",
-      maxAge: 7 * 24 * 60 * 60 * 1000,
-    };
-
+    // 6. Kalau seller ada → simpan cookie seller_info
     res.cookie(
-      "user_info",
+      "seller_info",
       JSON.stringify({
-        id: user.id,
-        email: user.email,
-        username: user.username,
-        avatar: user.avatar || googleAvatar,
+        id: seller.id,
+        email: seller.email,
+        store_name: seller.store_name,
       }),
-      cookieOptions
+      {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === "production",
+        sameSite: "None",
+        maxAge: 7 * 24 * 60 * 60 * 1000,
+      }
     );
 
     return res.json({
-      message: "Login Google sukses.",
+      message: "Login Google seller sukses.",
       token,
-      id: user.id,
-      email: user.email,
-      username: user.username,
-      avatar: user.avatar || googleAvatar,
+      seller_id: seller.id,
+      store_name: seller.store_name,
+      profile_seller: seller.store_image_url,
+      email: seller.email,
     });
   } catch (err) {
-    console.error("Google login error:", err);
+    console.error("Google login seller error:", err);
     return res.status(500).json({ error: "Kesalahan server." });
   }
 });
