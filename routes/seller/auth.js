@@ -405,7 +405,7 @@ router.post("/forgot-password", detectSpam, verifyCaptcha, async (req, res) => {
 
     const link =
       resetLink ||
-      `https://cihuy.sytes.net/reset-password?email=${encodeURIComponent(email)}`;
+      `https://sellercihuy.sytes.net/forgot-password?email=${encodeURIComponent(email)}`;
 
     // Kirim email reset
     await sendPasswordResetEmail(email, link);
