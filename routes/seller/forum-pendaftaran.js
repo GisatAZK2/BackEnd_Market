@@ -30,49 +30,64 @@ const upload = multer({
 
 // POST /forum-pendaftaran/seller
 router.post("/seller", upload.single("storeImage"), async (req, res) => {
-  const {
-    email,
-    name,
-    businessName,
-    phone,
-    storeName,
-    storeAddress,
-    provinsi_id,
-    kota_id,
-    kecamatan_id,
-    kelurahan_id,
-    latitude,
-    longitude,
-  } = req.body;
-
-  // Validasi field wajib
-  if (
-    !email ||
-    !name ||
-    !businessName ||
-    !phone ||
-    !storeName ||
-    !storeAddress ||
-    !provinsi_id ||
-    !kota_id ||
-    !kecamatan_id ||
-    !kelurahan_id ||
-    !latitude ||
-    !longitude ||
-    !req.file
-  ) {
-    return res.status(400).json({
-      message: "❌ Semua field wajib diisi termasuk gambar dan koordinat",
-    });
-  }
-
-  const lat = parseFloat(latitude);
-  const lng = parseFloat(longitude);
-  if (isNaN(lat) || isNaN(lng)) {
-    return res.status(400).json({ message: "❌ Koordinat tidak valid" });
-  }
-
   try {
+    const {
+      email,
+      name,
+      businessName,
+      phone,
+      storeName,
+      storeAddress,
+      provinsi_id,
+      kota_id,
+      kecamatan_id,
+      kelurahan_id,
+      latitude,
+      longitude,
+      is_delivery_available,
+      delivery_fee,
+    } = req.body;
+
+    // === Validasi field wajib dasar (tanpa delivery_fee) ===
+    if (
+      !email ||
+      !name ||
+      !businessName ||
+      !phone ||
+      !storeName ||
+      !storeAddress ||
+      !provinsi_id ||
+      !kota_id ||
+      !kecamatan_id ||
+      !kelurahan_id ||
+      !latitude ||
+      !longitude ||
+      typeof is_delivery_available === "undefined" ||
+      !req.file
+    ) {
+      return res.status(400).json({
+        message: "❌ Semua field wajib diisi termasuk gambar dan koordinat",
+      });
+    }
+
+    // Konversi ke boolean
+    const isDelivery =
+      String(is_delivery_available).toLowerCase() === "true";
+
+    // Validasi khusus delivery fee
+    if (isDelivery && (delivery_fee === undefined || delivery_fee === "")) {
+      return res.status(400).json({
+        message: "❌ delivery_fee wajib diisi jika pengiriman tersedia",
+      });
+    }
+
+    // Koordinat
+    const lat = parseFloat(latitude);
+    const lng = parseFloat(longitude);
+    if (isNaN(lat) || isNaN(lng)) {
+      return res.status(400).json({ message: "❌ Koordinat tidak valid" });
+    }
+
     // Ambil nama wilayah dari ID
     const provinsi = await getWilayahName(
       "https://www.emsifa.com/api-wilayah-indonesia/api/provinces.json",
@@ -127,7 +142,7 @@ router.post("/seller", upload.single("storeImage"), async (req, res) => {
       });
     }
 
-    // Ambil URL publik (bukan signed)
+    // Ambil URL publik
     const { data: publicUrlData } = supabase.storage
       .from("store-photos")
       .getPublicUrl(bucketPath);
@@ -151,6 +166,8 @@ router.post("/seller", upload.single("storeImage"), async (req, res) => {
           kelurahan,
           latitude: lat,
           longitude: lng,
+          is_delivery_available: isDelivery,
+          delivery_fee: isDelivery ? parseFloat(delivery_fee) : null,
           store_image_url: publicUrl,
           role: "seller",
         },

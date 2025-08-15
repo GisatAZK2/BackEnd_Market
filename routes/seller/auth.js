@@ -1,13 +1,153 @@
-// routes/authSeller.js
 const express = require("express");
 const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
-const supabase = require("../../config/supabase"); // pastikan path sesuai
+const supabase = require("../../config/supabase");
+const { OAuth2Client } = require("google-auth-library");
+const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
+const multer = require("multer");
+const sharp = require("sharp");
+const path = require("path");
+const fs = require("fs");
+const { createClient } = require("@supabase/supabase-js");
+const { generateOtp, sendPasswordResetEmail } = require("../../utils/otp");
 const detectSpam = require("../../middleware/detectSpam");
 const verifyCaptcha = require("../../middleware/verifyCaptcha");
+const fetch = require("node-fetch");
+
 const router = express.Router();
+const supabaseAdmin = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_ROLE_KEY,
+);
+const storage = multer.memoryStorage();
+const upload = multer({ storage });
 
+router.post(
+  "/register",
+  detectSpam,
+  upload.single("avatar"),
+  verifyCaptcha,
+  async (req, res) => {
+    const { email, password, username } = req.body;
+    console.log("Body register:", req.body);
 
+    try {
+      // === Cek user sudah ada atau belum ===
+      const { data: existingUser } = await supabase
+        .from("users")
+        .select("*")
+        .eq("email", email)
+        .single();
+
+      if (existingUser) {
+        return res.status(400).json({
+          error: "Email sudah digunakan. Silakan gunakan email lain.",
+        });
+      }
+
+      // === Buat username final ===
+      const finalUsername =
+        username && username.trim() !== ""
+          ? username.trim()
+          : email.split("@")[0];
+
+      const hashed = await bcrypt.hash(password, 10);
+      const otp = Math.floor(100000 + Math.random() * 900000).toString();
+      const expiresAt = new Date(Date.now() + 5 * 60 * 1000).toISOString();
+
+      // === Avatar Handling ===
+      let avatarPath;
+      if (req.file) {
+        // --- Kalau user upload avatar ---
+        const filename = `avatar_${Date.now()}.webp`;
+
+        // Konversi ke WebP dalam buffer
+        const buffer = await sharp(req.file.buffer)
+          .webp({ quality: 80 })
+          .toBuffer();
+
+        // Upload ke Supabase Storage
+        const { error: uploadErr } = await supabase.storage
+          .from("avatars")
+          .upload(filename, buffer, {
+            contentType: "image/webp",
+            upsert: true,
+          });
+
+        if (uploadErr) {
+          console.error("Upload error:", uploadErr);
+          return res
+            .status(500)
+            .json({ error: "Gagal upload avatar ke storage." });
+        }
+
+        // Ambil public URL
+        const { data: publicUrl } = supabase.storage
+          .from("avatars")
+          .getPublicUrl(filename);
+
+        avatarPath = publicUrl.publicUrl;
+      } else {
+        // --- Kalau user TIDAK upload avatar ---
+        const defaultImagePath = path.join(__dirname, "../assets/user.png");
+        const filename = `avatar_default_${Date.now()}.webp`;
+
+        // Konversi default.png ke WebP buffer
+        const buffer = await sharp(defaultImagePath)
+          .webp({ quality: 80 })
+          .toBuffer();
+
+        // Upload ke Supabase Storage
+        const { error: uploadErr } = await supabase.storage
+          .from("avatars")
+          .upload(filename, buffer, {
+            contentType: "image/webp",
+            upsert: true,
+          });
+
+        if (uploadErr) {
+          console.error("Upload default avatar error:", uploadErr);
+          return res
+            .status(500)
+            .json({ error: "Gagal upload default avatar ke storage." });
+        }
+
+        // Ambil public URL
+        const { data: publicUrl } = supabase.storage
+          .from("avatars")
+          .getPublicUrl(filename);
+
+        avatarPath = publicUrl.publicUrl;
+      }
+
+      // === Simpan ke database ===
+      const { error: insertErr } = await supabase.from("users").insert([
+        {
+          email,
+          username: finalUsername,
+          password: hashed,
+          otp_code: otp,
+          otp_expires_at: expiresAt,
+          verified: false,
+          avatar: avatarPath,
+        },
+      ]);
+
+      if (insertErr) {
+        console.error("Supabase insert error:", insertErr);
+        return res
+          .status(500)
+          .json({ error: "Gagal membuat user di database." });
+      }
+
+      await generateOtp(email, otp);
+      res.status(201).json({ message: "User dibuat. OTP dikirim ke email." });
+    } catch (err) {
+      console.error("Error saat register:", err);
+      res.status(500).json({ error: "Terjadi kesalahan pada server." });
+    }
+  },
+);
 
 
 // ======================== VERIFY OTP ========================
@@ -201,57 +341,37 @@ router.get("/profile/:id", async (req, res) => {
     let sellerId;
 
     if (req.params.id) {
-      // Ambil dari parameter URL
       sellerId = req.params.id;
     } else {
-      // Ambil dari cookie jika parameter tidak diberikan
       const sellerCookie = req.cookies?.seller_info;
       if (!sellerCookie) {
         return res.status(401).json({ error: "Seller belum login." });
       }
-
       try {
         const sellerInfo = JSON.parse(sellerCookie);
         sellerId = sellerInfo.id;
-      } catch (e) {
+      } catch {
         return res.status(400).json({ error: "Cookie seller tidak valid." });
       }
     }
 
-    // Query seller
-    let { data: seller, error } = await supabase
+    // Ambil semua kolom biar gak ke-lock di versi tertentu
+    const { data: seller, error } = await supabase
       .from("sellers")
-      .select(
-        `id, name, business_name, email, phone, store_address, provinsi, kabupaten, kecamatan, kelurahan, created_at `
-      )
+      .select("*")
       .eq("id", sellerId)
       .single();
-
-    // Fallback ke versi lama jika kolom tidak ada
-    if (error) {
-      console.warn("Kolom default tidak ada, fallback ke versi lama:", error.message);
-      const fallback = await supabase
-        .from("sellers")
-        .select(
-          `id, store_name, store_image_url, email, phone, alamat_lengkap, provinsi, kota_kabupaten, kecamatan, kelurahan, kode_pos, created_at, updated_at`
-        )
-        .eq("id", sellerId)
-        .single();
-
-      seller = fallback.data;
-      error = fallback.error;
-    }
 
     if (error || !seller) {
       return res.status(404).json({ error: "Seller tidak ditemukan." });
     }
 
-    // Gabungkan alamat
+    // Gabungkan alamat dari kolom yang ada
     const alamat_lengkap_combine = [
-      seller.store_address,
-      seller.kelurahan,
-      seller.kecamatan,
-      seller.kabupaten,
+      seller.store_address || seller.alamat_lengkap || "",
+      seller.kelurahan || "",
+      seller.kecamatan || "",
+      seller.kabupaten || seller.kota_kabupaten || "",
     ]
       .filter(Boolean)
       .join(", ");
@@ -267,6 +387,396 @@ router.get("/profile/:id", async (req, res) => {
     res.status(500).json({ error: "Terjadi kesalahan server." });
   }
 });
+
+
+
+// ======================== LUPA PASSWORD ========================
+router.post("/forgot-password", detectSpam, verifyCaptcha, async (req, res) => {
+  const { email, resetLink } = req.body;
+
+  try {
+    const { data: user } = await supabase
+      .from("users")
+      .select("*")
+      .eq("email", email)
+      .single();
+
+    if (!user) return res.status(404).json({ error: "Email tidak ditemukan." });
+
+    const link =
+      resetLink ||
+      `https://cihuy.sytes.net/reset-password?email=${encodeURIComponent(email)}`;
+
+    // Kirim email reset
+    await sendPasswordResetEmail(email, link);
+
+    res.json({ message: "Link reset password dikirim ke email." });
+  } catch (err) {
+    console.error("Reset password error:", err);
+    res.status(500).json({ error: "Terjadi kesalahan pada server." });
+  }
+});
+
+// lanjutan forgot password
+
+// ======================== RESET PASSWORD ========================
+router.post("/reset-password", detectSpam, verifyCaptcha, async (req, res) => {
+  const { email, newPassword } = req.body;
+
+  try {
+    const { data: user } = await supabase
+      .from("users")
+      .select("*")
+      .eq("email", email)
+      .single();
+
+    if (!user) return res.status(404).json({ error: "Email tidak ditemukan." });
+
+    const hashed = await bcrypt.hash(newPassword, 10);
+    const { error } = await supabase
+      .from("users")
+      .update({ password: hashed })
+      .eq("email", email);
+
+    if (error) {
+      console.error("Supabase update error:", error);
+      return res.status(500).json({ error: "Gagal mereset kata sandi." });
+    }
+
+    res.json({ message: "Kata sandi berhasil direset." });
+  } catch (err) {
+    console.error("Reset password error:", err);
+    res.status(500).json({ error: "Terjadi kesalahan pada server." });
+  }
+});
+
+
+// ====================== UPDATE USER ======================
+async function getWilayahName(url, id) {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error("Gagal fetch data wilayah");
+  const list = await res.json();
+  const found = list.find((item) => item.id == id);
+  if (!found) throw new Error(`Wilayah dengan id ${id} tidak ditemukan`);
+  return found.name;
+}
+
+router.put("/seller/update/:id", async (req, res) => {
+  try {
+    // Ambil data seller dari cookie
+    const sellerInfo = req.cookies?.seller_info
+      ? JSON.parse(req.cookies.seller_info)
+      : null;
+
+    if (!sellerInfo?.id) {
+      return res.status(401).json({ error: "❌ Harus login sebagai seller" });
+    }
+
+    const sellerId = req.params.id;
+
+    // Pastikan ID dari URL sama dengan ID di cookie
+    if (sellerId !== sellerInfo.id) {
+      return res
+        .status(403)
+        .json({ error: "❌ Tidak diizinkan mengubah data seller lain" });
+    }
+
+    const {
+      email,
+      name,
+      business_name,
+      phone,
+      store_name,
+      store_address,
+      kelurahan,
+      kecamatan,
+      kabupaten,
+      provinsi,
+      latitude,
+      longitude,
+      store_image_url,
+      role,
+      is_delivery_available,
+      delivery_fee,
+    } = req.body;
+
+    // Update data di Supabase
+    const { data, error } = await supabase
+      .from("sellers")
+      .update({
+        email,
+        name,
+        business_name,
+        phone,
+        store_name,
+        store_address,
+        kelurahan,
+        kecamatan,
+        kabupaten,
+        provinsi,
+        latitude,
+        longitude,
+        store_image_url,
+        role,
+        is_delivery_available,
+        delivery_fee,
+      })
+      .eq("id", sellerId)
+      .select();
+
+    if (error) {
+      return res.status(400).json({ error: error.message });
+    }
+
+    res.json({
+      message: "✅ Data toko berhasil diperbarui",
+      data,
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Terjadi kesalahan server" });
+  }
+});
+
+// ======================== DELETE USER ========================
+router.delete("/seller/:id", async (req, res) => {
+  const cookie = req.cookies.seller_info;
+  if (!cookie)
+    return res.status(401).json({ error: "❌ Tidak ada sesi login seller." });
+
+  let sellerInfo;
+  try {
+    sellerInfo = JSON.parse(cookie);
+  } catch (e) {
+    return res.status(400).json({ error: "❌ Cookie seller tidak valid." });
+  }
+
+  if (sellerInfo.id !== req.params.id) {
+    return res
+      .status(403)
+      .json({ error: "❌ Tidak boleh menghapus seller lain." });
+  }
+
+  try {
+    // 1. Hapus semua orders milik seller
+    const { error: ordersError } = await supabase
+      .from("orders")
+      .delete()
+      .eq("seller_id", req.params.id);
+    if (ordersError) throw ordersError;
+
+    // 2. Hapus semua products milik seller
+    const { error: productsError } = await supabase
+      .from("products")
+      .delete()
+      .eq("seller_id", req.params.id);
+    if (productsError) throw productsError;
+
+    // 3. Hapus seller
+    const { error: sellerError } = await supabase
+      .from("sellers")
+      .delete()
+      .eq("id", req.params.id);
+    if (sellerError) throw sellerError;
+
+    res.clearCookie("seller_info");
+    res.json({
+      message: "✅ Seller beserta semua produk dan pesanan berhasil dihapus.",
+    });
+  } catch (err) {
+    console.error("Delete seller error:", err);
+    res.status(500).json({ error: "❌ Gagal menghapus seller dan data terkait." });
+  }
+});
+
+router.post("/login/google", async (req, res) => {
+  const { id_token } = req.body;
+  if (!id_token) return res.status(400).json({ error: "ID token Google tidak ditemukan." });
+
+  try {
+    // 1. Verify token langsung ke Google
+    const ticket = await client.verifyIdToken({
+      idToken: id_token,
+      audience: process.env.GOOGLE_CLIENT_ID,
+    });
+
+    const payload = ticket.getPayload();
+    const email = payload.email;
+    const googleAvatar = payload.picture || null;
+
+    // 2. Cek user di Supabase
+    let { data: user, error } = await supabase
+      .from("users")
+      .select("*")
+      .eq("email", email)
+      .single();
+
+    // 3. User baru → buat user + OTP
+    if (!user) {
+      const username = email.split("@")[0];
+      const otp = Math.floor(100000 + Math.random() * 900000).toString();
+      const expiresAt = new Date(Date.now() + 5 * 60 * 1000).toISOString();
+
+      const { error: insertErr, data: newUser } = await supabase.from("users").insert([{
+        email,
+        username,
+        password: null,
+        otp_code: otp,
+        otp_expires_at: expiresAt,
+        verified: false,
+        avatar: googleAvatar,
+      }]).select().single();
+
+      if (insertErr) return res.status(500).json({ error: "Gagal menyimpan user." });
+
+      await generateOtp(email, otp);
+      return res.status(201).json({
+        success: true,
+        step: "verify_otp",
+        message: "User baru dibuat. OTP dikirim ke email.",
+        email,
+        avatar: googleAvatar,
+      });
+    }
+
+    // 4. User belum verified → OTP ulang
+    if (!user.verified) {
+      const otp = Math.floor(100000 + Math.random() * 900000).toString();
+      const expiresAt = new Date(Date.now() + 5 * 60 * 1000).toISOString();
+
+      const { error: updateErr } = await supabase
+        .from("users")
+        .update({ otp_code: otp, otp_expires_at: expiresAt })
+        .eq("email", email);
+
+      if (updateErr) return res.status(500).json({ error: "Gagal memperbarui OTP." });
+
+      await generateOtp(email, otp);
+      return res.json({
+        success: true,
+        step: "verify_otp",
+        message: "OTP dikirim ulang. Silakan verifikasi.",
+        email,
+        avatar: user.avatar || googleAvatar,
+      });
+    }
+
+    // 5. User verified → buat JWT + set cookie
+    const token = jwt.sign({ id: user.id }, process.env.JWT_SECRET, { expiresIn: "7d" });
+
+    const cookieOptions = {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "None",
+      maxAge: 7 * 24 * 60 * 60 * 1000,
+    };
+
+    res.cookie(
+      "user_info",
+      JSON.stringify({
+        id: user.id,
+        email: user.email,
+        username: user.username,
+        avatar: user.avatar || googleAvatar,
+      }),
+      cookieOptions
+    );
+
+    return res.json({
+      message: "Login Google sukses.",
+      token,
+      id: user.id,
+      email: user.email,
+      username: user.username,
+      avatar: user.avatar || googleAvatar,
+    });
+  } catch (err) {
+    console.error("Google login error:", err);
+    return res.status(500).json({ error: "Kesalahan server." });
+  }
+});
+
+
+router.delete("/seller/:id", async (req, res) => {
+  const cookie = req.cookies.seller_info;
+  if (!cookie) {
+    return res.status(401).json({ error: "❌ Tidak ada sesi login seller." });
+  }
+
+  let sellerInfo;
+  try {
+    sellerInfo = JSON.parse(cookie);
+  } catch (err) {
+    return res.status(400).json({ error: "❌ Cookie seller tidak valid." });
+  }
+
+  if (sellerInfo.id !== req.params.id) {
+    return res.status(403).json({ error: "❌ Tidak boleh menghapus seller lain." });
+  }
+
+  const sellerId = req.params.id;
+  const mode = req.query.mode || "account-only"; // default akun saja
+
+  try {
+    // Ambil semua order & produk seller
+    const { data: orders } = await supabase
+      .from("orders")
+      .select("id")
+      .eq("seller_id", sellerId);
+    const orderIds = orders?.map(o => o.id) || [];
+
+    const { data: products } = await supabase
+      .from("products")
+      .select("id")
+      .eq("seller_id", sellerId);
+    const productIds = products?.map(p => p.id) || [];
+
+    // Mode: hapus akun + order
+    if (mode === "orders" || mode === "all") {
+      if (orderIds.length > 0) {
+        await supabase.from("order_items").delete().in("order_id", orderIds);
+        await supabase.from("orders").delete().eq("seller_id", sellerId);
+      }
+    }
+
+    // Mode: hapus akun + produk
+    if (mode === "products" || mode === "all") {
+      if (productIds.length > 0) {
+        await supabase.from("product_variants").delete().in("product_id", productIds);
+        await supabase.from("products").delete().eq("seller_id", sellerId);
+      }
+    }
+
+    // Mode: hanya hapus akun
+    if (mode === "account-only") {
+      // Null-kan foreign key supaya data tetap ada
+      if (orderIds.length > 0) {
+        await supabase
+          .from("orders")
+          .update({ seller_id: null })
+          .eq("seller_id", sellerId);
+      }
+      if (productIds.length > 0) {
+        await supabase
+          .from("products")
+          .update({ seller_id: null })
+          .eq("seller_id", sellerId);
+      }
+    }
+
+    // Hapus akun seller
+    await supabase.from("sellers").delete().eq("id", sellerId);
+
+    res.clearCookie("seller_info");
+    res.json({ message: `✅ Seller berhasil dihapus dengan mode: ${mode}` });
+
+  } catch (err) {
+    console.error("Delete seller error:", err);
+    res.status(500).json({ error: "❌ Terjadi kesalahan saat menghapus seller." });
+  }
+});
+
+
 
 
 module.exports = router;

@@ -533,15 +533,17 @@ router.delete("/user/:id", async (req, res) => {
   }
 
   try {
-    const { error } = await supabase
-      .from("users")
-      .delete()
-      .eq("id", req.params.id);
+    // Hapus user dengan CASCADE menggunakan raw SQL
+    const { error } = await supabase.rpc("delete_user_cascade", {
+  p_user_id: req.params.id
+});
+
 
     if (error) throw error;
 
-    res.clearCookie("user_info"); // Hapus cookie juga
-    res.json({ message: "User berhasil dihapus dan sesi diakhiri." });
+    // Hapus cookie
+    res.clearCookie("user_info");
+    res.json({ message: "User berhasil dihapus beserta semua data terkait." });
   } catch (err) {
     console.error("Delete user error:", err);
     res.status(500).json({ error: "Gagal menghapus user." });
@@ -656,16 +658,6 @@ router.post("/login/google", async (req, res) => {
 });
 
 
-router.get("/whoami", async (req, res) => {
-  // Cookie yang dikirim browser akan ada di req.cookies
-  console.log("Cookies from browser:", req.cookies);
-  try {
-    const raw = req.cookies?.user_info;
-    const user = raw ? JSON.parse(raw) : null;
-    return res.json({ user });
-  } catch {
-    return res.json({ user: null });
-  }
-});
+
 
 module.exports = router;
