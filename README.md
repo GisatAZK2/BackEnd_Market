@@ -2,7 +2,7 @@
 
 Dokumentasi ini menjelaskan endpoint API untuk autentikasi pengguna, pendaftaran seller, dan operasi terkait. Semua endpoint diakses melalui base URL berikut:
 
-**Base URL:** `https://backendmarket-production.up.railway.app/seller/V1`
+**Base URL Auth Seller:** `https://backendmarket-production.up.railway.app/seller/V1/auth`
 
 Dokumentasi ini mencakup alur untuk pengguna baru dan pengguna yang sudah terdaftar sebagai seller, termasuk login dengan Google, serta format permintaan untuk setiap endpoint.
 
