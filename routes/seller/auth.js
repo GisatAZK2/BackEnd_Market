@@ -452,6 +452,7 @@ router.post("/reset-password", detectSpam, verifyCaptcha, async (req, res) => {
 
 
 // ====================== UPDATE USER ======================
+// Helper ambil nama wilayah (sama persis seperti di user)
 async function getWilayahName(url, id) {
   const res = await fetch(url);
   if (!res.ok) throw new Error("Gagal fetch data wilayah");
@@ -481,6 +482,7 @@ router.put("/seller/update/:id", async (req, res) => {
         .json({ error: "❌ Tidak diizinkan mengubah data seller lain" });
     }
 
+    // Ambil data dari body
     const {
       email,
       name,
@@ -488,10 +490,10 @@ router.put("/seller/update/:id", async (req, res) => {
       phone,
       store_name,
       store_address,
-      kelurahan,
-      kecamatan,
-      kabupaten,
-      provinsi,
+      provinsi_id,
+      kabupaten_id,
+      kecamatan_id,
+      kelurahan_id,
       latitude,
       longitude,
       store_image_url,
@@ -500,27 +502,56 @@ router.put("/seller/update/:id", async (req, res) => {
       delivery_fee,
     } = req.body;
 
-    // Update data di Supabase
+    const updatePayload = {};
+
+    // Basic fields
+    if (email) updatePayload.email = email;
+    if (name) updatePayload.name = name;
+    if (business_name) updatePayload.business_name = business_name;
+    if (phone) updatePayload.phone = phone;
+    if (store_name) updatePayload.store_name = store_name;
+    if (store_address) updatePayload.store_address = store_address;
+    if (latitude) updatePayload.latitude = latitude;
+    if (longitude) updatePayload.longitude = longitude;
+    if (store_image_url) updatePayload.store_image_url = store_image_url;
+    if (role) updatePayload.role = role;
+    if (typeof is_delivery_available !== "undefined")
+      updatePayload.is_delivery_available = is_delivery_available;
+    if (delivery_fee) updatePayload.delivery_fee = delivery_fee;
+
+    // Wilayah — auto fetch nama dari API
+    if (provinsi_id) {
+      updatePayload.provinsi = await getWilayahName(
+        "https://www.emsifa.com/api-wilayah-indonesia/api/provinces.json",
+        provinsi_id
+      );
+    }
+
+    if (kabupaten_id && provinsi_id) {
+      updatePayload.kabupaten = await getWilayahName(
+        `https://www.emsifa.com/api-wilayah-indonesia/api/regencies/${provinsi_id}.json`,
+        kabupaten_id
+      );
+    }
+
+    if (kecamatan_id && kabupaten_id) {
+      updatePayload.kecamatan = await getWilayahName(
+        `https://www.emsifa.com/api-wilayah-indonesia/api/districts/${kabupaten_id}.json`,
+        kecamatan_id
+      );
+    }
+
+    if (kelurahan_id && kecamatan_id) {
+      updatePayload.kelurahan = await getWilayahName(
+        `https://www.emsifa.com/api-wilayah-indonesia/api/villages/${kecamatan_id}.json`,
+        kelurahan_id
+      );
+    }
+
+    // Update di Supabase
     const { data, error } = await supabase
       .from("sellers")
-      .update({
-        email,
-        name,
-        business_name,
-        phone,
-        store_name,
-        store_address,
-        kelurahan,
-        kecamatan,
-        kabupaten,
-        provinsi,
-        latitude,
-        longitude,
-        store_image_url,
-        role,
-        is_delivery_available,
-        delivery_fee,
-      })
+      .update(updatePayload)
       .eq("id", sellerId)
       .select();
 
@@ -534,7 +565,7 @@ router.put("/seller/update/:id", async (req, res) => {
     });
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: "Terjadi kesalahan server" });
+    res.status(500).json({ error: "Terjadi kesalahan server", detail: err.message });
   }
 });
 
@@ -731,8 +762,27 @@ router.delete("/seller/:id", async (req, res) => {
       .eq("seller_id", sellerId);
     const productIds = products?.map(p => p.id) || [];
 
+    // Ambil semua store_discount, flash_sale_products, event_products
+    const { data: storeDiscounts } = await supabase
+      .from("store_discounts")
+      .select("id")
+      .eq("store_id", sellerId);
+    const storeDiscountIds = storeDiscounts?.map(s => s.id) || [];
+
+    const { data: flashSaleProducts } = await supabase
+      .from("flash_sale_products")
+      .select("flash_sale_id")
+      .eq("seller_id", sellerId);
+    const flashSaleIds = [...new Set(flashSaleProducts?.map(f => f.flash_sale_id) || [])];
+
+    const { data: eventProducts } = await supabase
+      .from("event_products")
+      .select("event_id")
+      .eq("seller_id", sellerId);
+    const eventIds = [...new Set(eventProducts?.map(e => e.event_id) || [])];
+
     // Mode: hapus akun + order
-    if (mode === "orders" || mode === "all") {
+    if (mode === "orders" || mode === "all" || mode === "full") {
       if (orderIds.length > 0) {
         await supabase.from("order_items").delete().in("order_id", orderIds);
         await supabase.from("orders").delete().eq("seller_id", sellerId);
@@ -740,16 +790,34 @@ router.delete("/seller/:id", async (req, res) => {
     }
 
     // Mode: hapus akun + produk
-    if (mode === "products" || mode === "all") {
+    if (mode === "products" || mode === "all" || mode === "full") {
       if (productIds.length > 0) {
         await supabase.from("product_variants").delete().in("product_id", productIds);
         await supabase.from("products").delete().eq("seller_id", sellerId);
       }
     }
 
+    // Mode: hapus akun + store discounts
+    if (mode === "full") {
+      if (storeDiscountIds.length > 0) {
+        await supabase.from("store_discount_items").delete().in("discount_id", storeDiscountIds);
+        await supabase.from("store_discounts").delete().eq("store_id", sellerId);
+      }
+
+      if (flashSaleIds.length > 0) {
+        await supabase.from("flash_sale_products").delete().eq("seller_id", sellerId);
+        // NOTE: kalau mau hapus master flash_sale, pastikan dia milik seller ini
+        await supabase.from("flash_sales").delete().in("id", flashSaleIds);
+      }
+
+      if (eventIds.length > 0) {
+        await supabase.from("event_products").delete().eq("seller_id", sellerId);
+        await supabase.from("events").delete().in("id", eventIds);
+      }
+    }
+
     // Mode: hanya hapus akun
     if (mode === "account-only") {
-      // Null-kan foreign key supaya data tetap ada
       if (orderIds.length > 0) {
         await supabase
           .from("orders")
@@ -775,6 +843,7 @@ router.delete("/seller/:id", async (req, res) => {
     res.status(500).json({ error: "❌ Terjadi kesalahan saat menghapus seller." });
   }
 });
+
 
 
 
