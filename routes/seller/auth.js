@@ -470,15 +470,6 @@ async function getWilayahName(url, id) {
   return found.name;
 }
 
-async function getWilayahName(url, id) {
-  const fetch = (await import("node-fetch")).default;
-  const res = await fetch(url);
-  const data = await res.json();
-  const item = data.find((d) => d.id == id);
-  return item ? item.name : null;
-}
-
-
 router.put(
   "/seller/update/:id",
   upload.single("store_image_url"),

@@ -1,368 +1,324 @@
-# Dokumentasi API untuk Autentikasi dan Pendaftaran Seller
+# Dokumentasi API Produk Seller
 
-Dokumentasi ini menjelaskan endpoint API untuk autentikasi pengguna, pendaftaran seller, dan operasi terkait. Semua endpoint diakses melalui base URL berikut:
+Base URL: `https://backendmarket-production.up.railway.app/seller/V1/products`
 
-**Base URL Auth Seller:** `https://backendmarket-production.up.railway.app/seller/V1/auth`
+API ini menyediakan endpoint untuk mengelola produk dan varian produk milik seller, termasuk operasi upload, pengambilan data, pembaruan, dan penghapusan. API ini menggunakan autentikasi berbasis cookie (`seller_info`) untuk memastikan hanya seller yang berwenang yang dapat mengakses dan mengelola produk mereka. Semua gambar diunggah dalam format WebP untuk efisiensi penyimpanan.
 
-Dokumentasi ini mencakup alur untuk pengguna baru dan pengguna yang sudah terdaftar sebagai seller, termasuk login dengan Google, serta format permintaan untuk setiap endpoint.
-
-## Alur Autentikasi
-
-1. **Pengguna Baru (Login Reguler atau Google):**
-   - Daftar melalui endpoint `/register` atau login dengan Google melalui `/login/google`.
-   - Jika akun baru, pengguna diarahkan ke `/verify-otp` untuk memverifikasi email dengan OTP.
-   - Setelah verifikasi, pengguna harus mendaftar sebagai seller melalui `/forum-pendaftaran/seller`.
-   - Setelah terdaftar sebagai seller, pengguna dapat login melalui `/login` atau `/login/google`.
-
-2. **Seller yang Sudah Terdaftar:**
-   - Jika pengguna sudah terdaftar sebagai seller, mereka dapat langsung login melalui `/login` atau `/login/google` untuk mengakses dashboard.
+## Persyaratan Umum
+- **Autentikasi**: Semua endpoint memerlukan cookie `seller_info` yang berisi informasi seller dalam format JSON. Jika cookie tidak ada atau tidak valid, server akan mengembalikan status `401 Unauthorized`.
+- **Format Gambar**: Gambar yang diunggah akan dikonversi ke format WebP dengan kualitas 80%. Batas ukuran file adalah 10MB per gambar.
+- **Maksimum Gambar**: Maksimum 10 gambar untuk produk dan 10 gambar untuk varian per permintaan.
+- **Cache**: Beberapa endpoint menggunakan caching dengan `node-cache` (TTL: 10 detik) untuk meningkatkan performa.
 
 ---
 
-## Endpoint API
+## Endpoint
 
-### 1. Pendaftaran Pengguna Baru
-**Endpoint:** `POST /register`
+### 1. Upload Produk Baru
+**`POST /upload`**
 
-**Deskripsi:** Mendaftarkan pengguna baru dengan email, kata sandi, dan avatar opsional. OTP akan dikirim untuk verifikasi email.
+Mengunggah produk baru beserta gambar dan varian (opsional).
 
-**Permintaan:**
-```json
-{
-  "email": "user@example.com",
-  "password": "katasandi123",
-  "username": "namaPenggunaOpsional",
-  "captchaToken": "token-captcha-dari-klien"
-}
-```
-- **Opsional:** Sertakan `avatar` sebagai file dalam `multipart/form-data`.
-- **Header:** `Content-Type: multipart/form-data`
+#### **Request**
+- **Method**: POST
+- **Content-Type**: `multipart/form-data`
+- **Body**:
+  - `seller_id` (string, wajib): ID seller.
+  - `productName` (string, wajib): Nama produk.
+  - `productDescription` (string, wajib): Deskripsi produk.
+  - `category_id` (string, wajib): ID kategori produk.
+  - `stock` (integer, opsional): Total stok produk (wajib jika tidak ada varian).
+  - `productPrice` (float, opsional): Harga produk (wajib jika tidak ada varian).
+  - `variants` (JSON string, opsional): Daftar varian dalam format JSON, contoh:
+    ```json
+    [
+      { "name": "Varian 1", "price": 10000, "stock": 10, "image_url": null },
+      { "name": "Varian 2", "price": 12000, "stock": 5, "image_url": null }
+    ]
+    ```
+  - `productImages` (file, wajib): Minimal 1 gambar produk (maksimum 10).
+  - `variantImages` (file, opsional): Gambar untuk varian (maksimum 10, sesuai urutan varian).
 
-**Respon (Sukses):**
-```json
-{
-  "message": "User dibuat. OTP dikirim ke email."
-}
-```
-
-**Respon (Gagal - Email Sudah Digunakan):**
-```json
-{
-  "error": "Email sudah digunakan. Silakan gunakan email lain."
-}
-```
-
----
-
-### 2. Verifikasi OTP
-**Endpoint:** `POST /verify-otp`
-
-**Deskripsi:** Memverifikasi OTP yang dikirim ke email pengguna. Untuk login Google, login otomatis dilakukan setelah verifikasi; jika tidak, pengguna harus login secara manual.
-
-**Permintaan:**
-```json
-{
-  "email": "user@example.com",
-  "otp": "123456",
-  "mode": "email" // atau "google"
-}
-```
-- **Header:** `Content-Type: application/json`
-
-**Respon (Sukses - Mode Google):**
-```json
-{
-  "success": true,
-  "step": "redirect_dashboard",
-  "message": "OTP valid. Akun diaktifkan & login otomatis.",
-  "token": "jwt-token",
-  "id": "id-pengguna"
-}
-```
-
-**Respon (Sukses - Mode Email):**
-```json
-{
-  "success": true,
-  "step": "login_manual",
-  "message": "OTP valid. Akun diaktifkan. Silakan login manual."
-}
-```
-
-**Respon (Gagal - OTP Salah):**
-```json
-{
-  "success": false,
-  "message": "OTP salah atau kadaluarsa."
-}
-```
-
----
-
-### 3. Pendaftaran Seller
-**Endpoint:** `POST https://backendmarket-production.up.railway.app/seller/V1/forum-pendaftaran/seller`
-
-**Deskripsi:** Mendaftarkan pengguna sebagai seller setelah verifikasi OTP. Memerlukan detail toko dan gambar.
-
-**Permintaan:**
-```json
-{
-  "email": "user@example.com",
-  "name": "John Doe",
-  "businessName": "Bisnis Saya",
-  "phone": "081234567890",
-  "storeName": "Toko Saya",
-  "storeAddress": "Jalan Utama 123",
-  "provinsi_id": "31",
-  "kota_id": "3171",
-  "kecamatan_id": "3171010",
-  "kelurahan_id": "3171010001",
-  "latitude": "-6.175110",
-  "longitude": "106.865036",
-  "is_delivery_available": true,
-  "delivery_fee": 10000
-}
-```
-- **Wajib:** Sertakan `storeImage` sebagai file dalam `multipart/form-data` (JPEG atau PNG, maks 5MB).
-- **Header:** `Content-Type: multipart/form-data`
-
-**Respon (Sukses):**
-```json
-{
-  "message": "✅ Seller berhasil didaftarkan",
-  "imageUrl": "https://supabase-url/store-photos/...",
-  "seller": { /* data seller */ }
-}
-```
-
-**Respon (Gagal - Field Kurang):**
-```json
-{
-  "message": "❌ Semua field wajib diisi termasuk gambar dan koordinat"
-}
-```
-
----
-
-### 4. Login Seller
-**Endpoint:** `POST /login`
-
-**Deskripsi:** Login untuk pengguna yang sudah diverifikasi dan membuat profil seller jika belum ada.
-
-**Permintaan:**
-```json
-{
-  "email": "user@example.com",
-  "password": "katasandi123",
-  "captchaToken": "token-captcha-dari-klien"
-}
-```
-- **Header:** `Content-Type: application/json`
-
-**Respon (Sukses):**
-```json
-{
-  "message": "Login seller sukses.",
-  "token": "jwt-token",
-  "seller_id": "id-seller",
-  "store_name": "Toko Saya",
-  "profile_seller": "url-gambar-toko",
-  "email": "user@example.com"
-}
-```
-
-**Respon (Gagal - Kata Sandi Salah):**
-```json
-{
-  "error": "Password salah."
-}
-```
-
----
-
-### 5. Login Google
-**Endpoint:** `POST /login/google`
-
-**Deskripsi:** Login atau mendaftar pengguna melalui Google OAuth. Jika akun baru, OTP dikirim untuk verifikasi.
-
-**Permintaan:**
-```json
-{
-  "id_token": "token-id-google"
-}
-```
-- **Header:** `Content-Type: application/json`
-
-**Respon (Sukses - Pengguna Baru):**
-```json
-{
-  "success": true,
-  "step": "verify_otp",
-  "message": "User baru dibuat. OTP dikirim ke email.",
-  "email": "user@example.com",
-  "avatar": "url-avatar-google"
-}
-```
-
-**Respon (Sukses - Pengguna Terverifikasi):**
-```json
-{
-  "message": "Login Google sukses.",
-  "token": "jwt-token",
-  "id": "id-pengguna",
-  "email": "user@example.com",
-  "username": "nama-pengguna",
-  "avatar": "url-avatar"
-}
-```
-
----
-
-### 6. Lupa Kata Sandi
-**Endpoint:** `POST /forgot-password`
-
-**Deskripsi:** Mengirimkan link reset kata sandi ke email pengguna.
-
-**Permintaan:**
-```json
-{
-  "email": "user@example.com",
-  "captchaToken": "token-captcha-dari-klien",
-  "resetLink": "https://example.com/reset-password?email=user@example.com" // opsional
-}
-```
-- **Header:** `Content-Type: application/json`
-
-**Respon (Sukses):**
-```json
-{
-  "message": "Link reset password dikirim ke email."
-}
-```
-
----
-
-### 7. Reset Kata Sandi
-**Endpoint:** `POST /reset-password`
-
-**Deskripsi:** Mereset kata sandi pengguna.
-
-**Permintaan:**
-```json
-{
-  "email": "user@example.com",
-  "newPassword": "katasandibaru123",
-  "captchaToken": "token-captcha-dari-klien"
-}
-```
-- **Header:** `Content-Type: application/json`
-
-**Respon (Sukses):**
-```json
-{
-  "message": "Kata sandi berhasil direset."
-}
-```
-
----
-
-### 8. Perbarui Profil Seller
-**Endpoint:** `PUT /seller/update/:id`
-
-**Deskripsi:** Memperbarui informasi profil seller.
-
-**Permintaan:**
-```json
-{
-  "email": "user@example.com",
-  "name": "John Doe",
-  "business_name": "Bisnis Saya",
-  "phone": "081234567890",
-  "store_name": "Toko Saya",
-  "store_address": "Jalan Utama 123",
-  "provinsi_id": "31",
-  "kabupaten_id": "3171",
-  "kecamatan_id": "3171010",
-  "kelurahan_id": "3171010001",
-  "latitude": "-6.175110",
-  "longitude": "106.865036",
-  "store_image_url": "url-gambar-baru",
-  "role": "seller",
-  "is_delivery_available": true,
-  "delivery_fee": 10000
-}
-```
-- **Header:** `Content-Type: application/json`
-- **Cookie:** `seller_info` dengan data seller yang valid
-- **Parameter:** `id` (ID seller)
-
-**Respon (Sukses):**
-```json
-{
-  "message": "✅ Data toko berhasil diperbarui",
-  "data": { /* data seller yang diperbarui */ }
-}
-```
-
----
-
-### 9. Ambil Profil Seller
-**Endpoint:** `GET /profile/:id`
-
-**Deskripsi:** Mengambil profil seller berdasarkan ID atau dari cookie pengguna yang sedang login.
-
-**Permintaan:**
-- **Parameter:** `id` (ID seller, opsional jika menggunakan cookie)
-- **Cookie:** `seller_info` (opsional jika ID disediakan)
-
-**Respon (Sukses):**
-```json
-{
-  "seller": {
-    "id": "id-seller",
-    "email": "user@example.com",
-    "store_name": "Toko Saya",
-    "alamat_lengkap_combine": "Jalan Utama 123, Kebon Kacang, Tanah Abang, Jakarta Pusat",
-    /* kolom lainnya */
+#### **Response**
+- **201 Created**:
+  ```json
+  {
+    "message": "✅ Produk berhasil diunggah",
+    "data": {
+      "id": "product_id",
+      "seller_id": "seller_id",
+      "product_name": "Nama Produk",
+      "product_description": "Deskripsi Produk",
+      "product_price": 10000,
+      "min_price": 10000,
+      "max_price": 12000,
+      "stock": 15,
+      "product_image_url": ["url1", "url2"],
+      "keywords": ["keyword1", "keyword2"],
+      "variants": [
+        { "product_id": "product_id", "variant_name": "Varian 1", "variant_price": 10000, "variant_stock": 10, "variant_image_url": "url" },
+        ...
+      ]
+    }
   }
-}
-```
+  ```
+- **400 Bad Request**: Jika field wajib kosong, format varian tidak valid, atau gambar bukan format yang diizinkan.
+- **404 Not Found**: Jika seller tidak ditemukan.
+- **500 Internal Server Error**: Jika terjadi kesalahan server.
+
+#### **Catatan**
+- Gambar diunggah ke Supabase Storage di bucket `product-images` dengan path `seller_id/products/{uuid}.webp` untuk produk dan `seller_id/variants/{uuid}.webp` untuk varian.
+- Keywords dihasilkan otomatis dari `productName` dan `productDescription` menggunakan fungsi `generateKeywords`.
+- Harga dan stok produk dihitung berdasarkan varian (jika ada) atau input langsung.
 
 ---
 
-### 10. Hapus Seller
-**Endpoint:** `DELETE /seller/:id`
+### 2. Ambil Semua Produk Seller
+**`GET /allproduct`**
 
-**Deskripsi:** Menghapus akun seller dan data terkait (pesanan, produk, diskon, dll.) berdasarkan parameter `mode`.
+Mengambil semua produk milik seller yang sedang login.
 
-**Permintaan:**
-- **Parameter:** `id` (ID seller)
-- **Query:** `mode` (opsi: `account-only`, `orders`, `products`, `all`, `full`)
-- **Cookie:** `seller_info` dengan data seller yang valid
+#### **Request**
+- **Method**: GET
+- **Headers**: Cookie `seller_info` wajib.
 
-**Respon (Sukses):**
-```json
-{
-  "message": "✅ Seller berhasil dihapus dengan mode: {mode}"
-}
-```
+#### **Response**
+- **200 OK**:
+  ```json
+  {
+    "message": "✅ {jumlah} produk dari seller {store_name}",
+    "products": [
+      {
+        "id": "product_id",
+        "product_name": "Nama Produk",
+        "product_price": 10000,
+        "stock": 15,
+        "product_image_url": ["url1", "url2"],
+        "variants": [
+          { "variant_name": "Varian 1", "variant_price": 10000, "variant_stock": 10, "variant_image_url": "url" },
+          ...
+        ],
+        "discountPercentage": 10,
+        "realDiscount": 1000
+      },
+      ...
+    ]
+  }
+  ```
+- **401 Unauthorized**: Jika cookie `seller_info` tidak ada.
+- **400 Bad Request**: Jika cookie `seller_info` tidak valid.
+- **500 Internal Server Error**: Jika terjadi kesalahan server.
 
-**Respon (Gagal - Tidak Diizinkan):**
-```json
-{
-  "error": "❌ Tidak boleh menghapus seller lain."
-}
-```
+#### **Catatan**
+- Produk disertai informasi varian dan diskon yang dihitung menggunakan fungsi `attachVariantsStockDiscountWithRealDiscount`.
 
 ---
 
-## Catatan
-- Semua endpoint kecuali `/profile/:id` dan `/seller/update/:id` memerlukan verifikasi CAPTCHA (`captchaToken`).
-- Cookie `seller_info` diatur saat login berhasil dan diperlukan untuk rute yang dilindungi seperti pembaruan atau penghapusan seller.
-- Login Google memerlukan `id_token` yang valid dari Google OAuth.
-- Pendaftaran seller memerlukan ID wilayah Indonesia yang valid (`provinsi_id`, `kota_id`, dll.) dan gambar toko.
-- Parameter `mode` pada endpoint hapus menentukan cakupan penghapusan:
-  - `account-only`: Hanya menghapus akun seller, mengatur `seller_id` pada pesanan/produk menjadi null.
-  - `orders`: Menghapus akun seller dan pesanan terkait.
-  - `products`: Menghapus akun seller dan produk terkait.
-  - `all` atau `full`: Menghapus akun seller, pesanan, produk, dan diskon/acara terkait.
+### 3. Ambil Produk Berdasarkan Kategori
+**`GET /by-category/:category_id`**
+
+Mengambil semua produk milik seller dalam kategori tertentu.
+
+#### **Request**
+- **Method**: GET
+- **Headers**: Cookie `seller_info` wajib.
+- **Params**:
+  - `category_id`: ID kategori produk.
+
+#### **Response**
+- **200 OK**:
+  ```json
+  {
+    "message": "✅ Ditemukan {jumlah} produk dalam kategori {category_name} milik seller {store_name}",
+    "category": "Nama Kategori",
+    "products": [
+      {
+        "id": "product_id",
+        "product_name": "Nama Produk",
+        "product_price": 10000,
+        "stock": 15,
+        "product_image_url": ["url1", "url2"],
+        "variants": [
+          { "variant_name": "Varian 1", "variant_price": 10000, "variant_stock": 10, "variant_image_url": "url" },
+          ...
+        ],
+        "discountPercentage": 10,
+        "realDiscount": 1000
+      },
+      ...
+    ]
+  }
+  ```
+- **401 Unauthorized**: Jika cookie `seller_info` tidak ada.
+- **400 Bad Request**: Jika cookie `seller_info` tidak valid.
+- **404 Not Found**: Jika kategori tidak ditemukan.
+- **500 Internal Server Error**: Jika terjadi kesalahan server.
+
+---
+
+### 4. Ambil Detail Produk
+**`GET /:id`**
+
+Mengambil detail produk berdasarkan ID, hanya untuk produk milik seller yang login.
+
+#### **Request**
+- **Method**: GET
+- **Headers**: Cookie `seller_info` wajib.
+- **Params**:
+  - `id`: ID produk.
+
+#### **Response**
+- **200 OK**:
+  ```json
+  {
+    "message": "✅ Produk ditemukan",
+    "product": {
+      "id": "product_id",
+      "product_name": "Nama Produk",
+      "product_description": "Deskripsi Produk",
+      "product_price": 10000,
+      "stock": 15,
+      "product_image_url": ["url1", "url2"],
+      "keywords": ["keyword1", "keyword2"],
+      "variants": [
+        { "variant_name": "Varian 1", "variant_price": 10000, "variant_stock": 10, "variant_image_url": "url" },
+        ...
+      ],
+      "seller": {
+        "id": "seller_id",
+        "name": "Nama Seller",
+        "email": "seller@example.com",
+        "phone": "123456789",
+        "store_name": "Nama Toko",
+        "store_address": "Alamat Toko",
+        "store_image_url": "url"
+      },
+      "discountPercentage": 10,
+      "realDiscount": 1000
+    }
+  }
+  ```
+- **401 Unauthorized**: Jika cookie `seller_info` tidak ada.
+- **400 Bad Request**: Jika cookie `seller_info` tidak valid.
+- **404 Not Found**: Jika produk tidak ditemukan atau bukan milik seller.
+- **500 Internal Server Error**: Jika terjadi kesalahan server.
+
+#### **Catatan**
+- Menggunakan cache (`node-cache`) untuk menyimpan hasil per seller dengan key `product_{id}_seller_{seller_id}`.
+
+---
+
+### 5. Update Produk
+**`PUT /:id`**
+
+Memperbarui produk yang sudah ada, termasuk gambar, varian, dan informasi lainnya.
+
+#### **Request**
+- **Method**: PUT
+- **Content-Type**: `multipart/form-data`
+- **Headers**: Cookie `seller_info` wajib.
+- **Params**:
+  - `id`: ID produk.
+- **Body**:
+  - `productName` (string, opsional): Nama produk baru.
+  - `productDescription` (string, opsional): Deskripsi produk baru.
+  - `category_id` (string, opsional): ID kategori baru.
+  - `stock` (integer, opsional): Stok baru (jika tanpa varian).
+  - `productPrice` (float, opsional): Harga baru (jika tanpa varian).
+  - `variants` (JSON string, opsional): Daftar varian baru atau yang diperbarui, contoh:
+    ```json
+    [
+      { "id": "variant_id", "name": "Varian 1", "price": 10000, "stock": 10, "image_url": "url" },
+      { "name": "Varian Baru", "price": 12000, "stock": 5 }
+    ]
+    ```
+  - `productImagesToDelete` (JSON array/string, opsional): Daftar URL gambar produk yang akan dihapus.
+  - `productImages` (file, opsional): Gambar produk baru (maksimum 10).
+  - `variantImages` (file, opsional): Gambar varian baru (maksimum 10, sesuai urutan varian).
+
+#### **Response**
+- **200 OK**:
+  ```json
+  {
+    "message": "✅ Produk berhasil diperbarui",
+    "data": {
+      "id": "product_id",
+      "product_name": "Nama Produk",
+      "product_description": "Deskripsi Produk",
+      "product_price": 10000,
+      "min_price": 10000,
+      "max_price": 12000,
+      "stock": 15,
+      "product_image_url": ["url1", "url2"],
+      "keywords": ["keyword1", "keyword2"],
+      "variants": [
+        { "id": "variant_id", "variant_name": "Varian 1", "variant_price": 10000, "variant_stock": 10, "variant_image_url": "url" },
+        ...
+      ]
+    }
+  }
+  ```
+- **401 Unauthorized**: Jika cookie `seller_info` tidak ada.
+- **400 Bad Request**: Jika format varian atau `productImagesToDelete` tidak valid.
+- **404 Not Found**: Jika produk tidak ditemukan atau bukan milik seller.
+- **500 Internal Server Error**: Jika terjadi kesalahan server.
+
+#### **Catatan**
+- Gambar lama yang tidak dihapus akan digabung dengan gambar baru.
+- Varian yang memiliki `id` akan diperbarui, yang tidak memiliki `id` akan ditambahkan sebagai varian baru.
+- Harga dan stok produk dihitung ulang berdasarkan varian atau input langsung.
+
+---
+
+### 6. Hapus Produk atau Varian
+**`DELETE /delete/:id`**
+
+Menghapus produk atau varian tertentu berdasarkan ID.
+
+#### **Request**
+- **Method**: DELETE
+- **Headers**: Cookie `seller_info` wajib.
+- **Params**:
+  - `id`: ID produk atau varian.
+- **Query**:
+  - `type` (string, default: `product`): Jenis yang akan dihapus (`product` atau `variant`).
+  - `mode` (string, default: `all`): Mode penghapusan produk (`all` untuk produk + varian, `variant_only` untuk varian saja).
+
+#### **Response**
+- **200 OK**:
+  - Untuk varian: 
+    ```json
+    { "message": "✅ Varian berhasil dihapus & stok diperbarui" }
+    ```
+  - Untuk produk (mode `variant_only`): 
+    ```json
+    { "message": "✅ Semua varian berhasil dihapus" }
+    ```
+  - Untuk produk (mode `all`): 
+    ```json
+    { "message": "✅ Produk dan semua varian berhasil dihapus" }
+    ```
+- **401 Unauthorized**: Jika cookie `seller_info` tidak ada.
+- **404 Not Found**: Jika produk/varian tidak ditemukan atau bukan milik seller.
+- **500 Internal Server Error**: Jika terjadi kesalahan server.
+
+#### **Catatan**
+- Menghapus varian akan memperbarui stok total produk.
+- Menghapus produk (mode `all`) juga menghapus semua varian dan gambar terkait di Supabase Storage.
+- Path gambar dihapus dari bucket `product-images` menggunakan path yang diekstrak dari URL.
+
+---
+
+## Teknologi yang Digunakan
+- **Express.js**: Framework untuk API.
+- **Multer**: Middleware untuk penanganan upload file.
+- **Sharp**: Konversi gambar ke WebP.
+- **Supabase**: Database dan storage untuk produk, varian, dan gambar.
+- **Node-Cache**: Caching data produk.
+- **UUID**: Pembuatan nama file unik untuk gambar.
+
+## Catatan Tambahan
+- Semua endpoint memastikan bahwa hanya produk milik seller yang login yang dapat diakses atau dimodifikasi.
+- Gambar disimpan di Supabase Storage dengan struktur folder `seller_id/products/` untuk gambar produk dan `seller_id/variants/` untuk gambar varian.
+- Fungsi `generateKeywords` digunakan untuk menghasilkan kata kunci dari nama dan deskripsi produk untuk keperluan pencarian.
+- Fungsi `attachVariantsStockDiscountWithRealDiscount` menambahkan informasi varian dan diskon ke respons produk.

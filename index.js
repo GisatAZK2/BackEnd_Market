@@ -30,6 +30,7 @@ const { router: wilayah } = require("./utils/wilayahutils");
 const authseller = require("./routes/seller/auth.js");
 const orderseller = require("./routes/seller/order.js");
 const formseller = require("./routes/seller/forum-pendaftaran.js");
+const productseller = require("./routes/seller/product.js");
 
 const app = express();
 startCronJobs();
@@ -129,6 +130,7 @@ const sellerRouter = express.Router();
 sellerRouter.use("/auth", authseller);
 sellerRouter.use("/order", orderseller);
 sellerRouter.use("/forum-pendaftaran", formseller);
+sellerRouter.use("/products", productseller);
 sellerRouter.get("/test", (req, res) => {
   res.json({ message: "Seller V1 API aktif 🚀" });
 });
