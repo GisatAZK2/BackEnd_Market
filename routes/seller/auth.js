@@ -479,32 +479,42 @@ async function getWilayahName(url, id) {
 }
 
 // Update seller (bisa JSON / form-data)
+const path = require("path");
+const sharp = require("sharp");
+
 router.put(
   "/seller/update/:id",
   upload.single("store_image_url"),
   async (req, res) => {
     try {
+      console.log("👉 Mulai proses update seller");
+
       // Ambil data seller dari cookie
       const sellerInfo = req.cookies?.seller_info
         ? JSON.parse(req.cookies.seller_info)
         : null;
 
       if (!sellerInfo?.id) {
+        console.log("❌ Seller belum login");
         return res
           .status(401)
           .json({ error: "❌ Harus login sebagai seller" });
       }
 
       const sellerId = req.params.id;
+      console.log("🔑 Seller ID dari param:", sellerId);
+      console.log("🔑 Seller ID dari cookie:", sellerInfo.id);
 
       // Pastikan ID dari URL sama dengan ID di cookie
       if (sellerId !== sellerInfo.id) {
+        console.log("⚠️ Seller mencoba update data seller lain");
         return res.status(403).json({
           error: "❌ Tidak diizinkan mengubah data seller lain",
         });
       }
 
       const body = req.body || {};
+      console.log("📦 Body request:", body);
 
       const {
         email,
@@ -543,13 +553,17 @@ router.put(
 
       // === Upload / Replace Gambar Toko ===
       if (req.file) {
+        console.log("🖼️ File upload diterima:", req.file.originalname);
         const filename = `store_${sellerId}_${Date.now()}.webp`;
+        console.log("📂 Nama file di storage:", filename);
 
         // Konversi buffer ke WebP
+        console.log("⚙️ Konversi gambar ke WebP...");
         const buffer = await sharp(req.file.buffer)
           .webp({ quality: 80 })
           .toBuffer();
 
+        console.log("⬆️ Upload gambar ke Supabase...");
         const { error: uploadError } = await supabase.storage
           .from("store-photos")
           .upload(filename, buffer, {
@@ -558,6 +572,7 @@ router.put(
           });
 
         if (uploadError) {
+          console.error("❌ Gagal upload gambar:", uploadError);
           return res.status(400).json({
             error: "Upload gagal",
             detail: uploadError.message,
@@ -569,34 +584,43 @@ router.put(
           .from("store-photos")
           .getPublicUrl(filename);
 
+        console.log("✅ Gambar berhasil diupload, URL:", publicUrl.publicUrl);
         updatePayload.store_image_url = publicUrl.publicUrl;
+      } else {
+        console.log("ℹ️ Tidak ada file gambar diupload, skip image update");
       }
 
       // === Update wilayah ===
       if (provinsi_id) {
+        console.log("📍 Update provinsi:", provinsi_id);
         updatePayload.provinsi = await getWilayahName(
           "https://www.emsifa.com/api-wilayah-indonesia/api/provinces.json",
           provinsi_id
         );
       }
       if (kabupaten_id && provinsi_id) {
+        console.log("📍 Update kabupaten:", kabupaten_id);
         updatePayload.kabupaten = await getWilayahName(
           `https://www.emsifa.com/api-wilayah-indonesia/api/regencies/${provinsi_id}.json`,
           kabupaten_id
         );
       }
       if (kecamatan_id && kabupaten_id) {
+        console.log("📍 Update kecamatan:", kecamatan_id);
         updatePayload.kecamatan = await getWilayahName(
           `https://www.emsifa.com/api-wilayah-indonesia/api/districts/${kabupaten_id}.json`,
           kecamatan_id
         );
       }
       if (kelurahan_id && kecamatan_id) {
+        console.log("📍 Update kelurahan:", kelurahan_id);
         updatePayload.kelurahan = await getWilayahName(
           `https://www.emsifa.com/api-wilayah-indonesia/api/villages/${kecamatan_id}.json`,
           kelurahan_id
         );
       }
+
+      console.log("📤 Payload final yang akan diupdate:", updatePayload);
 
       // === Update DB ===
       const { data, error } = await supabase
@@ -606,15 +630,18 @@ router.put(
         .select();
 
       if (error) {
+        console.error("❌ Gagal update seller di DB:", error);
         return res.status(400).json({ error: error.message });
       }
+
+      console.log("✅ Data seller berhasil diperbarui:", data);
 
       res.json({
         message: "✅ Data toko berhasil diperbarui",
         data,
       });
     } catch (err) {
-      console.error(err);
+      console.error("💥 Error server:", err);
       res.status(500).json({
         error: "Terjadi kesalahan server",
         detail: err.message,
@@ -622,6 +649,7 @@ router.put(
     }
   }
 );
+
 
 // ======================== DELETE USER ========================
 router.post("/login/google", async (req, res) => {
