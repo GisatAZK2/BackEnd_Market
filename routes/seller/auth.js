@@ -504,7 +504,6 @@ router.put(
         });
       }
 
-      // Ambil body
       const body = req.body || {};
 
       const {
@@ -542,16 +541,20 @@ router.put(
           is_delivery_available === "true" || is_delivery_available === true;
       if (delivery_fee) updatePayload.delivery_fee = delivery_fee;
 
-      // Kalau ada upload file (field: store_image_url)
+      // === Upload / Replace Gambar Toko ===
       if (req.file) {
-        const fileExt = path.extname(req.file.originalname);
-        const fileName = `store_${sellerId}${fileExt}`;
+        const filename = `store_${sellerId}_${Date.now()}.webp`;
+
+        // Konversi buffer ke WebP
+        const buffer = await sharp(req.file.buffer)
+          .webp({ quality: 80 })
+          .toBuffer();
 
         const { error: uploadError } = await supabase.storage
-          .from("store-photos") // bucket name
-          .upload(fileName, req.file.buffer, {
-            contentType: req.file.mimetype,
-            upsert: true, // kalau ada, replace
+          .from("store-photos")
+          .upload(filename, buffer, {
+            contentType: "image/webp",
+            upsert: true, // replace kalau sudah ada
           });
 
         if (uploadError) {
@@ -564,12 +567,12 @@ router.put(
         // Ambil URL publik
         const { data: publicUrl } = supabase.storage
           .from("store-photos")
-          .getPublicUrl(fileName);
+          .getPublicUrl(filename);
 
         updatePayload.store_image_url = publicUrl.publicUrl;
       }
 
-      // Wilayah
+      // === Update wilayah ===
       if (provinsi_id) {
         updatePayload.provinsi = await getWilayahName(
           "https://www.emsifa.com/api-wilayah-indonesia/api/provinces.json",
@@ -595,7 +598,7 @@ router.put(
         );
       }
 
-      // Update ke Supabase
+      // === Update DB ===
       const { data, error } = await supabase
         .from("sellers")
         .update(updatePayload)
@@ -620,12 +623,10 @@ router.put(
   }
 );
 
-
 // ======================== DELETE USER ========================
 router.post("/login/google", async (req, res) => {
   const { id_token } = req.body;
-  if (!id_token)
-    return res.status(400).json({ error: "ID token Google tidak ditemukan." });
+  if (!id_token) return res.status(400).json({ error: "ID token Google tidak ditemukan." });
 
   try {
     // 1. Verifikasi token Google
@@ -644,43 +645,69 @@ router.post("/login/google", async (req, res) => {
       .eq("email", email)
       .single();
 
-    // 3. Kalau user belum ada → buat user baru
+    // 3. User baru → buat user + OTP
     if (!user) {
       const username = email.split("@")[0];
-      const { data: newUser, error: insertErr } = await supabase
-        .from("users")
-        .insert([
-          {
-            email,
-            username,
-            password: null,
-            verified: true, // Google login dianggap verified
-            avatar: googleAvatar,
-          },
-        ])
-        .select()
-        .single();
+      const otp = Math.floor(100000 + Math.random() * 900000).toString();
+      const expiresAt = new Date(Date.now() + 5 * 60 * 1000).toISOString();
+
+      const { error: insertErr, data: newUser } = await supabase.from("users").insert([{
+        email,
+        username,
+        password: null,
+        otp_code: otp,
+        otp_expires_at: expiresAt,
+        verified: false,
+        avatar: googleAvatar,
+      }]).select().single();
 
       if (insertErr) {
         console.error(insertErr);
-        return res.status(500).json({ error: "Gagal membuat user baru." });
+        return res.status(500).json({ error: "Gagal menyimpan user." });
       }
-      user = newUser;
+
+      await generateOtp(email, otp);
+      return res.status(201).json({
+        success: true,
+        step: "verify_otp",
+        message: "User baru dibuat. OTP dikirim ke email.",
+        email,
+        avatar: googleAvatar,
+      });
     }
 
-    // 4. Cek seller
+    // 4. User ada tapi belum verified → OTP ulang
+    if (!user.verified) {
+      const otp = Math.floor(100000 + Math.random() * 900000).toString();
+      const expiresAt = new Date(Date.now() + 5 * 60 * 1000).toISOString();
+
+      const { error: updateErr } = await supabase
+        .from("users")
+        .update({ otp_code: otp, otp_expires_at: expiresAt })
+        .eq("email", email);
+
+      if (updateErr) return res.status(500).json({ error: "Gagal memperbarui OTP." });
+
+      await generateOtp(email, otp);
+      return res.json({
+        success: true,
+        step: "verify_otp",
+        message: "OTP dikirim ulang. Silakan verifikasi.",
+        email,
+        avatar: user.avatar || googleAvatar,
+      });
+    }
+
+    // 5. User verified → cek seller
+    const token = jwt.sign({ id: user.id }, process.env.JWT_SECRET, { expiresIn: "7d" });
+
     let { data: seller } = await supabase
       .from("sellers")
       .select("*")
       .eq("email", email)
       .single();
 
-    // Buat token (tetap pakai user.id)
-    const token = jwt.sign({ id: user.id }, process.env.JWT_SECRET, {
-      expiresIn: "7d",
-    });
-
-    // 5. Kalau belum terdaftar seller → kasih info user saja
+    // Kalau belum seller → balikin info user
     if (!seller) {
       res.cookie(
         "user_info",
@@ -710,7 +737,7 @@ router.post("/login/google", async (req, res) => {
       });
     }
 
-    // 6. Kalau seller ada → simpan cookie seller_info
+    // Kalau seller ada → set cookie seller_info
     res.cookie(
       "seller_info",
       JSON.stringify({
