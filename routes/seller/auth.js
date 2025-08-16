@@ -479,187 +479,149 @@ async function getWilayahName(url, id) {
 }
 
 // Update seller (bisa JSON / form-data)
-router.put("/seller/update/:id", upload.single("store_image_url"), async (req, res) => {
-  try {
-    // Ambil data seller dari cookie
-    const sellerInfo = req.cookies?.seller_info
-      ? JSON.parse(req.cookies.seller_info)
-      : null;
+router.put(
+  "/seller/update/:id",
+  upload.single("store_image_url"),
+  async (req, res) => {
+    try {
+      // Ambil data seller dari cookie
+      const sellerInfo = req.cookies?.seller_info
+        ? JSON.parse(req.cookies.seller_info)
+        : null;
 
-    if (!sellerInfo?.id) {
-      return res.status(401).json({ error: "❌ Harus login sebagai seller" });
-    }
-
-    const sellerId = req.params.id;
-
-    // Pastikan ID dari URL sama dengan ID di cookie
-    if (sellerId !== sellerInfo.id) {
-      return res.status(403).json({ error: "❌ Tidak diizinkan mengubah data seller lain" });
-    }
-
-    // Ambil body (bisa dari JSON atau form-data)
-    const body = req.body || {};
-
-    const {
-      email,
-      name,
-      business_name,
-      phone,
-      store_name,
-      store_address,
-      provinsi_id,
-      kabupaten_id,
-      kecamatan_id,
-      kelurahan_id,
-      latitude,
-      longitude,
-      role,
-      is_delivery_available,
-      delivery_fee,
-    } = body;
-
-    const updatePayload = {};
-
-    // Basic fields
-    if (email) updatePayload.email = email;
-    if (name) updatePayload.name = name;
-    if (business_name) updatePayload.business_name = business_name;
-    if (phone) updatePayload.phone = phone;
-    if (store_name) updatePayload.store_name = store_name;
-    if (store_address) updatePayload.store_address = store_address;
-    if (latitude) updatePayload.latitude = latitude;
-    if (longitude) updatePayload.longitude = longitude;
-    if (role) updatePayload.role = role;
-    if (typeof is_delivery_available !== "undefined")
-      updatePayload.is_delivery_available = is_delivery_available === "true" || is_delivery_available === true;
-    if (delivery_fee) updatePayload.delivery_fee = delivery_fee;
-
-    // Kalau ada upload file (form-data dengan field "store_image_url")
-    if (req.file) {
-      // 👉 Upload file ke Supabase Storage (contoh)
-      const fs = require("fs");
-      const path = require("path");
-
-      const fileBuffer = fs.readFileSync(req.file.path);
-      const fileExt = path.extname(req.file.originalname);
-      const fileName = `store_${sellerId}${fileExt}`;
-      const { data: uploadData, error: uploadError } = await supabase.storage
-        .from("store_images")
-        .upload(fileName, fileBuffer, { upsert: true });
-
-      if (uploadError) {
-        return res.status(400).json({ error: "Upload gagal", detail: uploadError.message });
+      if (!sellerInfo?.id) {
+        return res
+          .status(401)
+          .json({ error: "❌ Harus login sebagai seller" });
       }
 
-      // Ambil URL publik
-      const { data: publicUrl } = supabase.storage
-        .from("store_images")
-        .getPublicUrl(fileName);
+      const sellerId = req.params.id;
 
-      updatePayload.store_image_url = publicUrl.publicUrl;
+      // Pastikan ID dari URL sama dengan ID di cookie
+      if (sellerId !== sellerInfo.id) {
+        return res.status(403).json({
+          error: "❌ Tidak diizinkan mengubah data seller lain",
+        });
+      }
 
-      // Hapus file temp
-      fs.unlinkSync(req.file.path);
-    }
+      // Ambil body
+      const body = req.body || {};
 
-    // Wilayah — auto fetch nama dari API
-    if (provinsi_id) {
-      updatePayload.provinsi = await getWilayahName(
-        "https://www.emsifa.com/api-wilayah-indonesia/api/provinces.json",
-        provinsi_id
-      );
-    }
-    if (kabupaten_id && provinsi_id) {
-      updatePayload.kabupaten = await getWilayahName(
-        `https://www.emsifa.com/api-wilayah-indonesia/api/regencies/${provinsi_id}.json`,
-        kabupaten_id
-      );
-    }
-    if (kecamatan_id && kabupaten_id) {
-      updatePayload.kecamatan = await getWilayahName(
-        `https://www.emsifa.com/api-wilayah-indonesia/api/districts/${kabupaten_id}.json`,
-        kecamatan_id
-      );
-    }
-    if (kelurahan_id && kecamatan_id) {
-      updatePayload.kelurahan = await getWilayahName(
-        `https://www.emsifa.com/api-wilayah-indonesia/api/villages/${kecamatan_id}.json`,
-        kelurahan_id
-      );
-    }
+      const {
+        email,
+        name,
+        business_name,
+        phone,
+        store_name,
+        store_address,
+        provinsi_id,
+        kabupaten_id,
+        kecamatan_id,
+        kelurahan_id,
+        latitude,
+        longitude,
+        role,
+        is_delivery_available,
+        delivery_fee,
+      } = body;
 
-    // Update di Supabase
-    const { data, error } = await supabase
-      .from("sellers")
-      .update(updatePayload)
-      .eq("id", sellerId)
-      .select();
+      const updatePayload = {};
 
-    if (error) {
-      return res.status(400).json({ error: error.message });
+      // Basic fields
+      if (email) updatePayload.email = email;
+      if (name) updatePayload.name = name;
+      if (business_name) updatePayload.business_name = business_name;
+      if (phone) updatePayload.phone = phone;
+      if (store_name) updatePayload.store_name = store_name;
+      if (store_address) updatePayload.store_address = store_address;
+      if (latitude) updatePayload.latitude = latitude;
+      if (longitude) updatePayload.longitude = longitude;
+      if (role) updatePayload.role = role;
+      if (typeof is_delivery_available !== "undefined")
+        updatePayload.is_delivery_available =
+          is_delivery_available === "true" || is_delivery_available === true;
+      if (delivery_fee) updatePayload.delivery_fee = delivery_fee;
+
+      // Kalau ada upload file (field: store_image_url)
+      if (req.file) {
+        const fileExt = path.extname(req.file.originalname);
+        const fileName = `store_${sellerId}${fileExt}`;
+
+        const { error: uploadError } = await supabase.storage
+          .from("store-photos") // bucket name
+          .upload(fileName, req.file.buffer, {
+            contentType: req.file.mimetype,
+            upsert: true, // kalau ada, replace
+          });
+
+        if (uploadError) {
+          return res.status(400).json({
+            error: "Upload gagal",
+            detail: uploadError.message,
+          });
+        }
+
+        // Ambil URL publik
+        const { data: publicUrl } = supabase.storage
+          .from("store-photos")
+          .getPublicUrl(fileName);
+
+        updatePayload.store_image_url = publicUrl.publicUrl;
+      }
+
+      // Wilayah
+      if (provinsi_id) {
+        updatePayload.provinsi = await getWilayahName(
+          "https://www.emsifa.com/api-wilayah-indonesia/api/provinces.json",
+          provinsi_id
+        );
+      }
+      if (kabupaten_id && provinsi_id) {
+        updatePayload.kabupaten = await getWilayahName(
+          `https://www.emsifa.com/api-wilayah-indonesia/api/regencies/${provinsi_id}.json`,
+          kabupaten_id
+        );
+      }
+      if (kecamatan_id && kabupaten_id) {
+        updatePayload.kecamatan = await getWilayahName(
+          `https://www.emsifa.com/api-wilayah-indonesia/api/districts/${kabupaten_id}.json`,
+          kecamatan_id
+        );
+      }
+      if (kelurahan_id && kecamatan_id) {
+        updatePayload.kelurahan = await getWilayahName(
+          `https://www.emsifa.com/api-wilayah-indonesia/api/villages/${kecamatan_id}.json`,
+          kelurahan_id
+        );
+      }
+
+      // Update ke Supabase
+      const { data, error } = await supabase
+        .from("sellers")
+        .update(updatePayload)
+        .eq("id", sellerId)
+        .select();
+
+      if (error) {
+        return res.status(400).json({ error: error.message });
+      }
+
+      res.json({
+        message: "✅ Data toko berhasil diperbarui",
+        data,
+      });
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({
+        error: "Terjadi kesalahan server",
+        detail: err.message,
+      });
     }
-
-    res.json({
-      message: "✅ Data toko berhasil diperbarui",
-      data,
-    });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "Terjadi kesalahan server", detail: err.message });
   }
-});
+);
+
 
 // ======================== DELETE USER ========================
-router.delete("/seller/:id", async (req, res) => {
-  const cookie = req.cookies.seller_info;
-  if (!cookie)
-    return res.status(401).json({ error: "❌ Tidak ada sesi login seller." });
-
-  let sellerInfo;
-  try {
-    sellerInfo = JSON.parse(cookie);
-  } catch (e) {
-    return res.status(400).json({ error: "❌ Cookie seller tidak valid." });
-  }
-
-  if (sellerInfo.id !== req.params.id) {
-    return res
-      .status(403)
-      .json({ error: "❌ Tidak boleh menghapus seller lain." });
-  }
-
-  try {
-    // 1. Hapus semua orders milik seller
-    const { error: ordersError } = await supabase
-      .from("orders")
-      .delete()
-      .eq("seller_id", req.params.id);
-    if (ordersError) throw ordersError;
-
-    // 2. Hapus semua products milik seller
-    const { error: productsError } = await supabase
-      .from("products")
-      .delete()
-      .eq("seller_id", req.params.id);
-    if (productsError) throw productsError;
-
-    // 3. Hapus seller
-    const { error: sellerError } = await supabase
-      .from("sellers")
-      .delete()
-      .eq("id", req.params.id);
-    if (sellerError) throw sellerError;
-
-    res.clearCookie("seller_info");
-    res.json({
-      message: "✅ Seller beserta semua produk dan pesanan berhasil dihapus.",
-    });
-  } catch (err) {
-    console.error("Delete seller error:", err);
-    res.status(500).json({ error: "❌ Gagal menghapus seller dan data terkait." });
-  }
-});
-
 router.post("/login/google", async (req, res) => {
   const { id_token } = req.body;
   if (!id_token)
@@ -894,8 +856,6 @@ router.delete("/seller/:id", async (req, res) => {
     res.status(500).json({ error: "❌ Terjadi kesalahan saat menghapus seller." });
   }
 });
-
-
 
 
 
