@@ -470,7 +470,16 @@ async function getWilayahName(url, id) {
   return found.name;
 }
 
-router.put("/seller/update/:id", async (req, res) => {
+async function getWilayahName(url, id) {
+  const fetch = (await import("node-fetch")).default;
+  const res = await fetch(url);
+  const data = await res.json();
+  const item = data.find((d) => d.id == id);
+  return item ? item.name : null;
+}
+
+// Update seller (bisa JSON / form-data)
+router.put("/seller/update/:id", upload.single("store_image_url"), async (req, res) => {
   try {
     // Ambil data seller dari cookie
     const sellerInfo = req.cookies?.seller_info
@@ -485,12 +494,12 @@ router.put("/seller/update/:id", async (req, res) => {
 
     // Pastikan ID dari URL sama dengan ID di cookie
     if (sellerId !== sellerInfo.id) {
-      return res
-        .status(403)
-        .json({ error: "❌ Tidak diizinkan mengubah data seller lain" });
+      return res.status(403).json({ error: "❌ Tidak diizinkan mengubah data seller lain" });
     }
 
-    // Ambil data dari body
+    // Ambil body (bisa dari JSON atau form-data)
+    const body = req.body || {};
+
     const {
       email,
       name,
@@ -504,11 +513,10 @@ router.put("/seller/update/:id", async (req, res) => {
       kelurahan_id,
       latitude,
       longitude,
-      store_image_url,
       role,
       is_delivery_available,
       delivery_fee,
-    } = req.body;
+    } = body;
 
     const updatePayload = {};
 
@@ -521,11 +529,38 @@ router.put("/seller/update/:id", async (req, res) => {
     if (store_address) updatePayload.store_address = store_address;
     if (latitude) updatePayload.latitude = latitude;
     if (longitude) updatePayload.longitude = longitude;
-    if (store_image_url) updatePayload.store_image_url = store_image_url;
     if (role) updatePayload.role = role;
     if (typeof is_delivery_available !== "undefined")
-      updatePayload.is_delivery_available = is_delivery_available;
+      updatePayload.is_delivery_available = is_delivery_available === "true" || is_delivery_available === true;
     if (delivery_fee) updatePayload.delivery_fee = delivery_fee;
+
+    // Kalau ada upload file (form-data dengan field "store_image_url")
+    if (req.file) {
+      // 👉 Upload file ke Supabase Storage (contoh)
+      const fs = require("fs");
+      const path = require("path");
+
+      const fileBuffer = fs.readFileSync(req.file.path);
+      const fileExt = path.extname(req.file.originalname);
+      const fileName = `store_${sellerId}${fileExt}`;
+      const { data: uploadData, error: uploadError } = await supabase.storage
+        .from("store_images")
+        .upload(fileName, fileBuffer, { upsert: true });
+
+      if (uploadError) {
+        return res.status(400).json({ error: "Upload gagal", detail: uploadError.message });
+      }
+
+      // Ambil URL publik
+      const { data: publicUrl } = supabase.storage
+        .from("store_images")
+        .getPublicUrl(fileName);
+
+      updatePayload.store_image_url = publicUrl.publicUrl;
+
+      // Hapus file temp
+      fs.unlinkSync(req.file.path);
+    }
 
     // Wilayah — auto fetch nama dari API
     if (provinsi_id) {
@@ -534,21 +569,18 @@ router.put("/seller/update/:id", async (req, res) => {
         provinsi_id
       );
     }
-
     if (kabupaten_id && provinsi_id) {
       updatePayload.kabupaten = await getWilayahName(
         `https://www.emsifa.com/api-wilayah-indonesia/api/regencies/${provinsi_id}.json`,
         kabupaten_id
       );
     }
-
     if (kecamatan_id && kabupaten_id) {
       updatePayload.kecamatan = await getWilayahName(
         `https://www.emsifa.com/api-wilayah-indonesia/api/districts/${kabupaten_id}.json`,
         kecamatan_id
       );
     }
-
     if (kelurahan_id && kecamatan_id) {
       updatePayload.kelurahan = await getWilayahName(
         `https://www.emsifa.com/api-wilayah-indonesia/api/villages/${kecamatan_id}.json`,
