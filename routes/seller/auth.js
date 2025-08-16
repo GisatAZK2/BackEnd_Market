@@ -478,9 +478,6 @@ async function getWilayahName(url, id) {
   return item ? item.name : null;
 }
 
-// Update seller (bisa JSON / form-data)
-const path = require("path");
-const sharp = require("sharp");
 
 router.put(
   "/seller/update/:id",
