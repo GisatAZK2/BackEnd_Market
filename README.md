@@ -1,324 +1,304 @@
-# Dokumentasi API Produk Seller
+# Dokumentasi API Store Discount
 
-Base URL: `https://backendmarket-production.up.railway.app/seller/V1/products`
+Berikut adalah dokumentasi untuk API pengelolaan diskon toko (store discount) menggunakan Express.js dan Supabase sebagai backend. API ini memungkinkan penjual untuk membuat, mengelola, dan menghapus diskon untuk produk dan variannya.
 
-API ini menyediakan endpoint untuk mengelola produk dan varian produk milik seller, termasuk operasi upload, pengambilan data, pembaruan, dan penghapusan. API ini menggunakan autentikasi berbasis cookie (`seller_info`) untuk memastikan hanya seller yang berwenang yang dapat mengakses dan mengelola produk mereka. Semua gambar diunggah dalam format WebP untuk efisiensi penyimpanan.
+**Base URL**: `https://backendmarket-production.up.railway.app/seller/V1/promoteseller`
 
-## Persyaratan Umum
-- **Autentikasi**: Semua endpoint memerlukan cookie `seller_info` yang berisi informasi seller dalam format JSON. Jika cookie tidak ada atau tidak valid, server akan mengembalikan status `401 Unauthorized`.
-- **Format Gambar**: Gambar yang diunggah akan dikonversi ke format WebP dengan kualitas 80%. Batas ukuran file adalah 10MB per gambar.
-- **Maksimum Gambar**: Maksimum 10 gambar untuk produk dan 10 gambar untuk varian per permintaan.
-- **Cache**: Beberapa endpoint menggunakan caching dengan `node-cache` (TTL: 10 detik) untuk meningkatkan performa.
+## Daftar Isi
+1. [Prasyarat](#prasyarat)
+2. [Fitur Utama](#fitur-utama)
+3. [Endpoint API](#endpoint-api)
+   - [Membuat Diskon Baru](#membuat-diskon-baru)
+   - [Mendapatkan Produk yang Tersedia](#mendapatkan-produk-yang-tersedia)
+   - [Mendapatkan Semua Diskon](#mendapatkan-semua-diskon)
+   - [Mendapatkan Detail Diskon](#mendapatkan-detail-diskon)
+   - [Menduplikasi Diskon](#menduplikasi-diskon)
+   - [Mengedit Diskon](#mengedit-diskon)
+   - [Menghapus Diskon atau Item](#menghapus-diskon-atau-item)
+4. [Struktur Data](#struktur-data)
+5. [Catatan Tambahan](#catatan-tambahan)
 
----
+## Prasyarat
+- **Node.js** dan **Express.js** terinstal.
+- **Supabase** sebagai database backend dengan tabel `store_discounts`, `store_discount_items`, `products`, dan `product_variants`.
+- **Cookie** berisi `seller_info` dengan `id` penjual untuk autentikasi.
+- Dependensi: `multer`, `sharp`, `uuid`, `luxon`, `node-cron`.
+- Fungsi utilitas: `attachVariantsStockDiscount` dan `attachVariantsStockDiscountWithRealDiscount` dari `../../utils/applyDiscountAndVariants`.
 
-## Endpoint
+## Fitur Utama
+- Membuat diskon toko dengan item produk atau varian tertentu.
+- Validasi duplikasi diskon berdasarkan nama dan periode.
+- Pengecekan produk/varian yang sudah ada di diskon aktif.
+- Mengelompokkan produk dan varian dengan status diskon.
+- Menduplikasi diskon dengan periode baru.
+- Mengedit item diskon (stock dan persentase diskon).
+- Menghapus diskon atau item tertentu.
 
-### 1. Upload Produk Baru
-**`POST /upload`**
+## Endpoint API
 
-Mengunggah produk baru beserta gambar dan varian (opsional).
+### Membuat Diskon Baru
+**POST** `/store-discount/create`
 
-#### **Request**
-- **Method**: POST
-- **Content-Type**: `multipart/form-data`
-- **Body**:
-  - `seller_id` (string, wajib): ID seller.
-  - `productName` (string, wajib): Nama produk.
-  - `productDescription` (string, wajib): Deskripsi produk.
-  - `category_id` (string, wajib): ID kategori produk.
-  - `stock` (integer, opsional): Total stok produk (wajib jika tidak ada varian).
-  - `productPrice` (float, opsional): Harga produk (wajib jika tidak ada varian).
-  - `variants` (JSON string, opsional): Daftar varian dalam format JSON, contoh:
-    ```json
-    [
-      { "name": "Varian 1", "price": 10000, "stock": 10, "image_url": null },
-      { "name": "Varian 2", "price": 12000, "stock": 5, "image_url": null }
-    ]
-    ```
-  - `productImages` (file, wajib): Minimal 1 gambar produk (maksimum 10).
-  - `variantImages` (file, opsional): Gambar untuk varian (maksimum 10, sesuai urutan varian).
+**URL Lengkap**: `https://backendmarket-production.up.railway.app/seller/V1/promoteseller/store-discount/create`
 
-#### **Response**
-- **201 Created**:
-  ```json
-  {
-    "message": "✅ Produk berhasil diunggah",
-    "data": {
-      "id": "product_id",
-      "seller_id": "seller_id",
-      "product_name": "Nama Produk",
-      "product_description": "Deskripsi Produk",
-      "product_price": 10000,
-      "min_price": 10000,
-      "max_price": 12000,
-      "stock": 15,
-      "product_image_url": ["url1", "url2"],
-      "keywords": ["keyword1", "keyword2"],
+**Deskripsi**: Membuat diskon baru untuk toko dengan item produk/varian tertentu.
+
+**Body Request**:
+```json
+{
+  "name": "string",
+  "start_time": "ISO string",
+  "end_time": "ISO string",
+  "timezone": "string (opsional, default: Asia/Jakarta)",
+  "items": [
+    {
+      "product_id": "string",
+      "stock": "number (opsional jika ada varian)",
+      "discount_percentage": "number (opsional jika ada varian)",
       "variants": [
-        { "product_id": "product_id", "variant_name": "Varian 1", "variant_price": 10000, "variant_stock": 10, "variant_image_url": "url" },
-        ...
+        {
+          "variant_id": "string",
+          "stock": "number",
+          "discount_percentage": "number"
+        }
       ]
     }
-  }
-  ```
-- **400 Bad Request**: Jika field wajib kosong, format varian tidak valid, atau gambar bukan format yang diizinkan.
-- **404 Not Found**: Jika seller tidak ditemukan.
-- **500 Internal Server Error**: Jika terjadi kesalahan server.
+  ]
+}
+```
 
-#### **Catatan**
-- Gambar diunggah ke Supabase Storage di bucket `product-images` dengan path `seller_id/products/{uuid}.webp` untuk produk dan `seller_id/variants/{uuid}.webp` untuk varian.
-- Keywords dihasilkan otomatis dari `productName` dan `productDescription` menggunakan fungsi `generateKeywords`.
-- Harga dan stok produk dihitung berdasarkan varian (jika ada) atau input langsung.
+**Respons Sukses** (200):
+```json
+{
+  "message": "✅ Diskon toko berhasil dibuat dengan item-target",
+  "store_discount": { /* data diskon */ }
+}
+```
+
+**Respons Gagal**:
+- 401: Harus login sebagai seller.
+- 400: Field wajib (name, start_time, end_time, items) tidak lengkap.
+- 409: Diskon dengan nama dan periode sama sudah ada atau produk/varian sudah ada di diskon aktif.
+- 500: Error server atau gagal menyimpan data.
 
 ---
 
-### 2. Ambil Semua Produk Seller
-**`GET /allproduct`**
+### Mendapatkan Produk yang Tersedia
+**GET** `/store-discount/available-products`
 
-Mengambil semua produk milik seller yang sedang login.
+**URL Lengkap**: `https://backendmarket-production.up.railway.app/seller/V1/promoteseller/store-discount/available-products`
 
-#### **Request**
-- **Method**: GET
-- **Headers**: Cookie `seller_info` wajib.
+**Deskripsi**: Mengambil daftar semua produk dan varian milik penjual, dengan status apakah sedang dalam diskon aktif atau tidak.
 
-#### **Response**
-- **200 OK**:
-  ```json
-  {
-    "message": "✅ {jumlah} produk dari seller {store_name}",
-    "products": [
-      {
-        "id": "product_id",
-        "product_name": "Nama Produk",
-        "product_price": 10000,
-        "stock": 15,
-        "product_image_url": ["url1", "url2"],
-        "variants": [
-          { "variant_name": "Varian 1", "variant_price": 10000, "variant_stock": 10, "variant_image_url": "url" },
-          ...
-        ],
-        "discountPercentage": 10,
-        "realDiscount": 1000
+**Respons Sukses** (200):
+```json
+{
+  "message": "✅ Daftar produk dengan status diskon",
+  "items": [
+    {
+      "product_id": "string",
+      "product_data": {
+        "product_name": "string",
+        "product_description": "string",
+        "stock": "number (null jika ada varian)",
+        "seller_name": "string",
+        "product_image_url": "string|null",
+        "is_on_discount": "boolean|undefined"
       },
-      ...
-    ]
-  }
-  ```
-- **401 Unauthorized**: Jika cookie `seller_info` tidak ada.
-- **400 Bad Request**: Jika cookie `seller_info` tidak valid.
-- **500 Internal Server Error**: Jika terjadi kesalahan server.
-
-#### **Catatan**
-- Produk disertai informasi varian dan diskon yang dihitung menggunakan fungsi `attachVariantsStockDiscountWithRealDiscount`.
-
----
-
-### 3. Ambil Produk Berdasarkan Kategori
-**`GET /by-category/:category_id`**
-
-Mengambil semua produk milik seller dalam kategori tertentu.
-
-#### **Request**
-- **Method**: GET
-- **Headers**: Cookie `seller_info` wajib.
-- **Params**:
-  - `category_id`: ID kategori produk.
-
-#### **Response**
-- **200 OK**:
-  ```json
-  {
-    "message": "✅ Ditemukan {jumlah} produk dalam kategori {category_name} milik seller {store_name}",
-    "category": "Nama Kategori",
-    "products": [
-      {
-        "id": "product_id",
-        "product_name": "Nama Produk",
-        "product_price": 10000,
-        "stock": 15,
-        "product_image_url": ["url1", "url2"],
-        "variants": [
-          { "variant_name": "Varian 1", "variant_price": 10000, "variant_stock": 10, "variant_image_url": "url" },
-          ...
-        ],
-        "discountPercentage": 10,
-        "realDiscount": 1000
-      },
-      ...
-    ]
-  }
-  ```
-- **401 Unauthorized**: Jika cookie `seller_info` tidak ada.
-- **400 Bad Request**: Jika cookie `seller_info` tidak valid.
-- **404 Not Found**: Jika kategori tidak ditemukan.
-- **500 Internal Server Error**: Jika terjadi kesalahan server.
-
----
-
-### 4. Ambil Detail Produk
-**`GET /:id`**
-
-Mengambil detail produk berdasarkan ID, hanya untuk produk milik seller yang login.
-
-#### **Request**
-- **Method**: GET
-- **Headers**: Cookie `seller_info` wajib.
-- **Params**:
-  - `id`: ID produk.
-
-#### **Response**
-- **200 OK**:
-  ```json
-  {
-    "message": "✅ Produk ditemukan",
-    "product": {
-      "id": "product_id",
-      "product_name": "Nama Produk",
-      "product_description": "Deskripsi Produk",
-      "product_price": 10000,
-      "stock": 15,
-      "product_image_url": ["url1", "url2"],
-      "keywords": ["keyword1", "keyword2"],
+      "stock": "number|null",
+      "discount_percentage": "number|null",
       "variants": [
-        { "variant_name": "Varian 1", "variant_price": 10000, "variant_stock": 10, "variant_image_url": "url" },
-        ...
-      ],
-      "seller": {
-        "id": "seller_id",
-        "name": "Nama Seller",
-        "email": "seller@example.com",
-        "phone": "123456789",
-        "store_name": "Nama Toko",
-        "store_address": "Alamat Toko",
-        "store_image_url": "url"
-      },
-      "discountPercentage": 10,
-      "realDiscount": 1000
-    }
-  }
-  ```
-- **401 Unauthorized**: Jika cookie `seller_info` tidak ada.
-- **400 Bad Request**: Jika cookie `seller_info` tidak valid.
-- **404 Not Found**: Jika produk tidak ditemukan atau bukan milik seller.
-- **500 Internal Server Error**: Jika terjadi kesalahan server.
-
-#### **Catatan**
-- Menggunakan cache (`node-cache`) untuk menyimpan hasil per seller dengan key `product_{id}_seller_{seller_id}`.
-
----
-
-### 5. Update Produk
-**`PUT /:id`**
-
-Memperbarui produk yang sudah ada, termasuk gambar, varian, dan informasi lainnya.
-
-#### **Request**
-- **Method**: PUT
-- **Content-Type**: `multipart/form-data`
-- **Headers**: Cookie `seller_info` wajib.
-- **Params**:
-  - `id`: ID produk.
-- **Body**:
-  - `productName` (string, opsional): Nama produk baru.
-  - `productDescription` (string, opsional): Deskripsi produk baru.
-  - `category_id` (string, opsional): ID kategori baru.
-  - `stock` (integer, opsional): Stok baru (jika tanpa varian).
-  - `productPrice` (float, opsional): Harga baru (jika tanpa varian).
-  - `variants` (JSON string, opsional): Daftar varian baru atau yang diperbarui, contoh:
-    ```json
-    [
-      { "id": "variant_id", "name": "Varian 1", "price": 10000, "stock": 10, "image_url": "url" },
-      { "name": "Varian Baru", "price": 12000, "stock": 5 }
-    ]
-    ```
-  - `productImagesToDelete` (JSON array/string, opsional): Daftar URL gambar produk yang akan dihapus.
-  - `productImages` (file, opsional): Gambar produk baru (maksimum 10).
-  - `variantImages` (file, opsional): Gambar varian baru (maksimum 10, sesuai urutan varian).
-
-#### **Response**
-- **200 OK**:
-  ```json
-  {
-    "message": "✅ Produk berhasil diperbarui",
-    "data": {
-      "id": "product_id",
-      "product_name": "Nama Produk",
-      "product_description": "Deskripsi Produk",
-      "product_price": 10000,
-      "min_price": 10000,
-      "max_price": 12000,
-      "stock": 15,
-      "product_image_url": ["url1", "url2"],
-      "keywords": ["keyword1", "keyword2"],
-      "variants": [
-        { "id": "variant_id", "variant_name": "Varian 1", "variant_price": 10000, "variant_stock": 10, "variant_image_url": "url" },
-        ...
+        {
+          "variant_id": "string",
+          "stock": "number",
+          "discount_percentage": "number|null",
+          "is_on_discount": "boolean",
+          "variant_data": {
+            "variant_name": "string",
+            "variant_stock": "number",
+            "variant_image_url": "string|null"
+          }
+        }
       ]
     }
+  ]
+}
+```
+
+**Respons Gagal**:
+- 401: Harus login sebagai seller.
+- 404: Seller tidak ditemukan.
+- 500: Error server.
+
+---
+
+### Mendapatkan Semua Diskon
+**GET** `/store-discount/all`
+
+**URL Lengkap**: `https://backendmarket-production.up.railway.app/seller/V1/promoteseller/store-discount/all`
+
+**Deskripsi**: Mengambil semua diskon milik penjual tanpa relasi produk/varian.
+
+**Respons Sukses** (200):
+```json
+{
+  "message": "✅ Semua diskon toko berhasil diambil",
+  "data": [ /* daftar diskon */ ]
+}
+```
+
+**Respons Gagal**:
+- 401: Harus login sebagai seller.
+- 500: Error server.
+
+---
+
+### Mendapatkan Detail Diskon
+**GET** `/store-discount/:id`
+
+**URL Lengkap**: `https://backendmarket-production.up.railway.app/seller/V1/promoteseller/store-discount/:id`
+
+**Deskripsi**: Mengambil detail diskon berdasarkan ID, termasuk item produk dan varian.
+
+**Parameter**: `id` (ID diskon)
+
+**Respons Sukses** (200):
+```json
+{
+  "message": "✅ Diskon berhasil diambil",
+  "data": {
+    /* data diskon */
+    "items": [
+      {
+        "product_id": "string",
+        "product_data": {
+          "product_name": "string",
+          "product_description": "string",
+          "product_image_url": "string|null",
+          "stock": "number|null"
+        },
+        "stock": "number|null",
+        "discount_percentage": "number|null",
+        "variants": [
+          {
+            "variant_id": "string",
+            "stock": "number|null",
+            "discount_percentage": "number",
+            "variant_data": {
+              "variant_name": "string",
+              "variant_stock": "number"
+            }
+          }
+        ]
+      }
+    ]
   }
-  ```
-- **401 Unauthorized**: Jika cookie `seller_info` tidak ada.
-- **400 Bad Request**: Jika format varian atau `productImagesToDelete` tidak valid.
-- **404 Not Found**: Jika produk tidak ditemukan atau bukan milik seller.
-- **500 Internal Server Error**: Jika terjadi kesalahan server.
+}
+```
 
-#### **Catatan**
-- Gambar lama yang tidak dihapus akan digabung dengan gambar baru.
-- Varian yang memiliki `id` akan diperbarui, yang tidak memiliki `id` akan ditambahkan sebagai varian baru.
-- Harga dan stok produk dihitung ulang berdasarkan varian atau input langsung.
+**Respons Gagal**:
+- 401: Harus login sebagai seller.
+- 404: Diskon tidak ditemukan.
+- 500: Error server.
 
 ---
 
-### 6. Hapus Produk atau Varian
-**`DELETE /delete/:id`**
+### Menduplikasi Diskon
+**POST** `/store-discount/duplicate/:id`
 
-Menghapus produk atau varian tertentu berdasarkan ID.
+**URL Lengkap**: `https://backendmarket-production.up.railway.app/seller/V1/promoteseller/store-discount/duplicate/:id`
 
-#### **Request**
-- **Method**: DELETE
-- **Headers**: Cookie `seller_info` wajib.
-- **Params**:
-  - `id`: ID produk atau varian.
-- **Query**:
-  - `type` (string, default: `product`): Jenis yang akan dihapus (`product` atau `variant`).
-  - `mode` (string, default: `all`): Mode penghapusan produk (`all` untuk produk + varian, `variant_only` untuk varian saja).
+**Deskripsi**: Menduplikasi diskon yang sudah ada dengan nama dan periode baru.
 
-#### **Response**
-- **200 OK**:
-  - Untuk varian: 
-    ```json
-    { "message": "✅ Varian berhasil dihapus & stok diperbarui" }
-    ```
-  - Untuk produk (mode `variant_only`): 
-    ```json
-    { "message": "✅ Semua varian berhasil dihapus" }
-    ```
-  - Untuk produk (mode `all`): 
-    ```json
-    { "message": "✅ Produk dan semua varian berhasil dihapus" }
-    ```
-- **401 Unauthorized**: Jika cookie `seller_info` tidak ada.
-- **404 Not Found**: Jika produk/varian tidak ditemukan atau bukan milik seller.
-- **500 Internal Server Error**: Jika terjadi kesalahan server.
+**Body Request**:
+```json
+{
+  "newName": "string (opsional, default: nama diskon lama)",
+  "newStartTime": "ISO string",
+  "newEndTime": "ISO string",
+  "timezone": "string (opsional, default: Asia/Jakarta)"
+}
+```
 
-#### **Catatan**
-- Menghapus varian akan memperbarui stok total produk.
-- Menghapus produk (mode `all`) juga menghapus semua varian dan gambar terkait di Supabase Storage.
-- Path gambar dihapus dari bucket `product-images` menggunakan path yang diekstrak dari URL.
+**Respons Sukses** (200):
+```json
+{
+  "message": "✅ Diskon berhasil diduplikasi",
+  "store_discount": { /* data diskon baru */ }
+}
+```
+
+**Respons Gagal**:
+- 401: Harus login sebagai seller.
+- 404: Diskon lama tidak ditemukan.
+- 500: Error server.
 
 ---
 
-## Teknologi yang Digunakan
-- **Express.js**: Framework untuk API.
-- **Multer**: Middleware untuk penanganan upload file.
-- **Sharp**: Konversi gambar ke WebP.
-- **Supabase**: Database dan storage untuk produk, varian, dan gambar.
-- **Node-Cache**: Caching data produk.
-- **UUID**: Pembuatan nama file unik untuk gambar.
+### Mengedit Diskon
+**PUT** `/store-discount/edit/:id`
+
+**URL Lengkap**: `https://backendmarket-production.up.railway.app/seller/V1/promoteseller/store-discount/edit/:id`
+
+**Deskripsi**: Mengedit item diskon (stock atau persentase diskon) atau menambahkan item baru.
+
+**Body Request**:
+```json
+{
+  "items": [
+    {
+      "product_id": "string",
+      "variant_id": "string|null",
+      "stock": "number",
+      "discount_percentage": "number"
+    }
+  ]
+}
+```
+
+**Respons Sukses** (200):
+```json
+{
+  "message": "✅ Diskon berhasil diperbarui"
+}
+```
+
+**Respons Gagal**:
+- 401: Harus login sebagai seller.
+- 500: Error server.
+
+---
+
+### Menghapus Diskon atau Item
+**DELETE** `/store-discount/:id`
+
+**URL Lengkap**: `https://backendmarket-production.up.railway.app/seller/V1/promoteseller/store-discount/:id`
+
+**Deskripsi**: Menghapus seluruh diskon atau item tertentu berdasarkan `product_id` dan `variant_id`.
+
+**Query Parameter** (opsional):
+- `product_id`: ID produk yang akan dihapus dari diskon.
+- `variant_id`: ID varian yang akan dihapus dari diskon.
+
+**Respons Sukses** (200):
+```json
+{
+  "message": "✅ Diskon berhasil dihapus" // atau "✅ Item {product_id} varian {variant_id} berhasil dihapus dari diskon"
+}
+```
+
+**Respons Gagal**:
+- 401: Harus login sebagai seller.
+- 500: Error server.
+
+## Struktur Data
+- **store_discounts**: Tabel untuk menyimpan informasi diskon (id, store_id, name, start_time, end_time).
+- **store_discount_items**: Tabel untuk menyimpan item diskon (discount_id, product_id, variant_id, stock, discount_percentage).
+- **products**: Tabel produk (id, product_name, product_description, stock, seller_name, product_image_url).
+- **product_variants**: Tabel varian produk (id, product_id, variant_name, variant_stock, variant_image_url).
 
 ## Catatan Tambahan
-- Semua endpoint memastikan bahwa hanya produk milik seller yang login yang dapat diakses atau dimodifikasi.
-- Gambar disimpan di Supabase Storage dengan struktur folder `seller_id/products/` untuk gambar produk dan `seller_id/variants/` untuk gambar varian.
-- Fungsi `generateKeywords` digunakan untuk menghasilkan kata kunci dari nama dan deskripsi produk untuk keperluan pencarian.
-- Fungsi `attachVariantsStockDiscountWithRealDiscount` menambahkan informasi varian dan diskon ke respons produk.
+- Semua endpoint memerlukan autentikasi melalui cookie `seller_info` dengan `id` penjual.
+- Waktu diskon dikonversi ke UTC menggunakan `luxon` berdasarkan zona waktu yang diberikan (default: Asia/Jakarta).
+- Validasi dilakukan untuk mencegah duplikasi diskon atau item yang sudah ada di diskon aktif.
+- Gambar produk dan varian diambil dari kolom `product_image_url` dan `variant_image_url`.
