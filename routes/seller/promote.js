@@ -347,7 +347,6 @@ router.get("/flash-sale/:id", async (req, res) => {
 
 /* ===== STORE DISCOUNT CREATE ===== */
 router.post("/store-discount/create", async (req, res) => {
-  // Seller dari cookies
   const sellerInfo = req.cookies?.seller_info
     ? JSON.parse(req.cookies.seller_info)
     : null;
@@ -369,6 +368,84 @@ router.post("/store-discount/create", async (req, res) => {
   const endUTC = DateTime.fromISO(end_time, { zone: tz }).toUTC().toISO();
 
   try {
+    // 🔍 Cek duplikat diskon (nama + periode sama)
+    const { data: existingDiscount, error: checkErr } = await supabase
+      .from("store_discounts")
+      .select("id")
+      .eq("store_id", sellerInfo.id)
+      .eq("name", name)
+      .eq("start_time", startUTC)
+      .eq("end_time", endUTC)
+      .maybeSingle();
+
+    if (checkErr) {
+      return res.status(500).json({ message: "❌ Gagal cek duplikat", error: checkErr.message });
+    }
+
+    if (existingDiscount) {
+      return res.status(409).json({
+        message: "❌ Diskon dengan nama & periode sama sudah ada",
+      });
+    }
+
+    // 🔍 Ambil semua diskon aktif toko ini
+    const nowISO = new Date().toISOString();
+    const { data: activeDiscounts, error: activeDiscErr } = await supabase
+      .from("store_discounts")
+      .select("id")
+      .eq("store_id", sellerInfo.id)
+      .gt("end_time", nowISO);
+
+    if (activeDiscErr) {
+      return res.status(500).json({ message: "❌ Gagal ambil diskon aktif", error: activeDiscErr.message });
+    }
+
+    const activeDiscountIds = activeDiscounts?.map(d => d.id) || [];
+
+    // 🔍 Validasi: pastikan produk/varian belum ada di diskon aktif
+    for (const item of items) {
+      if (item.variants?.length) {
+        for (const variant of item.variants) {
+          if (activeDiscountIds.length > 0) {
+            const { data: activeItem, error: activeErr } = await supabase
+              .from("store_discount_items")
+              .select("id")
+              .eq("product_id", item.product_id)
+              .eq("variant_id", variant.variant_id)
+              .in("discount_id", activeDiscountIds);
+
+            if (activeErr) {
+              return res.status(500).json({ message: "❌ Gagal cek produk aktif", error: activeErr.message });
+            }
+            if (activeItem?.length) {
+              return res.status(409).json({
+                message: `❌ Produk ${item.product_id} varian ${variant.variant_id} sudah ada di diskon aktif`,
+              });
+            }
+          }
+        }
+      } else {
+        if (activeDiscountIds.length > 0) {
+          const { data: activeItem, error: activeErr } = await supabase
+            .from("store_discount_items")
+            .select("id")
+            .eq("product_id", item.product_id)
+            .is("variant_id", null)
+            .in("discount_id", activeDiscountIds);
+
+          if (activeErr) {
+            return res.status(500).json({ message: "❌ Gagal cek produk aktif", error: activeErr.message });
+          }
+          if (activeItem?.length) {
+            return res.status(409).json({
+              message: `❌ Produk ${item.product_id} sudah ada di diskon aktif`,
+            });
+          }
+        }
+      }
+    }
+
+    // ✅ Simpan store_discounts
     const { data: storeDiscount, error: sdErr } = await supabase
       .from("store_discounts")
       .insert([
@@ -384,17 +461,27 @@ router.post("/store-discount/create", async (req, res) => {
       });
     }
 
-    // Insert item discount
+    // ✅ Insert item discount
     for (const item of items) {
-      await supabase.from("store_discount_items").insert([
-        {
+      if (item.variants?.length) {
+        for (const variant of item.variants) {
+          await supabase.from("store_discount_items").insert([{
+            discount_id: storeDiscount.id,
+            product_id: item.product_id,
+            variant_id: variant.variant_id,
+            stock: variant.stock,
+            discount_percentage: variant.discount_percentage,
+          }]);
+        }
+      } else {
+        await supabase.from("store_discount_items").insert([{
           discount_id: storeDiscount.id,
           product_id: item.product_id,
-          variant_id: item.variant_id || null,
+          variant_id: null,
           stock: item.stock,
           discount_percentage: item.discount_percentage,
-        },
-      ]);
+        }]);
+      }
     }
 
     return res.json({
@@ -410,9 +497,51 @@ router.post("/store-discount/create", async (req, res) => {
   }
 });
 
+/**
+ * GET /store-discount/available-products
+ * Ambil semua produk/varian yang sedang ikut diskon aktif
+ */
+router.get("/store-discount/available-products", async (req, res) => {
+  try {
+    const now = new Date().toISOString();
+
+    // ambil semua store_discount_items join ke store_discounts
+    const { data: items, error } = await supabase
+      .from("store_discount_items")
+      .select(
+        `
+        id,
+        product_id,
+        variant_id,
+        discount_percentage,
+        stock,
+        store_discounts (
+          id,
+          name,
+          start_time,
+          end_time
+        )
+      `
+      )
+      .gte("store_discounts.start_time", now) // diskon sudah mulai
+      .lte("store_discounts.end_time", now);  // diskon belum selesai
+
+    if (error) {
+      console.error("❌ Error fetch items:", error);
+      return res.status(500).json({ error: "Gagal mengambil data diskon" });
+    }
+
+    return res.json({
+      message: "✅ Daftar produk/varian yang sedang ikut diskon",
+      items,
+    });
+  } catch (err) {
+    console.error("❌ Server error:", err);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+});
 /* ===== GET ALL STORE DISCOUNT (BY SELLER - pakai cookies) ===== */
 router.get("/store-discount/all", async (req, res) => {
-  // Seller dari cookies
   const sellerInfo = req.cookies?.seller_info
     ? JSON.parse(req.cookies.seller_info)
     : null;
@@ -432,22 +561,52 @@ router.get("/store-discount/all", async (req, res) => {
       return res.status(500).json({ message: "❌ Gagal ambil semua diskon toko" });
     }
 
-    const discountsWithItems = [];
-    for (const discount of storeDiscounts || []) {
-      const { data: items = [] } = await supabase
-        .from("store_discount_items")
-        .select("*, products(*), product_variants(*)")
-        .eq("discount_id", discount.id);
-
-      discountsWithItems.push({ ...discount, items });
-    }
-
+    // hanya return diskon tanpa relasi product/variant
     return res.json({
-      message: "✅ Semua diskon milik seller berhasil diambil",
-      data: discountsWithItems,
+      message: "✅ Semua diskon toko berhasil diambil",
+      data: storeDiscounts,
     });
   } catch (err) {
-    console.error("❌ Error get seller discounts:", err);
+    console.error("❌ Error get seller discounts lite:", err);
+    res.status(500).json({ message: "❌ Error server", error: err.message });
+  }
+});
+
+
+router.get("/store-discount/:id", async (req, res) => {
+  const sellerInfo = req.cookies?.seller_info
+    ? JSON.parse(req.cookies.seller_info)
+    : null;
+
+  if (!sellerInfo?.id) {
+    return res.status(401).json({ error: "❌ Harus login sebagai seller" });
+  }
+
+  const { id } = req.params;
+
+  try {
+    const { data: discount, error } = await supabase
+      .from("store_discounts")
+      .select("*")
+      .eq("store_id", sellerInfo.id)
+      .eq("id", id)
+      .single();
+
+    if (error || !discount) {
+      return res.status(404).json({ message: "❌ Diskon tidak ditemukan" });
+    }
+
+    const { data: items = [] } = await supabase
+      .from("store_discount_items")
+      .select("*, products(*), product_variants(*)")
+      .eq("discount_id", discount.id);
+
+    return res.json({
+      message: "✅ Diskon berhasil diambil",
+      data: { ...discount, items },
+    });
+  } catch (err) {
+    console.error("❌ Error get discount by id:", err);
     res.status(500).json({ message: "❌ Error server", error: err.message });
   }
 });
@@ -488,10 +647,6 @@ router.post("/:id/duplicate", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-
-
-
-
 
 /* ===== UPDATE STORE DISCOUNT (PUT) ===== */
 router.put("/store-discount/:id", async (req, res) => {
