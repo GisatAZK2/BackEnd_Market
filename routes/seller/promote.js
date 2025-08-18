@@ -923,10 +923,10 @@ router.get("/flash-sale/:id", requireSeller, async (req, res) => {
     // Ambil semua produk id unik
     const productIds = [...new Set(flashSaleProducts.map((p) => p.product_id))];
 
-    // Ambil data produk utama
+    // Ambil data produk utama (tambahkan kolom image jika ada)
     const { data: productsRaw, error: prodErr } = await supabase
       .from("products")
-      .select("*")
+      .select("*, product_image_url") // pastikan kolom ada di tabel
       .in("id", productIds);
 
     if (prodErr) {
@@ -953,6 +953,7 @@ router.get("/flash-sale/:id", requireSeller, async (req, res) => {
           product: {
             id: prod.id,
             name: prod.product_name,
+            image_url: prod.product_image_url || null,
           },
           variants: [],
           price_before: prod.product_price,
@@ -967,6 +968,7 @@ router.get("/flash-sale/:id", requireSeller, async (req, res) => {
         return {
           id: v.id,
           name: v.variant_name,
+          image_url: v.variant_image_url || null, // pastikan fungsi attach mengisi ini
           in_flash_sale: inFlashSale,
           price_before: v.original_price,
           discount_percentage: inFlashSale ? v.applied_discount : 0,
@@ -978,6 +980,7 @@ router.get("/flash-sale/:id", requireSeller, async (req, res) => {
         product: {
           id: prod.id,
           name: prod.product_name,
+          image_url: prod.product_image_url || null,
         },
         price_before: Math.min(...variants.map((v) => v.price_before)),
         discount_percentage: Math.max(
@@ -1004,6 +1007,7 @@ router.get("/flash-sale/:id", requireSeller, async (req, res) => {
     });
   }
 });
+
 
 /**
  * 📌 3. Edit flash sale (update name, waktu, timezone, status)
