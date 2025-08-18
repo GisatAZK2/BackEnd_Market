@@ -1169,52 +1169,59 @@ router.put("/flash-sale/:id/products", requireSeller, async (req, res) => {
  */
 router.delete("/flash-sale/:id", requireSeller, async (req, res) => {
   try {
-    const { id } = req.params; // flash_sale_id
+    const { id } = req.params; 
     const seller_id = req.seller_id;
     const { product_id, variant_id } = req.query;
 
-    if (!product_id) {
-      // Mode hapus semua item dalam flash sale
-      const { error } = await supabase
-        .from("flash_sale_products")
-        .delete()
-        .eq("flash_sale_id", id)
-        .eq("seller_id", seller_id);
+    console.log("➡️ Params:", { id, seller_id, product_id, variant_id });
 
-      if (error) {
-        return res.status(500).json({ message: "❌ Gagal hapus semua item", error: error.message });
-      }
+    // Cek isi tabel untuk flash_sale_id dulu
+    const { data: rawItems, error: rawErr } = await supabase
+      .from("flash_sale_products")
+      .select("id, flash_sale_id, seller_id, product_id, variant_id")
+      .eq("flash_sale_id", id);
 
-      return res.json({ message: "✅ Semua item dalam flash sale berhasil dihapus" });
+    console.log("➡️ Raw items in flash_sale_id", id, ":", rawItems, "err:", rawErr);
+
+    if (!rawItems || rawItems.length === 0) {
+      return res.status(404).json({ message: "⚠️ Tidak ada item dengan flash_sale_id itu" });
     }
 
-    // Mode hapus produk tertentu
-    let query = supabase
-      .from("flash_sale_products")
-      .delete()
-      .eq("flash_sale_id", id)
-      .eq("seller_id", seller_id)
-      .eq("product_id", product_id);
+    // Baru apply filter seller_id, product_id, variant_id manual
+    let items = rawItems.filter(i => i.seller_id === seller_id);
+
+    if (product_id) {
+      items = items.filter(i => i.product_id === product_id);
+    }
 
     if (variant_id) {
-      // Mode hapus produk variant tertentu
-      query = query.eq("variant_id", variant_id);
-    } else {
-      query = query.is("variant_id", null);
+      items = items.filter(i => i.variant_id === variant_id);
     }
 
-    const { error } = await query;
-    if (error) {
-      return res
-        .status(500)
-        .json({ message: "❌ Gagal hapus item", error: error.message });
+    console.log("➡️ After manual filter:", items);
+
+    if (!items.length) {
+      return res.status(404).json({ message: "⚠️ Tidak ada item cocok untuk dihapus" });
+    }
+
+    const idsToDelete = items.map(i => i.id);
+    console.log("➡️ IDs to delete:", idsToDelete);
+
+    const { error: deleteErr } = await supabase
+      .from("flash_sale_products")
+      .delete()
+      .in("id", idsToDelete);
+
+    if (deleteErr) {
+      return res.status(500).json({ message: "❌ Gagal hapus item", error: deleteErr.message });
     }
 
     return res.json({
-      message: `✅ Item ${product_id}${variant_id ? " varian " + variant_id : ""} berhasil dihapus`,
+      message: `✅ ${idsToDelete.length} item berhasil dihapus dari flash_sale_id ${id}`,
+      deleted_ids: idsToDelete,
     });
   } catch (err) {
-    console.error(err);
+    console.error("➡️ Caught exception:", err);
     return res.status(500).json({ message: "❌ Server error", error: err.message });
   }
 });
