@@ -152,171 +152,7 @@ router.get("/event/list", async (req, res) => {
   }
 });
 
-/* ===== SELLER REGISTER PRODUK KE FLASH SALE ===== */
-/* ===== REGISTER PRODUK FLASH SALE ===== */
-router.post("/flash-sale/register", async (req, res) => {
-  try {
-    const { seller_id, flash_sale_id, products } = req.body;
-
-    if (
-      !seller_id ||
-      flash_sale_id === undefined ||
-      !Array.isArray(products) ||
-      !products.length
-    ) {
-      return res.status(400).json({
-        message: "❌ seller_id, flash_sale_id & products wajib diisi",
-      });
-    }
-
-    const flashSaleId = Number(flash_sale_id);
-    const { data: flashSale, error: flashSaleErr } = await supabase
-      .from("flash_sales")
-      .select("*")
-      .eq("id", flashSaleId)
-      .single();
-
-    if (flashSaleErr || !flashSale) {
-      return res.status(404).json({ message: "❌ Flash sale tidak ditemukan" });
-    }
-
-    // 🔴 Cek produk sudah ada di flash_sale_products untuk sesi ini
-    const { data: existingProducts, error: existErr } = await supabase
-      .from("flash_sale_products")
-      .select("product_id, variant_id")
-      .eq("flash_sale_id", flashSaleId);
-
-    if (existErr) {
-      return res.status(500).json({
-        message: "❌ Gagal memeriksa produk yang sudah terdaftar",
-        error: existErr,
-      });
-    }
-
-    const existingSet = new Set(
-      existingProducts.map(
-        (p) => `${p.product_id}-${p.variant_id ?? "no-variant"}`,
-      ),
-    );
-
-    const rows = [];
-
-    for (const p of products) {
-      if (p.discount_percentage === undefined) {
-        return res.status(400).json({
-          message: `❌ Produk ${p.product_id} harus menyertakan discount_percentage`,
-        });
-      }
-
-      const key = `${p.product_id}-${p.variant_id ?? "no-variant"}`;
-      if (existingSet.has(key)) {
-        return res.status(400).json({
-          message: `❌ Produk ${p.product_id}${
-            p.variant_id ? " (variant " + p.variant_id + ")" : ""
-          } sudah terdaftar di flash sale ini`,
-        });
-      }
-
-      if (p.variant_id) {
-        const { data: variant } = await supabase
-          .from("product_variants")
-          .select("*")
-          .eq("id", p.variant_id)
-          .single();
-        if (!variant) continue;
-
-        await supabase
-          .from("product_variants")
-          .update({
-            variant_stock: (variant.variant_stock || 0) - p.flash_stock,
-          })
-          .eq("id", p.variant_id);
-
-        rows.push({
-          seller_id,
-          flash_sale_id: flashSaleId,
-          product_id: p.product_id,
-          variant_id: p.variant_id,
-          flash_stock: p.flash_stock,
-          discount_percentage: p.discount_percentage,
-        });
-      } else {
-        const { data: product } = await supabase
-          .from("products")
-          .select("*")
-          .eq("id", p.product_id)
-          .single();
-        if (!product) continue;
-
-        await supabase
-          .from("products")
-          .update({ stock: (product.stock || 0) - p.flash_stock })
-          .eq("id", p.product_id);
-
-        rows.push({
-          seller_id,
-          flash_sale_id: flashSaleId,
-          product_id: p.product_id,
-          variant_id: null,
-          flash_stock: p.flash_stock,
-          discount_percentage: p.discount_percentage,
-        });
-      }
-    }
-
-    if (!rows.length) {
-      return res.status(400).json({
-        message: "❌ Tidak ada produk valid untuk ditambahkan",
-      });
-    }
-
-    const { error } = await supabase.from("flash_sale_products").insert(rows);
-    if (error) {
-      return res.status(500).json({
-        message: "❌ Gagal daftar produk ke flash sale",
-        error,
-      });
-    }
-
-    return res.json({
-      message: "✅ Produk berhasil didaftarkan ke flash sale",
-    });
-  } catch (err) {
-    console.error(err);
-    return res.status(500).json({
-      message: "❌ Terjadi kesalahan server",
-      error: err.message,
-    });
-  }
-});
-
-/* ===== GET LIST FLASH SALE (Khusus Untuk Seller) ===== */
-router.get("/flash-sale/list", async (req, res) => {
-  try {
-    // Ambil semua flash sale (bisa difilter status)
-    const { data: flashSales, error } = await supabase
-      .from("flash_sales")
-      .select("*")
-      .order("start_time", { ascending: true });
-
-    if (error) {
-      return res
-        .status(500)
-        .json({ message: "❌ Gagal mengambil daftar flash sale", error });
-    }
-
-    return res.json({
-      message: `✅ ${flashSales.length} flash sale ditemukan`,
-      flash_sales: flashSales,
-    });
-  } catch (err) {
-    return res.status(500).json({
-      message: "❌ Terjadi kesalahan server",
-      error: err.message,
-    });
-  }
-});
-
+/* ===== GET LIST FLASH SALE UNTUK CUSTOMER (PAKAI HELPER DISKON) ===== */
 /* ===== GET LIST FLASH SALE UNTUK CUSTOMER (PAKAI HELPER DISKON) ===== */
 router.get("/flash-sale-customer/list", async (req, res) => {
   try {
@@ -344,6 +180,19 @@ router.get("/flash-sale-customer/list", async (req, res) => {
       });
     }
 
+    if (!flashSales || flashSales.length === 0) {
+      return res.json({
+        message: `✅ Tidak ada flash sale untuk ${now.toISODate()}`,
+        date: now.toISODate(),
+        current_session: null,
+        sessions: {
+          morning: { label: "00:00 - 12:00", flash_sales: [] },
+          afternoon: { label: "12:00 - 18:00", flash_sales: [] },
+          evening: { label: "18:00 - 00:00", flash_sales: [] },
+        },
+      });
+    }
+
     // Ambil daftar produk flash sale
     const { data: flashSaleProducts, error: fspErr } = await supabase
       .from("flash_sale_products")
@@ -367,15 +216,36 @@ router.get("/flash-sale-customer/list", async (req, res) => {
       });
     }
 
-    // Group produk per flash sale
+    // Group produk per flash sale, satukan variannya
     const flashSaleProductsMap = {};
     for (const fsp of flashSaleProducts) {
       if (!flashSaleProductsMap[fsp.flash_sale_id]) {
-        flashSaleProductsMap[fsp.flash_sale_id] = [];
+        flashSaleProductsMap[fsp.flash_sale_id] = {};
       }
-      if (fsp.products) {
-        flashSaleProductsMap[fsp.flash_sale_id].push(fsp.products);
+
+      const pid = fsp.products?.id;
+      if (!pid) continue;
+
+      // Kalau produk belum ada, buat dulu
+      if (!flashSaleProductsMap[fsp.flash_sale_id][pid]) {
+        flashSaleProductsMap[fsp.flash_sale_id][pid] = {
+          ...fsp.products,
+          seller: fsp.sellers,
+          variants: [],
+        };
       }
+
+      // Masukkan variant (kalau ada)
+      if (fsp.product_variants) {
+        flashSaleProductsMap[fsp.flash_sale_id][pid].variants.push(
+          fsp.product_variants,
+        );
+      }
+    }
+
+    // Convert hasil object jadi array per flash_sale_id
+    for (const fsId in flashSaleProductsMap) {
+      flashSaleProductsMap[fsId] = Object.values(flashSaleProductsMap[fsId]);
     }
 
     // Bagi ke dalam 3 sesi
@@ -398,7 +268,7 @@ router.get("/flash-sale-customer/list", async (req, res) => {
         else status = "ended";
       }
 
-      // Attach diskon ke produk
+      // Ambil produk & attach diskon
       const products = flashSaleProductsMap[fs.id] || [];
       const productsWithDiscount =
         products.length > 0
@@ -451,7 +321,7 @@ router.get("/flash-sale-customer/:id", async (req, res) => {
     const tz =
       req.query.timezone || req.headers["x-timezone"] || "Asia/Jakarta";
 
-    // Ambil tanggal hari ini sesuai timezone
+    // Ambil tanggal hari ini sesuai timezone (00:00 - 23:59)
     const now = DateTime.local().setZone(tz);
     const startDay = now.startOf("day");
     const endDay = now.endOf("day");
@@ -473,8 +343,11 @@ router.get("/flash-sale-customer/:id", async (req, res) => {
     const flashSaleStart = DateTime.fromISO(flashSale.start_time).setZone(tz);
     const flashSaleEnd = DateTime.fromISO(flashSale.end_time).setZone(tz);
 
-    // Pastikan flash sale dalam range hari ini
-    if (flashSaleStart < startDay || flashSaleEnd > endDay) {
+    // Pastikan flash sale ada overlap dengan hari ini (24 jam penuh)
+    const isValidForToday =
+      flashSaleStart < endDay && flashSaleEnd > startDay;
+
+    if (!isValidForToday) {
       return res.status(404).json({
         message: "❌ Flash sale ini bukan untuk hari ini",
       });
@@ -489,7 +362,7 @@ router.get("/flash-sale-customer/:id", async (req, res) => {
         products (*),
         sellers (*),
         product_variants (*)
-      `,
+      `
       )
       .eq("flash_sale_id", flashSale.id);
 
@@ -499,6 +372,33 @@ router.get("/flash-sale-customer/:id", async (req, res) => {
         error: fspErr,
       });
     }
+
+    // Group produk agar varian tidak terpisah
+    const groupedProducts = {};
+    for (const fsp of flashSaleProducts) {
+      const pid = fsp.products?.id;
+      if (!pid) continue;
+
+      if (!groupedProducts[pid]) {
+        groupedProducts[pid] = {
+          ...fsp.products,
+          seller: fsp.sellers,
+          variants: [],
+          flash_sale_items: [],
+        };
+      }
+
+      if (fsp.product_variants) {
+        groupedProducts[pid].variants.push({
+          ...fsp.product_variants,
+          flash_sale_item_id: fsp.id, // ikat ke baris flash_sale_products
+        });
+      }
+
+      groupedProducts[pid].flash_sale_items.push(fsp.id);
+    }
+
+    const products = Object.values(groupedProducts);
 
     // Tentukan status display
     let status = flashSale.status;
@@ -516,7 +416,6 @@ router.get("/flash-sale-customer/:id", async (req, res) => {
     else session = "evening";
 
     // Attach diskon ke produk
-    const products = flashSaleProducts.map((p) => p.products).filter(Boolean);
     const productsWithDiscount =
       products.length > 0
         ? await attachVariantsStockDiscountWithRealDiscount(products)

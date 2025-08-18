@@ -30,7 +30,7 @@ async function attachVariantsStockDiscountWithRealDiscount(products) {
     supabase
       .from("store_discount_items")
       .select(
-        `product_id,variant_id,discount_percentage,store_discounts!inner(id,name,start_time,end_time)`,
+        `product_id,variant_id,discount_percentage,store_discounts!inner(id,name,start_time,end_time)`
       )
       .in("product_id", productIds),
   ]);
@@ -73,7 +73,7 @@ async function attachVariantsStockDiscountWithRealDiscount(products) {
         .filter(
           (ep) =>
             ep.product_id === productId &&
-            (!variantId || ep.variant_id === variantId),
+            (!variantId || ep.variant_id === variantId)
         )
         .forEach((ep) => {
           const event = eventMap[ep.event_id];
@@ -83,7 +83,7 @@ async function attachVariantsStockDiscountWithRealDiscount(products) {
           if (start <= now && end >= now) {
             discountPercentage = Math.max(
               discountPercentage,
-              ep.event_discount,
+              ep.event_discount
             );
             if (!sources.includes("event")) sources.push("event");
             details.events.push({ ...event, discount: ep.event_discount });
@@ -95,23 +95,21 @@ async function attachVariantsStockDiscountWithRealDiscount(products) {
         .filter(
           (fp) =>
             fp.product_id === productId &&
-            (!variantId || fp.variant_id === variantId),
+            (!variantId || fp.variant_id === variantId)
         )
         .forEach((fsp) => {
           const flashSale = flashSaleMap[fsp.flash_sale_id];
           if (!flashSale) return;
+
+          // 🚫 skip flash sale yang disabled
+          if (flashSale.status === "disabled") return;
+
           const start = DateTime.fromISO(flashSale.start_time).toUTC();
           const end = DateTime.fromISO(flashSale.end_time).toUTC();
-          if (flashSale.status === "disabled") {
-            details.flash_sales.push({
-              ...flashSale,
-              discount: fsp.discount_percentage,
-              disabled: true,
-            });
-            return;
-          }
+
           if (flashSale.status === "active") {
             if (start <= now && end >= now) {
+              // ongoing flash sale
               discountPercentage = fsp.discount_percentage;
               if (!sources.includes("flash_sale")) sources.push("flash_sale");
               details.flash_sales.push({
@@ -120,6 +118,7 @@ async function attachVariantsStockDiscountWithRealDiscount(products) {
                 ongoing: true,
               });
             } else if (start > now) {
+              // upcoming flash sale
               upcomingFlashSale = fsp.discount_percentage;
               if (!sources.includes("flash_sale_upcoming"))
                 sources.push("flash_sale_upcoming");
@@ -129,6 +128,7 @@ async function attachVariantsStockDiscountWithRealDiscount(products) {
                 upcoming: true,
               });
             } else {
+              // expired flash sale
               details.flash_sales.push({
                 ...flashSale,
                 discount: fsp.discount_percentage,
@@ -142,10 +142,10 @@ async function attachVariantsStockDiscountWithRealDiscount(products) {
       const matched =
         (variantId &&
           storeDiscountItems.find(
-            (i) => i.product_id === productId && i.variant_id === variantId,
+            (i) => i.product_id === productId && i.variant_id === variantId
           )) ||
         storeDiscountItems.find(
-          (i) => i.product_id === productId && i.variant_id === null,
+          (i) => i.product_id === productId && i.variant_id === null
         );
       if (matched?.store_discounts) {
         const sd = matched.store_discounts;
@@ -175,7 +175,7 @@ async function attachVariantsStockDiscountWithRealDiscount(products) {
         finalStock: product.stock,
         finalPrice: applyDiscount(
           product.product_price,
-          discount.discountPercentage,
+          discount.discountPercentage
         ),
         discountPercentage: discount.discountPercentage,
         discountSource: discount.sources,
@@ -188,10 +188,10 @@ async function attachVariantsStockDiscountWithRealDiscount(products) {
       const discount = calcDiscount(product.id, v.id);
       let finalPrice = applyDiscount(
         v.variant_price,
-        discount.discountPercentage,
+        discount.discountPercentage
       );
       if (discount.upcomingFlashSale !== null)
-        finalPrice = Number("3" + finalPrice);
+        finalPrice = Number("3" + finalPrice); // kode untuk upcoming
       return {
         ...v,
         original_price: v.variant_price,
@@ -203,10 +203,10 @@ async function attachVariantsStockDiscountWithRealDiscount(products) {
     });
 
     const finalPrice = Math.min(
-      ...variantsWithDiscount.map((v) => v.final_price),
+      ...variantsWithDiscount.map((v) => v.final_price)
     );
     const maxDiscount = Math.max(
-      ...variantsWithDiscount.map((v) => v.applied_discount),
+      ...variantsWithDiscount.map((v) => v.applied_discount)
     );
 
     return {
@@ -221,6 +221,7 @@ async function attachVariantsStockDiscountWithRealDiscount(products) {
     };
   });
 }
+
 
 module.exports = {
   applyDiscount,
