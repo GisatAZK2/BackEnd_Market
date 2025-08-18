@@ -1,304 +1,266 @@
-# Dokumentasi API Store Discount
+# 📌 Dokumentasi API Flash Sale (Seller)
 
-Berikut adalah dokumentasi untuk API pengelolaan diskon toko (store discount) menggunakan Express.js dan Supabase sebagai backend. API ini memungkinkan penjual untuk membuat, mengelola, dan menghapus diskon untuk produk dan variannya.
+Base URL:
 
-**Base URL**: `https://backendmarket-production.up.railway.app/seller/V1/promoteseller`
+```
+https://backendmarket-production.up.railway.app/seller/V1/promoteseller
+```
 
-## Daftar Isi
-1. [Prasyarat](#prasyarat)
-2. [Fitur Utama](#fitur-utama)
-3. [Endpoint API](#endpoint-api)
-   - [Membuat Diskon Baru](#membuat-diskon-baru)
-   - [Mendapatkan Produk yang Tersedia](#mendapatkan-produk-yang-tersedia)
-   - [Mendapatkan Semua Diskon](#mendapatkan-semua-diskon)
-   - [Mendapatkan Detail Diskon](#mendapatkan-detail-diskon)
-   - [Menduplikasi Diskon](#menduplikasi-diskon)
-   - [Mengedit Diskon](#mengedit-diskon)
-   - [Menghapus Diskon atau Item](#menghapus-diskon-atau-item)
-4. [Struktur Data](#struktur-data)
-5. [Catatan Tambahan](#catatan-tambahan)
+Semua endpoint membutuhkan autentikasi **Seller** (kecuali endpoint publik `date-list`).
 
-## Prasyarat
-- **Node.js** dan **Express.js** terinstal.
-- **Supabase** sebagai database backend dengan tabel `store_discounts`, `store_discount_items`, `products`, dan `product_variants`.
-- **Cookie** berisi `seller_info` dengan `id` penjual untuk autentikasi.
-- Dependensi: `multer`, `sharp`, `uuid`, `luxon`, `node-cron`.
-- Fungsi utilitas: `attachVariantsStockDiscount` dan `attachVariantsStockDiscountWithRealDiscount` dari `../../utils/applyDiscountAndVariants`.
+---
 
-## Fitur Utama
-- Membuat diskon toko dengan item produk atau varian tertentu.
-- Validasi duplikasi diskon berdasarkan nama dan periode.
-- Pengecekan produk/varian yang sudah ada di diskon aktif.
-- Mengelompokkan produk dan varian dengan status diskon.
-- Menduplikasi diskon dengan periode baru.
-- Mengedit item diskon (stock dan persentase diskon).
-- Menghapus diskon atau item tertentu.
+## 1. Daftarkan Produk ke Flash Sale
 
-## Endpoint API
+**Endpoint:**
 
-### Membuat Diskon Baru
-**POST** `/store-discount/create`
+```
+POST /flash-sale/register
 
-**URL Lengkap**: `https://backendmarket-production.up.railway.app/seller/V1/promoteseller/store-discount/create`
+2 Mode :
+  1. Single Product
+  2. Product With Variant
+```
 
-**Deskripsi**: Membuat diskon baru untuk toko dengan item produk/varian tertentu.
+1. Single product
 
-**Body Request**:
+**Request Body:**
+
 ```json
 {
-  "name": "string",
-  "start_time": "ISO string",
-  "end_time": "ISO string",
-  "timezone": "string (opsional, default: Asia/Jakarta)",
+  "flash_sale_id": 110,
+  "items" : [
+    {
+      "product_id": "903b914a-9d79-418b-8f89-d8ff9eb3f50a",
+      "stock": 5,
+      "discount_percentage": 67
+    }
+  ]
+}
+
+```
+
+2. Product With Variant 
+
+**Request Body:**
+
+```json
+{
+  "flash_sale_id": 110,
+  "items" : [
+    {
+      "product_id": "94ccd2cc-40c3-4731-afe6-40a8434f8929",
+      "variants": [
+        { "variant_id": "fff46aa4-f20c-4cb2-b879-49d3068ae9b5", "stock": 40, "discount_percentage": 10 }
+      ]
+    }
+  ]
+}
+
+```
+
+
+**Response Sukses:**
+
+```json
+{
+  "message": "✅ Flash sale berhasil dibuat / produk didaftarkan",
+  "flash_sale_id": "uuid",
   "items": [
     {
-      "product_id": "string",
-      "stock": "number (opsional jika ada varian)",
-      "discount_percentage": "number (opsional jika ada varian)",
-      "variants": [
-        {
-          "variant_id": "string",
-          "stock": "number",
-          "discount_percentage": "number"
-        }
-      ]
+      "seller_id": "uuid-seller",
+      "flash_sale_id": "uuid",
+      "product_id": "uuid-produk",
+      "variant_id": null,
+      "flash_stock": 10,
+      "discount_percentage": 20
     }
   ]
 }
 ```
 
-**Respons Sukses** (200):
+---
+
+## 2. Ambil Daftar Flash Sale Tanggal & Sesi
+
+**Endpoint:**
+
+```
+GET /flash-sale/date-list
+```
+
+**Response:**
+
 ```json
 {
-  "message": "✅ Diskon toko berhasil dibuat dengan item-target",
-  "store_discount": { /* data diskon */ }
+  "message": "✅ 3 flash sale ditemukan",
+  "items": {
+    "2025-08-18": {
+      "pagi": [ { "id": "uuid", "tag": "upcoming", ... } ],
+      "siang": [],
+      "malam": []
+    }
+  }
 }
 ```
 
-**Respons Gagal**:
-- 401: Harus login sebagai seller.
-- 400: Field wajib (name, start_time, end_time, items) tidak lengkap.
-- 409: Diskon dengan nama dan periode sama sudah ada atau produk/varian sudah ada di diskon aktif.
-- 500: Error server atau gagal menyimpan data.
+* **tag:** `ongoing | ended | upcoming`
+* **session:** `pagi | siang | malam`
 
 ---
 
-### Mendapatkan Produk yang Tersedia
-**GET** `/store-discount/available-products`
+## 3. List Semua Flash Sale Milik Seller
 
-**URL Lengkap**: `https://backendmarket-production.up.railway.app/seller/V1/promoteseller/store-discount/available-products`
+**Endpoint:**
 
-**Deskripsi**: Mengambil daftar semua produk dan varian milik penjual, dengan status apakah sedang dalam diskon aktif atau tidak.
+```
+GET /flash-sale/list
+```
 
-**Respons Sukses** (200):
+**Response:**
+
 ```json
 {
-  "message": "✅ Daftar produk dengan status diskon",
-  "items": [
+  "message": "✅ Daftar flash sale seller",
+  "data": [
     {
-      "product_id": "string",
-      "product_data": {
-        "product_name": "string",
-        "product_description": "string",
-        "stock": "number (null jika ada varian)",
-        "seller_name": "string",
-        "product_image_url": "string|null",
-        "is_on_discount": "boolean|undefined"
-      },
-      "stock": "number|null",
-      "discount_percentage": "number|null",
-      "variants": [
-        {
-          "variant_id": "string",
-          "stock": "number",
-          "discount_percentage": "number|null",
-          "is_on_discount": "boolean",
-          "variant_data": {
-            "variant_name": "string",
-            "variant_stock": "number",
-            "variant_image_url": "string|null"
-          }
-        }
-      ]
+      "id": "uuid",
+      "name": "Flash Sale Merdeka",
+      "start_time": "2025-08-18T10:00:00+07:00",
+      "end_time": "2025-08-18T12:00:00+07:00",
+      "timezone": "Asia/Jakarta",
+      "status": "enabled",
+      "tag": "ongoing"
     }
   ]
 }
 ```
 
-**Respons Gagal**:
-- 401: Harus login sebagai seller.
-- 404: Seller tidak ditemukan.
-- 500: Error server.
-
 ---
 
-### Mendapatkan Semua Diskon
-**GET** `/store-discount/all`
+## 4. Detail Flash Sale by ID
 
-**URL Lengkap**: `https://backendmarket-production.up.railway.app/seller/V1/promoteseller/store-discount/all`
+**Endpoint:**
 
-**Deskripsi**: Mengambil semua diskon milik penjual tanpa relasi produk/varian.
-
-**Respons Sukses** (200):
-```json
-{
-  "message": "✅ Semua diskon toko berhasil diambil",
-  "data": [ /* daftar diskon */ ]
-}
+```
+GET /flash-sale/:id
 ```
 
-**Respons Gagal**:
-- 401: Harus login sebagai seller.
-- 500: Error server.
+**Response:**
 
----
-
-### Mendapatkan Detail Diskon
-**GET** `/store-discount/:id`
-
-**URL Lengkap**: `https://backendmarket-production.up.railway.app/seller/V1/promoteseller/store-discount/:id`
-
-**Deskripsi**: Mengambil detail diskon berdasarkan ID, termasuk item produk dan varian.
-
-**Parameter**: `id` (ID diskon)
-
-**Respons Sukses** (200):
 ```json
 {
-  "message": "✅ Diskon berhasil diambil",
+  "message": "✅ Detail flash sale",
   "data": {
-    /* data diskon */
-    "items": [
+    "id": "uuid",
+    "name": "Flash Sale Merdeka",
+    "start_time": "2025-08-18T10:00:00+07:00",
+    "end_time": "2025-08-18T12:00:00+07:00",
+    "timezone": "Asia/Jakarta",
+    "status": "enabled",
+    "products": [
       {
-        "product_id": "string",
-        "product_data": {
-          "product_name": "string",
-          "product_description": "string",
-          "product_image_url": "string|null",
-          "stock": "number|null"
-        },
-        "stock": "number|null",
-        "discount_percentage": "number|null",
-        "variants": [
-          {
-            "variant_id": "string",
-            "stock": "number|null",
-            "discount_percentage": "number",
-            "variant_data": {
-              "variant_name": "string",
-              "variant_stock": "number"
-            }
-          }
-        ]
+        "product": { "id": "uuid-produk", "name": "Sayur Kangkung" },
+        "variants": [],
+        "price_before": 20000,
+        "discount_percentage": 20,
+        "price_after": 16000
       }
     ]
   }
 }
 ```
 
-**Respons Gagal**:
-- 401: Harus login sebagai seller.
-- 404: Diskon tidak ditemukan.
-- 500: Error server.
-
 ---
 
-### Menduplikasi Diskon
-**POST** `/store-discount/duplicate/:id`
+## 5. Update Produk Flash Sale
 
-**URL Lengkap**: `https://backendmarket-production.up.railway.app/seller/V1/promoteseller/store-discount/duplicate/:id`
+**Endpoint:**
 
-**Deskripsi**: Menduplikasi diskon yang sudah ada dengan nama dan periode baru.
-
-**Body Request**:
-```json
-{
-  "newName": "string (opsional, default: nama diskon lama)",
-  "newStartTime": "ISO string",
-  "newEndTime": "ISO string",
-  "timezone": "string (opsional, default: Asia/Jakarta)"
-}
+```
+PUT /flash-sale/:id/products
 ```
 
-**Respons Sukses** (200):
-```json
-{
-  "message": "✅ Diskon berhasil diduplikasi",
-  "store_discount": { /* data diskon baru */ }
-}
-```
+**Request Body:**
 
-**Respons Gagal**:
-- 401: Harus login sebagai seller.
-- 404: Diskon lama tidak ditemukan.
-- 500: Error server.
-
----
-
-### Mengedit Diskon
-**PUT** `/store-discount/edit/:id`
-
-**URL Lengkap**: `https://backendmarket-production.up.railway.app/seller/V1/promoteseller/store-discount/edit/:id`
-
-**Deskripsi**: Mengedit item diskon (stock atau persentase diskon) atau menambahkan item baru.
-
-**Body Request**:
 ```json
 {
   "items": [
     {
-      "product_id": "string",
-      "variant_id": "string|null",
-      "stock": "number",
-      "discount_percentage": "number"
+      "product_id": "uuid-produk",
+      "stock": 5,
+      "discount_percentage": 10
+    },
+    {
+      "product_id": "uuid-produk-2",
+      "variants": [
+        { "variant_id": "uuid-variant", "stock": 3, "discount_percentage": 15 }
+      ]
     }
   ]
 }
 ```
 
-**Respons Sukses** (200):
+**Response:**
+
 ```json
 {
-  "message": "✅ Diskon berhasil diperbarui"
+  "message": "✅ Produk flash sale berhasil ditambahkan / diupdate",
+  "inserted": [ { ... } ],
+  "updated": [ { ... } ]
 }
 ```
-
-**Respons Gagal**:
-- 401: Harus login sebagai seller.
-- 500: Error server.
 
 ---
 
-### Menghapus Diskon atau Item
-**DELETE** `/store-discount/:id`
+## 6. Hapus Flash Sale / Produk
 
-**URL Lengkap**: `https://backendmarket-production.up.railway.app/seller/V1/promoteseller/store-discount/:id`
+**Endpoint:**
 
-**Deskripsi**: Menghapus seluruh diskon atau item tertentu berdasarkan `product_id` dan `variant_id`.
-
-**Query Parameter** (opsional):
-- `product_id`: ID produk yang akan dihapus dari diskon.
-- `variant_id`: ID varian yang akan dihapus dari diskon.
-
-**Respons Sukses** (200):
-```json
-{
-  "message": "✅ Diskon berhasil dihapus" // atau "✅ Item {product_id} varian {variant_id} berhasil dihapus dari diskon"
-}
+```
+DELETE /flash-sale/:id
 ```
 
-**Respons Gagal**:
-- 401: Harus login sebagai seller.
-- 500: Error server.
+### Mode 1: Hapus semua item dalam flash sale
 
-## Struktur Data
-- **store_discounts**: Tabel untuk menyimpan informasi diskon (id, store_id, name, start_time, end_time).
-- **store_discount_items**: Tabel untuk menyimpan item diskon (discount_id, product_id, variant_id, stock, discount_percentage).
-- **products**: Tabel produk (id, product_name, product_description, stock, seller_name, product_image_url).
-- **product_variants**: Tabel varian produk (id, product_id, variant_name, variant_stock, variant_image_url).
+```
+DELETE /flash-sale/:id
+```
 
-## Catatan Tambahan
-- Semua endpoint memerlukan autentikasi melalui cookie `seller_info` dengan `id` penjual.
-- Waktu diskon dikonversi ke UTC menggunakan `luxon` berdasarkan zona waktu yang diberikan (default: Asia/Jakarta).
-- Validasi dilakukan untuk mencegah duplikasi diskon atau item yang sudah ada di diskon aktif.
-- Gambar produk dan varian diambil dari kolom `product_image_url` dan `variant_image_url`.
+**Response:**
+
+```json
+{ "message": "✅ Semua item dalam flash sale berhasil dihapus" }
+```
+
+### Mode 2: Hapus produk non-variant
+
+```
+DELETE /flash-sale/:id?product_id=uuid-produk
+```
+
+**Response:**
+
+```json
+{ "message": "✅ Item uuid-produk berhasil dihapus" }
+```
+
+### Mode 3: Hapus produk variant tertentu
+
+```
+DELETE /flash-sale/:id?product_id=uuid-produk&variant_id=uuid-variant
+```
+
+**Response:**
+
+```json
+{ "message": "✅ Item uuid-produk varian uuid-variant berhasil dihapus" }
+```
+
+---
+
+# ⚠️ Catatan Penting
+
+* Stok produk/varian akan otomatis **dikurangi** saat didaftarkan ke flash sale.
+* Tidak bisa menambahkan produk yang sudah terdaftar di flash sale yang sama.
+* `status` flash sale bisa berupa: `enabled` atau `disabled`.
