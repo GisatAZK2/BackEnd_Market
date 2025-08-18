@@ -173,7 +173,70 @@ GET /flash-sale/:id
 
 ---
 
-## 5. Update Produk Flash Sale
+## 5. List Product Avaible For Edit In 1 Session Flash Sale
+
+**Endpoint:**
+
+```
+GET /flash-sale/:id/products/available
+```
+
+**Response:**
+
+```json
+{
+  "message": "✅ Semua produk seller dengan status flash sale",
+  "data": [
+    {
+      "id": "prod-001",
+      "product_name": "Kaos Polos",
+      "product_image_url": "https://example.com/images/kaos-polos.jpg",
+      "stock": 50,
+      "product_price": 120000,
+      "in_flash_sale": true,
+      "variants": []
+    },
+    {
+      "id": "prod-002",
+      "product_name": "Sepatu Sneakers",
+      "product_image_url": "https://example.com/images/sneakers.jpg",
+      "stock": 0,
+      "product_price": 450000,
+      "variant_mode": true,
+      "variants": [
+        {
+          "id": "var-001",
+          "variant_name": "Size 39",
+          "variant_stock": 10,
+          "variant_image_url": "https://example.com/images/sneakers-39.jpg",
+          "in_flash_sale": true
+        },
+        {
+          "id": "var-002",
+          "variant_name": "Size 40",
+          "variant_stock": 0,
+          "variant_image_url": "https://example.com/images/sneakers-40.jpg",
+          "in_flash_sale": false
+        }
+      ]
+    },
+    {
+      "id": "prod-003",
+      "product_name": "Topi Baseball",
+      "product_image_url": "https://example.com/images/topi.jpg",
+      "stock": 25,
+      "product_price": 80000,
+      "in_flash_sale": false,
+      "variants": []
+    }
+  ]
+}
+
+```
+
+---
+
+## 6. Update Produk Flash Sale
 
 **Endpoint:**
 
@@ -213,7 +276,7 @@ PUT /flash-sale/:id/products
 
 ---
 
-## 6. Hapus Flash Sale / Produk
+## 7. Hapus Flash Sale / Produk
 
 **Endpoint:**
 
