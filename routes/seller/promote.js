@@ -1008,9 +1008,94 @@ router.get("/flash-sale/:id", requireSeller, async (req, res) => {
   }
 });
 
-
 /**
- * 📌 3. Edit flash sale (update name, waktu, timezone, status)
+ * 📌 3. Cek Produk Avaible Untuk Di flash sale edit
+ */
+router.get("/flash-sale/:id/products/available", requireSeller, async (req, res) => {
+  try {
+    const seller_id = req.seller_id;
+    const flash_sale_id = req.params.id;
+
+    // Pastikan flash sale ada
+    const { data: flashSale, error: fsErr } = await supabase
+      .from("flash_sales")
+      .select("*")
+      .eq("id", flash_sale_id)
+      .single();
+
+    if (fsErr || !flashSale) {
+      return res.status(404).json({ message: "❌ Flash sale tidak ditemukan" });
+    }
+
+    // Ambil semua produk yang sudah ikut flash sale ini
+    const { data: usedProducts, error: usedErr } = await supabase
+      .from("flash_sale_products")
+      .select("product_id, variant_id")
+      .eq("flash_sale_id", flash_sale_id)
+      .eq("seller_id", seller_id);
+
+    if (usedErr) {
+      return res.status(500).json({ message: "❌ Gagal ambil produk flash sale", error: usedErr });
+    }
+
+    // Bikin map buat cek cepat
+    const usedMap = new Map(
+      usedProducts.map(p => [`${p.product_id}-${p.variant_id ?? "no-variant"}`, true])
+    );
+
+    // Ambil semua produk seller
+    const { data: products, error: prodErr } = await supabase
+      .from("products")
+      .select(`
+        id,
+        product_name,
+        product_image_url,
+        stock,
+        product_price,
+        variants:product_variants(id, variant_name, variant_stock, variant_image_url)
+      `)
+      .eq("seller_id", seller_id);
+
+    if (prodErr) {
+      return res.status(500).json({ message: "❌ Gagal ambil produk", error: prodErr });
+    }
+
+    // Kasih tag sesuai rules
+    const taggedProducts = products.map(prod => {
+      if (!prod.variants || !prod.variants.length) {
+        // Produk tanpa varian → kasih flag in_flash_sale
+        const inFlashSale = usedMap.has(`${prod.id}-no-variant`);
+        return {
+          ...prod,
+          in_flash_sale: inFlashSale,
+          variants: []
+        };
+      }
+
+      // Produk dengan varian → kasih flag di tiap varian, root pakai variant_mode
+      const variants = prod.variants.map(v => {
+        const inFlashSale = usedMap.has(`${prod.id}-${v.id}`);
+        return { ...v, in_flash_sale: inFlashSale };
+      });
+
+      return {
+        ...prod,
+        variant_mode: true,
+        variants
+      };
+    });
+
+    return res.json({
+      message: "✅ Semua produk seller dengan status flash sale",
+      data: taggedProducts
+    });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ message: "❌ Terjadi kesalahan server", error: err.message });
+  }
+});
+/**
+ * 📌 4. Edit flash sale (update name, waktu, timezone, status)
  */
 router.put("/flash-sale/:id/products", requireSeller, async (req, res) => {
   try {
@@ -1161,7 +1246,7 @@ router.put("/flash-sale/:id/products", requireSeller, async (req, res) => {
 });
 
 /**
- * 📌 4. Hapus flash sale
+ * 📌 5. Hapus flash sale
  * Mode:
  * - default => hapus semua produk
  * - query params products => hapus produk tertentu (non variant)
