@@ -7,6 +7,8 @@ const verifyCaptcha = require("../middleware/verifyCaptcha");
 const {
   attachVariantsStockDiscountWithRealDiscount,
 } = require("../utils/applyDiscountAndVariants");
+const { DateTime } = require("luxon");
+
 
 const NodeCache = require("node-cache");
 const cache = new NodeCache({ stdTTL: 60, checkperiod: 120 });
@@ -26,7 +28,8 @@ function safeParseImageUrl(data) {
   }
 }
 
-router.post("/cart/checkout", detectspam, verifyCaptcha, async (req, res) => {
+// routes/cart.js
+router.post("/cart/checkout",  async (req, res) => {
   const startTime = Date.now();
   try {
     const { itemsToCheckout, pickupMethod } = req.body;
@@ -40,18 +43,18 @@ router.post("/cart/checkout", detectspam, verifyCaptcha, async (req, res) => {
         .json({ message: "⚠️ Tidak ada item untuk di-checkout." });
     }
 
-    // Cek alamat lengkap untuk user login (kalau ada item diantar)
+    // Cek alamat lengkap kalau ada item diantar
     if (userInfo?.id) {
       const adaDiantar = itemsToCheckout.some(
         (item) =>
-          (item.pickupMethod || pickupMethod)?.toLowerCase() === "diantar",
+          (item.pickupMethod || pickupMethod)?.toLowerCase() === "diantar"
       );
 
       if (adaDiantar) {
         const { data: userData, error: userError } = await supabase
           .from("users")
           .select(
-            "alamat_lengkap, provinsi, kota_kabupaten, kecamatan, kelurahan, kode_pos, nama_penerima, no_telepon",
+            "alamat_lengkap, provinsi, kota_kabupaten, kecamatan, kelurahan, kode_pos, nama_penerima, no_telepon"
           )
           .eq("id", userInfo.id)
           .single();
@@ -184,12 +187,19 @@ router.post("/cart/checkout", detectspam, verifyCaptcha, async (req, res) => {
         totalPrice += deliveryFee;
       }
 
+      // deadline konfirmasi seller (30 menit dari sekarang, Asia/Jakarta)
+      const confirmDeadline = DateTime.now()
+        .setZone("Asia/Jakarta")
+        .plus({ minutes: 30 })
+        .toISO();
+
       const orderPayload = {
         user_id: userInfo?.id || null,
         seller_id,
         pickup_method,
-        status: "pending",
+        status: "pending", // default status awal pending
         total_price: totalPrice,
+        confirm_deadline: confirmDeadline,
       };
 
       if (pickup_method === "diantar") {
@@ -205,7 +215,7 @@ router.post("/cart/checkout", detectspam, verifyCaptcha, async (req, res) => {
       if (orderError) {
         console.error(
           `❌ Gagal membuat order seller ${seller_id} (${pickup_method}):`,
-          orderError.message,
+          orderError.message
         );
         continue;
       }
@@ -223,22 +233,25 @@ router.post("/cart/checkout", detectspam, verifyCaptcha, async (req, res) => {
 
       // Kirim email notif
       if (userInfo) {
-        sendOrderNotification({
-          order_id: order.id,
-          products: items.map((i) => ({
-            product_name: i.product.product_name,
-            variant_name: i.variant?.variant_name || null,
-            quantity: i.qty,
-            total_price: i.finalPrice * i.qty,
-            product_image_url:
-              i.variant?.variant_image_url ||
-              safeParseImageUrl(i.product.product_image_url),
-          })),
-          buyer_email: userInfo.email,
-          seller_email: sellerMap[seller_id]?.email,
-          buyer_username: userInfo.username,
-          pickup_method,
-        });
+        await sendOrderNotification({
+  order_id: order.id,
+  products: items.map((i) => ({
+    product_name: i.product.product_name,
+    variant_name: i.variant?.variant_name || null,
+    quantity: i.qty,
+    total_price: i.finalPrice * i.qty,
+    product_image_url:
+      i.variant?.variant_image_url ||
+      safeParseImageUrl(i.product.product_image_url),
+  })),
+  buyer_email: userInfo.email,
+  seller_email: sellerMap[seller_id]?.email,
+  buyer_username: userInfo.username,
+  pickup_method,
+  new_status: "pending", // ✅ Tambahkan ini
+});
+
+
       }
     }
 
@@ -257,8 +270,8 @@ router.post("/cart/checkout", detectspam, verifyCaptcha, async (req, res) => {
               (checkoutItem) =>
                 checkoutItem.productId === cartItem.productId &&
                 (checkoutItem.variantId || null) ===
-                  (cartItem.variantId || null),
-            ),
+                  (cartItem.variantId || null)
+            )
         );
 
         await supabase
@@ -270,7 +283,9 @@ router.post("/cart/checkout", detectspam, verifyCaptcha, async (req, res) => {
 
     const endTime = Date.now();
     return res.status(200).json({
-      message: `✅ Berhasil checkout ${createdOrders.length} order. (⏱ ${(endTime - startTime) / 1000}s)`,
+      message: `✅ Berhasil checkout ${createdOrders.length} order. (⏱ ${
+        (endTime - startTime) / 1000
+      }s)`,
       orders: createdOrders.map((o) => o.order),
     });
   } catch (err) {

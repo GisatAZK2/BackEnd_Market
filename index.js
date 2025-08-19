@@ -12,6 +12,7 @@ const requireApiKey = require("./middleware/requireApiKey");
 const rateLimiter = require("./middleware/ratelimiter");
 const startCronJobs = require("./utils/restoreStock");
 require("./utils/cron");
+require("./utils/autocancelorder.js");
 
 // === Routes ===
 const authRoutes = require("./routes/auth");
