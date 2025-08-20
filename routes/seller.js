@@ -118,5 +118,58 @@ router.get("/:id", async (req, res) => {
     });
   }
 });
+// ✅ Get rating semua produk seller + average
+router.get("/:sellerId/ratings", async (req, res) => {
+  try {
+    const { sellerId } = req.params;
+
+    // Ambil semua rating + join ke produk seller
+    const { data: ratings, error } = await supabase
+      .from("ratings")
+      .select(
+        `
+        id,
+        rating,
+        review_text,
+        review_images,
+        created_at,
+        product_id,
+        user_id,
+        users ( id, username, avatar ),
+        products!inner ( id, product_name, seller_id )
+        `
+      )
+      .eq("products.seller_id", sellerId)
+      .order("created_at", { ascending: false });
+
+    if (error) {
+      console.error("Supabase error:", error);
+      return res.status(500).json({ message: "❌ Gagal ambil rating seller." });
+    }
+
+    if (!ratings || ratings.length === 0) {
+      return res.status(200).json({
+        message: "⚠️ Seller ini belum punya rating.",
+        average_rating: 0,
+        total_reviews: 0,
+        ratings: [],
+      });
+    }
+
+    const total = ratings.reduce((sum, r) => sum + r.rating, 0);
+    const avg = total / ratings.length;
+
+    return res.status(200).json({
+      message: "✅ Rating seller berhasil diambil.",
+      average_rating: Number(avg.toFixed(2)),
+      total_reviews: ratings.length,
+      ratings,
+    });
+  } catch (err) {
+    console.error("Server error:", err);
+    return res.status(500).json({ message: "❌ Server error", error: err.message });
+  }
+});
+
 
 module.exports = router;

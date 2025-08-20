@@ -405,6 +405,56 @@ router.get("/:id", async (req, res) => {
   }
 });
 
+router.get("/:productId/ratings", async (req, res) => {
+  try {
+    const { productId } = req.params;
+
+    const { data: ratings, error } = await supabase
+      .from("ratings")
+      .select(
+        `
+        id,
+        rating,
+        review_text,
+        review_images,
+        created_at,
+        user_id,
+        users ( id, username, avatar )
+        `
+      )
+      .eq("product_id", productId)
+      .order("created_at", { ascending: false });
+
+    if (error) {
+      console.error("Supabase error:", error);
+      return res.status(500).json({ message: "❌ Gagal ambil rating produk." });
+    }
+
+    if (!ratings || ratings.length === 0) {
+      return res.status(200).json({
+        message: "⚠️ Produk ini belum punya rating.",
+        average_rating: 0,
+        total_reviews: 0,
+        ratings: [],
+      });
+    }
+
+    const total = ratings.reduce((sum, r) => sum + r.rating, 0);
+    const avg = total / ratings.length;
+
+    return res.status(200).json({
+      message: "✅ Rating produk berhasil diambil.",
+      average_rating: Number(avg.toFixed(2)),
+      total_reviews: ratings.length,
+      ratings,
+    });
+  } catch (err) {
+    console.error("Server error:", err);
+    return res.status(500).json({ message: "❌ Server error", error: err.message });
+  }
+});
+
+
 // == Ambil Produk Berdasarkan Sugesti Produk name
 router.get("/:id/suggestions", async (req, res) => {
   const { id } = req.params;
