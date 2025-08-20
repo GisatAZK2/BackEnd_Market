@@ -28,6 +28,165 @@ function safeParseImageUrl(data) {
   }
 }
 
+router.post("/cart/checkout", detectspam, verifyCaptcha, async (req, res) => {
+  const startTime = Date.now();
+
+  try {
+    const { itemsToCheckout, pickupMethod } = req.body;
+    const userInfo = req.cookies?.user_info ? JSON.parse(req.cookies.user_info) : null;
+
+    if (!itemsToCheckout?.length) return res.status(400).json({ message: "⚠️ Tidak ada item untuk di-checkout." });
+
+    // Cek alamat pengiriman
+    let buyerAddress = null;
+    if (userInfo?.id) {
+      const adaDiantar = itemsToCheckout.some(item => (item.pickupMethod || pickupMethod)?.toLowerCase() === "diantar");
+      if (adaDiantar) {
+        const { data: userData, error: userError } = await supabase.from("users")
+          .select("alamat_lengkap, provinsi, kota_kabupaten, kecamatan, kelurahan, kode_pos, nama_penerima, no_telepon")
+          .eq("id", userInfo.id)
+          .single();
+        if (userError) return res.status(500).json({ message: "❌ Gagal memeriksa data alamat.", error: userError.message });
+
+        const isAlamatLengkap = userData && Object.values(userData).every(Boolean);
+        if (!isAlamatLengkap) return res.status(400).json({ message: "⚠️ Lengkapi alamat pengiriman terlebih dahulu.", needUpdateAddress: true });
+        buyerAddress = userData;
+      }
+    }
+
+    // Ambil semua produk + variants sekaligus
+    const productIds = [...new Set(itemsToCheckout.map(i => i.productId))];
+    const cacheKeyProducts = `products:${productIds.sort().join(",")}`;
+    let products = cache.get(cacheKeyProducts);
+
+    if (!products) {
+      const [productRowsRes, variantRowsRes] = await Promise.all([
+        supabase.from("products").select("*").in("id", productIds),
+        supabase.from("product_variants").select("*").in("product_id", productIds)
+      ]);
+
+      if (!productRowsRes.data?.length) return res.status(500).json({ message: "❌ Gagal mengambil data produk.", error: productRowsRes.error });
+      if (variantRowsRes.error) return res.status(500).json({ message: "❌ Gagal mengambil varian.", error: variantRowsRes.error });
+
+      products = productRowsRes.data.map(p => ({
+        ...p,
+        variants: variantRowsRes.data.filter(v => v.product_id === p.id),
+      }));
+
+      products = await attachVariantsStockDiscountWithRealDiscount(products);
+      cache.set(cacheKeyProducts, products);
+    }
+
+    const productMap = Object.fromEntries(products.map(p => [p.id, p]));
+
+    // Grouping berdasarkan seller + pickup_method
+    const orderGroups = {};
+    itemsToCheckout.forEach(item => {
+      const product = productMap[item.productId];
+      if (!product) return;
+      const variant = product.variants?.find(v => v.id === item.variantId);
+      const finalPrice = variant?.final_price ?? product.finalPrice;
+      const method = (item.pickupMethod || pickupMethod || "diantar").toLowerCase();
+      const groupKey = `${product.seller_id}-${method}`;
+      if (!orderGroups[groupKey]) orderGroups[groupKey] = { seller_id: product.seller_id, pickup_method: method, items: [] };
+      orderGroups[groupKey].items.push({ ...item, product, variant, finalPrice, discountPercentage: product.discount_percentage ?? 0, variantDiscountPercentage: variant?.applied_discount ?? 0 });
+    });
+
+    // Ambil seller data
+    const sellerIds = [...new Set(Object.values(orderGroups).map(g => g.seller_id))];
+    const cacheKeySellers = `sellers:${sellerIds.sort().join(",")}`;
+    let sellerData = cache.get(cacheKeySellers);
+
+    if (!sellerData) {
+      const { data } = await supabase.from("sellers").select("id, store_name, email, delivery_fee").in("id", sellerIds);
+      sellerData = data || [];
+      cache.set(cacheKeySellers, sellerData);
+    }
+    const sellerMap = Object.fromEntries(sellerData.map(s => [s.id, s]));
+
+    // === Parallel insert orders per group ===
+    const createdOrders = await Promise.all(Object.values(orderGroups).map(async group => {
+      const { seller_id, pickup_method, items } = group;
+      const baseTotal = items.reduce((sum, i) => sum + i.finalPrice * i.qty, 0);
+      const deliveryFee = pickup_method === "diantar" ? sellerMap[seller_id]?.delivery_fee || 0 : 0;
+      const totalPrice = baseTotal + deliveryFee;
+      const confirmDeadline = DateTime.now().setZone("Asia/Jakarta").plus({ minutes: 30 }).toISO();
+
+      const { data: order, error: orderError } = await supabase.from("orders")
+        .insert([{ user_id: userInfo?.id || null, seller_id, pickup_method, status: "pending", total_price: totalPrice, confirm_deadline: confirmDeadline, delivery_fee: deliveryFee, buyer_address: buyerAddress || null }])
+        .select().single();
+      if (orderError) return null;
+
+      const orderItems = items.map(i => ({ order_id: order.id, product_id: i.productId, variant_id: i.variantId || null, quantity: i.qty, price_per_item: i.finalPrice }));
+      await supabase.from("order_items").insert(orderItems);
+
+      // Snapshot & email background
+      (async () => {
+        const snapshotItems = items.map(i => ({
+          order_id: order.id,
+          product_id: i.product.id,
+          product_name: i.product.product_name,
+          product_price: i.product.price,
+          final_price: i.finalPrice,
+          discount_percentage: i.discountPercentage,
+          product_image_url: safeParseImageUrl(i.product.product_image_url),
+          variant_id: i.variant?.id || null,
+          variant_name: i.variant?.variant_name || null,
+          variant_price: i.variant?.price ?? null,
+          variant_final_price: i.variant?.final_price ?? null,
+          variant_discount_percentage: i.variantDiscountPercentage,
+          variant_image_url: i.variant?.variant_image_url || null,
+        }));
+        await supabase.from("order_item_details").insert(snapshotItems);
+        await supabase.from("order_details_items").insert(snapshotItems);
+
+        if (userInfo) {
+          await sendOrderNotification({
+            order_id: order.id,
+            products: items.map(i => ({
+              product_name: i.product.product_name,
+              variant_name: i.variant?.variant_name || null,
+              quantity: i.qty,
+              total_price: i.finalPrice * i.qty,
+              product_image_url: i.variant?.variant_image_url || safeParseImageUrl(i.product.product_image_url),
+            })),
+            buyer_email: userInfo.email,
+            seller_email: sellerMap[seller_id]?.email,
+            buyer_username: userInfo.username,
+            pickup_method,
+            new_status: "pending",
+          });
+        }
+      })();
+
+      return { order, items: orderItems };
+    }));
+
+    // Hapus item checkout dari cart user
+    if (userInfo?.id) {
+      const { data: cart } = await supabase.from("carts").select("items").eq("user_id", userInfo.id).maybeSingle();
+      if (cart?.items?.length) {
+        const remainingItems = cart.items.filter(cartItem =>
+          !itemsToCheckout.some(checkoutItem =>
+            checkoutItem.productId === cartItem.productId && (checkoutItem.variantId || null) === (cartItem.variantId || null)
+          )
+        );
+        await supabase.from("carts").update({ items: remainingItems }).eq("user_id", userInfo.id);
+      }
+    }
+
+    const endTime = Date.now();
+    return res.status(200).json({
+      message: `✅ Berhasil checkout ${createdOrders.filter(Boolean).length} order. (⏱ ${(endTime - startTime) / 1000}s)`,
+      orders: createdOrders.filter(Boolean).map(o => o.order),
+    });
+
+  } catch (err) {
+    console.error("❌ Server error:", err);
+    return res.status(500).json({ message: "❌ Terjadi kesalahan server", error: err.message });
+  }
+});
+
 
 // === DELIVERY FEE ===
 router.post("/cart/delivery-fee", async (req, res) => {
@@ -191,65 +350,49 @@ function combineFullAddress(user) {
 // Route GET /all - daftar order user
 router.get("/all", async (req, res) => {
   try {
-    // ✅ Ambil info user dari cookie
     const userInfo = req.cookies?.user_info ? JSON.parse(req.cookies.user_info) : null;
-    if (!userInfo?.id)
-      return res.status(401).json({ message: "❌ Harus login untuk melihat daftar order." });
+    if (!userInfo?.id) return res.status(401).json({ message: "❌ Harus login untuk melihat daftar order." });
 
     const cacheKey = `orders:list:${userInfo.id}`;
     let orders = orderCache.get(cacheKey);
-    if (orders)
-      return res.status(200).json({ message: "✅ Daftar order berhasil diambil (cache).", orders });
+    if (orders) return res.status(200).json({ message: "✅ Daftar order berhasil diambil (cache).", orders });
 
-    // ✅ Ambil semua order user
+    // Ambil semua order user
     const { data: ordersData, error: orderError } = await supabase
       .from("orders")
-      .select("id, created_at, total_price, delivery_fee, status, pickup_method, pickup_deadline")
+      .select("id, created_at, total_price, delivery_fee, status, pickup_method, confirm_deadline, buyer_address")
       .eq("user_id", userInfo.id)
       .order("created_at", { ascending: false });
-    if (orderError)
-      return res.status(500).json({ message: "❌ Gagal mengambil data order.", error: orderError });
+
+    if (orderError) return res.status(500).json({ message: "❌ Gagal mengambil data order.", error: orderError });
 
     const orderIds = ordersData.map(o => o.id);
+    if (!orderIds.length) return res.status(200).json({ message: "✅ Tidak ada order.", orders: [] });
 
-    // ✅ Ambil order_items untuk quantity
-    const { data: orderItems, error: orderItemsError } = await supabase
-      .from("order_items")
-      .select("order_id, product_id, variant_id, quantity")
-      .in("order_id", orderIds);
-    if (orderItemsError)
-      return res.status(500).json({ message: "❌ Gagal mengambil order items.", error: orderItemsError });
+    // Ambil order_items & detailItems sekaligus
+    const [orderItemsRes, detailItemsRes] = await Promise.all([
+      supabase.from("order_items").select("order_id, product_id, variant_id, quantity").in("order_id", orderIds),
+      supabase.from("order_details_items").select("*").in("order_id", orderIds)
+    ]);
 
-    // ✅ Buat lookup quantity cepat
+    const orderItems = orderItemsRes.data || [];
+    const detailItems = detailItemsRes.data || [];
+
+    // Lookup quantity
     const orderItemMap = {};
     orderItems.forEach(oi => {
       const key = `${oi.order_id}-${oi.product_id}-${oi.variant_id ?? "null"}`;
       orderItemMap[key] = oi.quantity ?? 0;
     });
 
-    // ✅ Ambil detail produk
-    const { data: detailItems, error: detailError } = await supabase
-      .from("order_details_items")
-      .select("*")
-      .in("order_id", orderIds);
-    if (detailError)
-      return res.status(500).json({ message: "❌ Gagal mengambil detail order.", error: detailError });
-
-    // ✅ Ambil info buyer
-    const { data: buyerData } = await supabase
-      .from("users")
-      .select("nama_penerima, no_telepon, alamat_lengkap, provinsi, kota_kabupaten, kecamatan, kelurahan, kode_pos")
-      .eq("id", userInfo.id)
-      .single();
-
-    // ✅ Hitung total_quantity per order
+    // Total quantity per order
     const qtyByOrder = {};
     orderItems.forEach(item => {
       if (!qtyByOrder[item.order_id]) qtyByOrder[item.order_id] = 0;
       qtyByOrder[item.order_id] += item.quantity ?? 0;
     });
 
-    // ✅ Map detailItems per order
+    // Map detailItems per order
     const itemsByOrder = {};
     detailItems.forEach(item => {
       if (!itemsByOrder[item.order_id]) itemsByOrder[item.order_id] = [];
@@ -278,96 +421,127 @@ router.get("/all", async (req, res) => {
       });
     });
 
-    // ✅ Gabungkan orders + items + total_quantity + buyer info
-    orders = ordersData.map(order => ({
-      ...order,
-      order_items: itemsByOrder[order.id] || [],
-      total_quantity: qtyByOrder[order.id] || 0,
-      buyer_info: buyerData || null,
-      buyer_full_address: buyerData ? combineFullAddress(buyerData) : null,
-    }));
+    // Gabungkan orders + items + total_quantity + buyer info
+    orders = ordersData.map(order => {
+      let buyerInfo = null;
+      let buyerFullAddress = null;
 
-    // ✅ Set cache
+      if (order.buyer_address) {
+        try {
+          buyerInfo = typeof order.buyer_address === "string"
+            ? JSON.parse(order.buyer_address)
+            : order.buyer_address;
+
+          const { alamat_lengkap = "", kelurahan = "", kecamatan = "", kota_kabupaten = "", provinsi = "", kode_pos = "" } = buyerInfo;
+          buyerFullAddress = [alamat_lengkap, kelurahan, kecamatan, kota_kabupaten, provinsi, kode_pos].filter(Boolean).join(", ");
+        } catch (e) {
+          console.warn("⚠️ Gagal parse buyer_address:", order.buyer_address);
+        }
+      }
+
+      return {
+        ...order,
+        order_items: itemsByOrder[order.id] || [],
+        total_quantity: qtyByOrder[order.id] || 0,
+        buyer_info: buyerInfo || null,
+        buyer_full_address: buyerFullAddress || null,
+      };
+    });
+
     orderCache.set(cacheKey, orders);
-
     return res.status(200).json({ message: "✅ Daftar order berhasil diambil.", orders });
   } catch (err) {
     console.error("❌ Server error:", err);
     return res.status(500).json({ message: "❌ Terjadi kesalahan server", error: err.message });
   }
 });
-
 // Route GET /:id - detail order + buyer info
-router.get("/:id", async (req, res) => {
+router.get("/:orderId", async (req, res) => {
   try {
+    const { orderId } = req.params;
     const userInfo = req.cookies?.user_info ? JSON.parse(req.cookies.user_info) : null;
-    if (!userInfo?.id) return res.status(401).json({ message: "❌ Harus login." });
 
-    const orderId = req.params.id;
-    const cacheKey = `order:detail:${userInfo.id}:${orderId}`;
-    let cached = orderCache.get(cacheKey);
-    if (cached) return res.status(200).json({ message: "✅ Order diambil (cache).", order: cached });
+    if (!userInfo?.id)
+      return res.status(401).json({ message: "❌ Harus login untuk melihat detail order." });
 
-    // Ambil data order
+    const cacheKey = `order:${userInfo.id}:${orderId}`;
+    const cached = orderCache.get(cacheKey);
+    if (cached) return res.status(200).json({ message: "✅ Detail order berhasil diambil (cache).", order: cached });
+
+    // Ambil order utama
     const { data: orderData, error: orderError } = await supabase
       .from("orders")
-      .select("id, user_id, created_at, total_price, delivery_fee, status, pickup_method, pickup_deadline")
+      .select("id, created_at, total_price, delivery_fee, status, pickup_method, confirm_deadline, buyer_address")
       .eq("id", orderId)
+      .eq("user_id", userInfo.id)
       .single();
 
-    if (orderError || !orderData) return res.status(404).json({ message: "❌ Order tidak ditemukan.", error: orderError });
+    if (orderError || !orderData)
+      return res.status(404).json({ message: "❌ Order tidak ditemukan.", error: orderError });
 
-    // Ambil detail item dari snapshot
-    const { data: detailItems, error: detailError } = await supabase
-      .from("order_detail_items")
-      .select("*")
-      .eq("order_id", orderId);
+    // Ambil order_items dan snapshot detail produk bersamaan
+    const [orderItemsRes, detailItemsRes] = await Promise.all([
+      supabase.from("order_items").select("order_id, product_id, variant_id, quantity").eq("order_id", orderId),
+      supabase.from("order_details_items").select("*").eq("order_id", orderId),
+    ]);
 
-    if (detailError) return res.status(500).json({ message: "❌ Gagal mengambil detail order.", error: detailError });
+    const orderItems = orderItemsRes.data || [];
+    const detailItems = detailItemsRes.data || [];
 
-    // Ambil info buyer
-    const { data: buyerData } = await supabase
-      .from("users")
-      .select("nama_penerima, no_telepon, alamat_lengkap, provinsi, kota_kabupaten, kecamatan, kelurahan, kode_pos")
-      .eq("id", orderData.user_id)
-      .single();
+    // Mapping quantity untuk lookup cepat
+    const quantityMap = Object.fromEntries(
+      orderItems.map(oi => [`${oi.order_id}-${oi.product_id}-${oi.variant_id ?? "null"}`, oi.quantity ?? 0])
+    );
 
-    // Mapping snapshot item sesuai struktur checkout
-    const mappedItems = detailItems.map(item => ({
-      order_item_id: item.order_item_id,
-      product_id: item.product_id,
-      product_name: item.product_name,
-      product_image_url: safeParseImageUrl(item.product_image_url),
-      quantity: item.quantity,
-      price_per_item: item.variant_final_price ?? item.final_price ?? item.product_price,
-      discount_percentage: item.variant_discount_percentage ?? item.discount_percentage ?? 0,
-      variant: item.variant_id
-        ? {
-            id: item.variant_id,
-            variant_name: item.variant_name,
-            variant_image_url: item.variant_image_url,
-            variant_price: item.variant_price,
-            variant_final_price: item.variant_final_price,
-            variant_discount_percentage: item.variant_discount_percentage,
-          }
-        : null,
-    }));
+    // Total quantity
+    const totalQuantity = orderItems.reduce((sum, item) => sum + (item.quantity ?? 0), 0);
 
-    const orderResponse = {
-      id: orderData.id,
-      created_at: orderData.created_at,
-      total_price: orderData.total_price,
-      delivery_fee: orderData.delivery_fee,
-      status: orderData.status,
-      pickup_method: orderData.pickup_method,
-      pickup_deadline: orderData.pickup_deadline,
-      order_items: mappedItems,
-      buyer_info: buyerData || null,
-      buyer_full_address: buyerData ? combineFullAddress(buyerData) : null,
+    // Map detailItems + quantity
+    const items = detailItems.map(item => {
+      const key = `${item.order_id}-${item.product_id}-${item.variant_id ?? "null"}`;
+      const quantity = quantityMap[key] ?? 0;
+
+      return {
+        order_item_id: item.order_item_id,
+        product_id: item.product_id,
+        product_name: item.product_name,
+        product_image_url: safeParseImageUrl(item.product_image_url),
+        quantity,
+        price_per_item: item.variant_final_price ?? item.final_price ?? item.product_price,
+        discount_percentage: item.variant_discount_percentage ?? item.discount_percentage ?? 0,
+        variant: item.variant_id ? {
+          id: item.variant_id,
+          variant_name: item.variant_name,
+          variant_image_url: item.variant_image_url,
+          variant_price: item.variant_price,
+          variant_final_price: item.variant_final_price,
+          variant_discount_percentage: item.variant_discount_percentage,
+        } : null
+      };
+    });
+
+    // Parsing buyer_address
+    let buyerInfo = null, buyerFullAddress = null;
+    if (orderData.buyer_address) {
+      try {
+        buyerInfo = typeof orderData.buyer_address === "string" ? JSON.parse(orderData.buyer_address) : orderData.buyer_address;
+        const { alamat_lengkap="", kelurahan="", kecamatan="", kota_kabupaten="", provinsi="", kode_pos="" } = buyerInfo;
+        buyerFullAddress = [alamat_lengkap, kelurahan, kecamatan, kota_kabupaten, provinsi, kode_pos].filter(Boolean).join(", ");
+      } catch (e) { console.warn("⚠️ Gagal parse buyer_address:", orderData.buyer_address); }
+    }
+
+    const orderResult = {
+      ...orderData,
+      order_items: items,
+      total_quantity: totalQuantity,
+      buyer_info: buyerInfo,
+      buyer_full_address: buyerFullAddress
     };
 
-    orderCache.set(cacheKey, orderResponse);
-    return res.status(200).json({ message: "✅ Order detail berhasil diambil.", order: orderResponse });
+    // Set cache
+    orderCache.set(cacheKey, orderResult);
+
+    return res.status(200).json({ message: "✅ Detail order berhasil diambil.", order: orderResult });
   } catch (err) {
     console.error("❌ Server error:", err);
     return res.status(500).json({ message: "❌ Terjadi kesalahan server", error: err.message });
