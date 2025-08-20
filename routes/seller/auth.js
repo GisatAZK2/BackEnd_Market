@@ -149,9 +149,8 @@ router.post(
   },
 );
 
-
 // ======================== VERIFY OTP ========================
-router.post("/verify-otp", detectSpam, verifyCaptcha, async (req, res) => {
+router.post("/verify-otp",detectSpam,verifyCaptcha, async (req, res) => {
   const { email, otp, mode = "email" } = req.body;
 
   try {

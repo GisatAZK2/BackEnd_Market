@@ -455,7 +455,7 @@ router.post("/:id/rating", upload.array("images"), async (req, res) => {
     const orderId = req.params.id;
     const { ratings } = JSON.parse(req.body.data);
 
-    // ✅ ambil orders + order_items sekaligus
+    // ✅ ambil orders + order_items
     const { data: order, error: orderError } = await supabase
       .from("orders")
       .select(`
@@ -521,10 +521,10 @@ router.post("/:id/rating", upload.array("images"), async (req, res) => {
         continue;
       }
 
-      // 🔎 ambil variant_id dari tabel product_variants kalau ada
+      // 🔎 ambil variant_id valid
       let finalVariantId = null;
       if (validItem.variant_id) {
-        const { data: variant, error: variantError } = await supabase
+        const { data: variantCheck, error: variantError } = await supabase
           .from("product_variants")
           .select("id")
           .eq("id", validItem.variant_id)
@@ -532,9 +532,9 @@ router.post("/:id/rating", upload.array("images"), async (req, res) => {
           .maybeSingle();
 
         if (variantError) {
-          console.warn("⚠️ Gagal ambil product_variant", variantError);
+          console.warn("⚠️ Gagal cek variant:", variantError);
         }
-        finalVariantId = variant ? variant.id : null;
+        finalVariantId = variantCheck ? variantCheck.id : null;
       }
 
       // cek existing rating
@@ -556,6 +556,42 @@ router.post("/:id/rating", upload.array("images"), async (req, res) => {
         });
       }
 
+      // 🔎 ambil detail produk
+      const { data: product, error: productError } = await supabase
+        .from("products")
+        .select("id, product_name, product_image_url")
+        .eq("id", r.productId)
+        .single();
+
+      if (productError || !product) {
+        console.error("❌ Produk tidak ditemukan:", productError);
+        return res.status(400).json({ message: "❌ Produk tidak ditemukan." });
+      }
+
+      // 🔎 ambil detail varian jika ada
+      let variant = null;
+      if (finalVariantId) {
+        const { data: v, error: variantError } = await supabase
+          .from("product_variants")
+          .select("id, variant_name, variant_image_url")
+          .eq("id", finalVariantId)
+          .single();
+
+        if (!variantError && v) {
+          variant = v;
+        }
+      }
+
+      // 📦 buat snapshot JSON
+      const productSnapshot = {
+        product_id: product.id,
+        product_name: product.product_name,
+        product_image_url: product.product_image_url,
+        variant_id: variant?.id || null,
+        variant_name: variant?.variant_name || null,
+        variant_image_url: variant?.variant_image_url || null,
+      };
+
       // ➕ insert rating baru
       const { data: inserted, error: insertError } = await supabase
         .from("ratings")
@@ -567,7 +603,8 @@ router.post("/:id/rating", upload.array("images"), async (req, res) => {
           user_id: userInfo.id,
           rating: r.rating,
           review_text: r.reviewText,
-          review_images: uploadedUrls, // langsung array (karena text[] atau jsonb)
+          review_images: uploadedUrls,
+          product_snapshot: productSnapshot, // <<-- JSONB
         }])
         .select()
         .single();
