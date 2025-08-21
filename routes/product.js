@@ -273,14 +273,44 @@ router.get("/nearby-by-location", async (req, res) => {
 
 router.get("/allproduct", async (req, res) => {
   try {
-    const { data: products } = await supabase.from("products").select("*");
+    // Ambil semua produk + rata-rata rating
+    const { data: products, error } = await supabase
+      .from("products")
+      .select(`
+        *,
+        ratings!left (
+          rating
+        )
+      `);
+
+    if (error) throw error;
+
+    // Hitung rata-rata rating per produk
+    const productsWithExtras = products.map((p) => {
+      let avgRating = null;
+
+      if (p.ratings && p.ratings.length > 0) {
+        const sum = p.ratings.reduce((acc, r) => acc + r.rating, 0);
+        avgRating = sum / p.ratings.length;
+      }
+
+      return {
+        ...p,
+        avg_rating: avgRating ? Number(avgRating.toFixed(2)) : null,
+        total_ratings: p.ratings ? p.ratings.length : 0,
+      };
+    });
+
+    // Attach varian + stock + diskon (fungsi custom-mu)
     const productsWithVariants =
-      await attachVariantsStockDiscountWithRealDiscount(products);
+      await attachVariantsStockDiscountWithRealDiscount(productsWithExtras);
+
     return res.status(200).json({
       message: `✅ ${products.length} produk`,
       products: productsWithVariants,
     });
   } catch (error) {
+    console.error("❌ Gagal ambil produk:", error);
     return res.status(500).json({
       message: "❌ Gagal mengambil semua produk",
       error: error.message,
@@ -369,6 +399,7 @@ router.get("/:id", async (req, res) => {
         stock,
         min_price,
         max_price,
+        terjual,
         created_at,
         category_id,
         keywords,

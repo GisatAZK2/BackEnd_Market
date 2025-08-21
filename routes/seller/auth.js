@@ -150,7 +150,7 @@ router.post(
 );
 
 // ======================== VERIFY OTP ========================
-router.post("/verify-otp",detectSpam,verifyCaptcha, async (req, res) => {
+router.post("/verify-otp", async (req, res) => {
   const { email, otp, mode = "email" } = req.body;
 
   try {
@@ -343,6 +343,7 @@ router.post("/login", detectSpam, verifyCaptcha, async (req, res) => {
 });
 
 
+// GET Seller profile + total followers
 router.get("/profile/:id", async (req, res) => {
   try {
     let sellerId;
@@ -362,7 +363,7 @@ router.get("/profile/:id", async (req, res) => {
       }
     }
 
-    // Ambil semua kolom biar gak ke-lock di versi tertentu
+    // Ambil semua kolom biar fleksibel
     const { data: seller, error } = await supabase
       .from("sellers")
       .select("*")
@@ -373,7 +374,7 @@ router.get("/profile/:id", async (req, res) => {
       return res.status(404).json({ error: "Seller tidak ditemukan." });
     }
 
-    // Gabungkan alamat dari kolom yang ada
+    // Gabungkan alamat
     const alamat_lengkap_combine = [
       seller.store_address || seller.alamat_lengkap || "",
       seller.kelurahan || "",
@@ -383,10 +384,41 @@ router.get("/profile/:id", async (req, res) => {
       .filter(Boolean)
       .join(", ");
 
+    // Hitung jumlah followers seller ini
+    const { count: totalFollowers, error: followerError } = await supabase
+      .from("follows")
+      .select("*", { count: "exact", head: true })
+      .eq("seller_id", sellerId);
+
+    if (followerError) {
+      return res.status(500).json({
+        error: "Gagal mengambil jumlah followers.",
+        detail: followerError.message,
+      });
+    }
+
+    // (Opsional) ambil daftar user yang follow seller ini
+    const { data: followers, error: followersError } = await supabase
+      .from("follows")
+      .select(`
+        user_id,
+        users (id, username, email, avatar, created_at)
+      `)
+      .eq("seller_id", sellerId);
+
+    if (followersError) {
+      return res.status(500).json({
+        error: "Gagal mengambil daftar followers.",
+        detail: followersError.message,
+      });
+    }
+
     res.json({
       seller: {
         ...seller,
         alamat_lengkap_combine,
+        total_followers: totalFollowers || 0,
+        followers: followers?.map((f) => f.users) || [],
       },
     });
   } catch (err) {
@@ -394,7 +426,6 @@ router.get("/profile/:id", async (req, res) => {
     res.status(500).json({ error: "Terjadi kesalahan server." });
   }
 });
-
 
 
 // ======================== LUPA PASSWORD ========================

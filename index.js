@@ -23,6 +23,7 @@ const clean = require("./utils/cleanup");
 const order = require("./routes/orderRoutes");
 const share = require("./routes/ogpmeta");
 const cart = require("./routes/cart");
+const ratingcustomer = require("./routes/ratingcustomer.js");
 const discount = require("./routes/discount");
 const sellerWithProductsRoutes = require("./routes/seller");
 const { router: wilayah } = require("./utils/wilayahutils");
@@ -33,6 +34,7 @@ const orderseller = require("./routes/seller/order.js");
 const formseller = require("./routes/seller/forum-pendaftaran.js");
 const promoteproductseller = require("./routes/seller/promote.js");
 const productseller = require("./routes/seller/product.js");
+const ratingselelr = require("./routes/seller/rating.js");
 
 const app = express();
 startCronJobs();
@@ -125,6 +127,7 @@ app.use("/clean", clean);
 app.use("/order", order);
 app.use("/cart", cache("10 seconds"), cart);
 app.use("/discount", discount);
+app.use("/rating",ratingcustomer);
 app.use("/seller", cache("10 seconds"), sellerWithProductsRoutes);
 
 // === Seller V1 routes (nested router) ===
@@ -134,6 +137,7 @@ sellerRouter.use("/order", orderseller);
 sellerRouter.use("/forum-pendaftaran", formseller);
 sellerRouter.use("/products", productseller);
 sellerRouter.use("/promoteseller", promoteproductseller);
+sellerRouter.use("/ratingseller", ratingselelr);
 sellerRouter.get("/test", (req, res) => {
   res.json({ message: "Seller V1 API aktif 🚀" });
 });

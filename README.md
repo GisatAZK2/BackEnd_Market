@@ -1,329 +1,504 @@
-# 📌 Dokumentasi API Flash Sale (Seller)
+# Dokumentasi API Backend Market
 
-Base URL:
+Selamat datang di dokumentasi resmi API Backend Market! API ini menyediakan fungsionalitas untuk dua jenis pengguna: **User** (pembeli) dan **Seller** (penjual). Berikut adalah panduan lengkap untuk endpoint yang tersedia, termasuk pembaruan besar untuk kedua kategori.
 
-```
-https://backendmarket-production.up.railway.app/seller/V1/promoteseller
-```
+## Base URL
+- **User**: `https://backendmarket-production.up.railway.app/`
+- **Seller**: `https://backendmarket-production.up.railway.app/seller/V1`
 
-Semua endpoint membutuhkan autentikasi **Seller** (kecuali endpoint publik `date-list`).
-
----
-
-## 1. Daftarkan Produk ke Flash Sale
-
-**Endpoint:**
-
-```
-POST /flash-sale/register
-
-2 Mode :
-  1. Single Product
-  2. Product With Variant
-```
-
-1. Single product
-
-**Request Body:**
-
-```json
-{
-  "flash_sale_id": 110,
-  "items" : [
-    {
-      "product_id": "903b914a-9d79-418b-8f89-d8ff9eb3f50a",
-      "stock": 5,
-      "discount_percentage": 67
-    }
-  ]
-}
-
-```
-
-2. Product With Variant 
-
-**Request Body:**
-
-```json
-{
-  "flash_sale_id": 110,
-  "items" : [
-    {
-      "product_id": "94ccd2cc-40c3-4731-afe6-40a8434f8929",
-      "variants": [
-        { "variant_id": "fff46aa4-f20c-4cb2-b879-49d3068ae9b5", "stock": 40, "discount_percentage": 10 }
-      ]
-    }
-  ]
-}
-
-```
-
-
-**Response Sukses:**
-
-```json
-{
-  "message": "✅ Flash sale berhasil dibuat / produk didaftarkan",
-  "flash_sale_id": "uuid",
-  "items": [
-    {
-      "seller_id": "uuid-seller",
-      "flash_sale_id": "uuid",
-      "product_id": "uuid-produk",
-      "variant_id": null,
-      "flash_stock": 10,
-      "discount_percentage": 20
-    }
-  ]
-}
-```
+## Autentikasi
+- Semua endpoint yang memerlukan autentikasi menggunakan **cookie** (`user_info` untuk pembeli, `seller_info` untuk penjual) yang berisi informasi pengguna dalam format JSON.
+- **JWT** digunakan untuk autentikasi login, dengan masa berlaku 7 hari.
+- Pastikan untuk menyertakan cookie `user_info` atau `seller_info` pada request yang memerlukan autentikasi.
 
 ---
 
-## 2. Ambil Daftar Flash Sale Tanggal & Sesi
+## Endpoint untuk User
 
-**Endpoint:**
+### 1. Login
+Endpoint untuk login sebagai pembeli, termasuk pengecekan apakah pengguna juga terdaftar sebagai penjual untuk mencegah pembelian barang sendiri.
 
-```
-GET /flash-sale/date-list
-```
+**Endpoint**: `POST auth/login`
 
-**Response:**
-
+**Body**:
 ```json
 {
-  "message": "✅ 3 flash sale ditemukan",
-  "items": {
-    "2025-08-18": {
-      "pagi": [ { "id": "uuid", "tag": "upcoming", ... } ],
-      "siang": [],
-      "malam": []
-    }
+  "email": "string",
+  "password": "string"
+}
+```
+
+**Response**:
+- **200**: Berhasil login
+  ```json
+  {
+    "message": "Login sukses.",
+    "token": "JWT_TOKEN",
+    "id": "user_id",
+    "email": "user_email",
+    "username": "user_username",
+    "avatar": "user_avatar_url",
+    "seller_id": "seller_id_if_exists"
   }
-}
-```
+  ```
+- **401**: Password salah
+- **403**: Akun tidak ditemukan atau belum diverifikasi
+- **500**: Kesalahan server
 
-* **tag:** `ongoing | ended | upcoming`
-* **session:** `pagi | siang | malam`
+**Catatan**:
+- Cookie `user_info` akan diset dengan informasi pengguna, termasuk `seller_id` jika pengguna juga terdaftar sebagai penjual.
+- Pengecekan `seller_id` mencegah penjual membeli barang sendiri.
 
 ---
 
-## 3. List Semua Flash Sale Milik Seller
+### 2. Checkout
+Endpoint untuk melakukan checkout dari keranjang belanja. Mendukung pengelompokan order per penjual dan metode pengambilan (`diantar` atau `diambil`).
 
-**Endpoint:**
+**Endpoint**: `POST /order/cart/checkout`
 
-```
-GET /flash-sale/list
-```
-
-**Response:**
-
+**Body**:
 ```json
 {
-  "message": "✅ Daftar flash sale seller",
-  "data": [
+  "itemsToCheckout": [
     {
-      "id": "uuid",
-      "name": "Flash Sale Merdeka",
-      "start_time": "2025-08-18T10:00:00+07:00",
-      "end_time": "2025-08-18T12:00:00+07:00",
-      "timezone": "Asia/Jakarta",
-      "status": "enabled",
-      "tag": "ongoing"
+      "productId": "string",
+      "variantId": "string|null",
+      "qty": "number",
+      "pickupMethod": "diantar|diambil"
     }
-  ]
+  ],
+  "pickupMethod": "diantar|diambil"
 }
 ```
 
+**Response**:
+- **200**: Berhasil checkout
+  ```json
+  {
+    "message": "✅ Berhasil checkout {n} order. (⏱ {time}s)",
+    "orders": [{ "order_data": "..." }]
+  }
+  ```
+- **400**: Tidak ada item untuk checkout atau alamat pengiriman tidak lengkap
+- **500**: Kesalahan server
+
+**Fitur**:
+- Validasi alamat lengkap untuk metode `diantar`.
+- Pengelompokan order berdasarkan `seller_id` dan `pickup_method`.
+- Cache untuk produk dan penjual guna meningkatkan performa.
+- Notifikasi email dikirim secara asinkronus setelah checkout.
+- Item yang di-checkout dihapus dari keranjang.
+
 ---
 
-## 4. Detail Flash Sale by ID
+### 3. Memberikan Rating
+Endpoint untuk memberikan rating pada item order yang telah diterima.
 
-**Endpoint:**
+**Endpoint**: `POST /rating/:orderId/rating`
 
-```
-GET /flash-sale/:id
-```
-
-**Response:**
-
+**Body** (multipart/form-data):
 ```json
 {
-  "message": "✅ Detail flash sale",
-  "data": {
-    "id": "uuid",
-    "name": "Flash Sale Merdeka",
-    "start_time": "2025-08-18T10:00:00+07:00",
-    "end_time": "2025-08-18T12:00:00+07:00",
-    "timezone": "Asia/Jakarta",
-    "status": "enabled",
-    "products": [
+  "data": JSON.stringify({
+    "ratings": [
       {
-        "product": { "id": "uuid-produk", "name": "Sayur Kangkung" },
-        "variants": [],
-        "price_before": 20000,
-        "discount_percentage": 20,
-        "price_after": 16000
+        "orderItemId": "string",
+        "rating": "number (1-5)",
+        "reviewText": "string",
+        "images": ["filename1.jpg", "filename2.jpg"]
+      }
+    ]
+  })
+}
+```
+
+**Files**: `images` (opsional, upload gambar review)
+
+**Response**:
+- **200**: Rating berhasil disimpan
+  ```json
+  {
+    "message": "✅ Rating berhasil disimpan.",
+    "ratings": [{ "rating_data": "..." }]
+  }
+  ```
+- **400**: Rating tidak valid atau sudah ada rating untuk item ini
+- **401**: Harus login
+- **403**: Tidak punya akses ke order ini
+- **500**: Kesalahan server
+
+**Fitur**:
+- Validasi bahwa order sudah berstatus `diterima`.
+- Upload gambar review ke Supabase storage.
+- Snapshot produk disimpan untuk referensi.
+
+---
+
+### 4. Mendapatkan Semua Rating Pengguna
+Mengambil semua rating yang diberikan oleh pengguna.
+
+**Endpoint**: `GET /rating/all`
+
+**Response**:
+- **200**: Berhasil mengambil rating
+  ```json
+  {
+    "message": "✅ {n} rating ditemukan",
+    "ratings": [{ "rating_data": "..." }]
+  }
+  ```
+- **500**: Kesalahan server
+
+**Fitur**:
+- Mengembalikan rating beserta balasan dari penjual (jika ada).
+
+---
+
+### 5. Mendapatkan Rating per Order
+Mengambil rating untuk order tertentu.
+
+**Endpoint**: `GET /order/:orderId`
+
+**Response**:
+- **200**: Berhasil mengambil rating
+  ```json
+  {
+    "message": "✅ {n} rating untuk order {orderId}",
+    "ratings": [{ "rating_data": "..." }]
+  }
+  ```
+- **500**: Kesalahan server
+
+---
+
+### 6. Mendapatkan Data Seller
+Mengambil daftar semua penjual beserta produk, rating rata-rata, total terjual, dan jumlah followers.
+
+**Endpoint**: `GET /seller/allseller`
+
+**Response**:
+- **200**: Berhasil mengambil data
+  ```json
+  {
+    "message": "✅ {n} seller berhasil diambil",
+    "data": [
+      {
+        "seller": { "seller_data": "..." },
+        "products": [{ "product_data": "..." }],
+        "total_sold": "number",
+        "average_rating": "string (2 decimal)",
+        "total_reviews": "number",
+        "total_followers": "number"
       }
     ]
   }
-}
-```
+  ```
+- **500**: Kesalahan server
+
+**Fitur**:
+- Cache selama 30 detik untuk performa.
+- Mengembalikan produk dengan varian, rating rata-rata, dan jumlah followers.
 
 ---
 
-## 5. List Product Avaible For Edit In 1 Session Flash Sale
+### 7. Mendapatkan Seller Berdasarkan ID
+Mengambil detail penjual berdasarkan ID, termasuk produk dan jumlah followers.
 
-**Endpoint:**
+**Endpoint**: `GET /seller/:id`
 
-```
-GET /flash-sale/:id/products/available
-```
+**Response**:
+- **200**: Berhasil mengambil data
+  ```json
+  {
+    "message": "✅ Seller & {n} produk berhasil diambil",
+    "seller": { "seller_data": "..." },
+    "products": [{ "product_data": "..." }],
+    "total_sold": "number",
+    "total_followers": "number"
+  }
+  ```
+- **404**: Seller tidak ditemukan
+- **500**: Kesalahan server
 
-**Response:**
+---
 
+### 8. Mendapatkan Rating Seller
+Mengambil semua rating untuk produk milik penjual tertentu.
+
+**Endpoint**: `GET /seller/:sellerId/ratings`
+
+**Response**:
+- **200**: Berhasil mengambil rating
+  ```json
+  {
+    "message": "✅ Rating seller berhasil diambil.",
+    "average_rating": "string (2 decimal)",
+    "total_reviews": "number",
+    "ratings": [{ "rating_data": "..." }]
+  }
+  ```
+- **500**: Kesalahan server
+
+---
+
+### 9. Follow Seller
+Mengikuti penjual tertentu.
+
+**Endpoint**: `POST /seller/sellers/:id/follow`
+
+**Response**:
+- **200**: Berhasil follow
+  ```json
+  { "message": "✅ Berhasil follow seller." }
+  ```
+- **400**: Tidak bisa follow diri sendiri
+- **401**: Harus login
+- **500**: Kesalahan server
+
+---
+
+### 10. Unfollow Seller
+Berhenti mengikuti penjual tertentu.
+
+**Endpoint**: `DELETE /seller/sellers/:id/unfollow`
+
+**Response**:
+- **200**: Berhasil unfollow
+  ```json
+  { "message": "✅ Berhasil unfollow seller." }
+  ```
+- **401**: Harus login
+- **500**: Kesalahan server
+
+---
+
+### 11. Mendapatkan Detail Produk
+Mengambil detail produk berdasarkan ID, termasuk informasi penjual.
+
+**Endpoint**: `GET /product/:id`
+
+**Response**:
+- **200**: Berhasil mengambil produk
+  ```json
+  {
+    "message": "✅ Produk ditemukan",
+    "product": { "product_data": "..." }
+  }
+  ```
+- **404**: Produk tidak ditemukan
+- **500**: Kesalahan server
+
+**Fitur**:
+- Cache untuk performa.
+- Mengembalikan varian produk dan informasi penjual.
+
+---
+
+### 12. Mendapatkan Rating Produk
+Mengambil semua rating untuk produk tertentu.
+
+**Endpoint**: `GET /product/:productId/ratings`
+
+**Response**:
+- **200**: Berhasil mengambil rating
+  ```json
+  {
+    "message": "✅ Rating produk berhasil diambil.",
+    "average_rating": "number (2 decimal)",
+    "total_reviews": "number",
+    "ratings": [{ "rating_data": "..." }]
+  }
+  ```
+- **500**: Kesalahan server
+
+---
+
+## Endpoint untuk Seller
+
+### 1. Mendapatkan Semua Order
+Mengambil semua order milik penjual.
+
+**Endpoint**: `GET /order/seller/all`
+
+**Response**:
+- **200**: Berhasil mengambil order
+  ```json
+  {
+    "message": "✅ Daftar order seller berhasil diambil.",
+    "orders": [
+      {
+        "id": "string",
+        "created_at": "datetime",
+        "total_price": "number",
+        "delivery_fee": "number",
+        "status": "string",
+        "pickup_method": "diantar|diambil|kedua",
+        "confirm_deadline": "datetime",
+        "order_items": [{ "item_data": "..." }],
+        "total_quantity": "number",
+        "buyer_info": { "buyer_data": "..." },
+        "buyer_full_address": "string",
+        "seller_info": { "seller_data": "..." },
+        "seller_full_address": "string"
+      }
+    ]
+  }
+  ```
+- **401**: Harus login sebagai seller
+- **500**: Kesalahan server
+
+**Fitur**:
+- Cache selama 30 detik.
+- Mengembalikan detail item, jumlah kuantitas, dan alamat pembeli/penjual.
+
+---
+
+### 2. Mendapatkan Detail Order
+Mengambil detail order berdasarkan ID.
+
+**Endpoint**: `GET /order/seller/:orderId`
+
+**Response**:
+- **200**: Berhasil mengambil order
+  ```json
+  {
+    "message": "✅ Detail order seller berhasil diambil.",
+    "order": { "order_data": "..." }
+  }
+  ```
+- **401**: Harus login sebagai seller
+- **404**: Order tidak ditemukan
+- **500**: Kesalahan server
+
+---
+
+### 3. Update Status Order
+Mengubah status order dengan validasi alur status.
+
+**Endpoint**: `PUT /order/orders/:id/status`
+
+**Body**:
 ```json
 {
-  "message": "✅ Semua produk seller dengan status flash sale",
-  "data": [
-    {
-      "id": "prod-001",
-      "product_name": "Kaos Polos",
-      "product_image_url": "https://example.com/images/kaos-polos.jpg",
-      "stock": 50,
-      "product_price": 120000,
-      "in_flash_sale": true,
-      "variants": []
-    },
-    {
-      "id": "prod-002",
-      "product_name": "Sepatu Sneakers",
-      "product_image_url": "https://example.com/images/sneakers.jpg",
-      "stock": 0,
-      "product_price": 450000,
-      "variant_mode": true,
-      "variants": [
-        {
-          "id": "var-001",
-          "variant_name": "Size 39",
-          "variant_stock": 10,
-          "variant_image_url": "https://example.com/images/sneakers-39.jpg",
-          "in_flash_sale": true
-        },
-        {
-          "id": "var-002",
-          "variant_name": "Size 40",
-          "variant_stock": 0,
-          "variant_image_url": "https://example.com/images/sneakers-40.jpg",
-          "in_flash_sale": false
-        }
-      ]
-    },
-    {
-      "id": "prod-003",
-      "product_name": "Topi Baseball",
-      "product_image_url": "https://example.com/images/topi.jpg",
-      "stock": 25,
-      "product_price": 80000,
-      "in_flash_sale": false,
-      "variants": []
+  "action": "accept|cancel|ready|ship|complete",
+  "barcodeId": "string (opsional, untuk action complete pada pickup_method diambil)"
+}
+```
+
+**Response**:
+- **200**: Status berhasil diubah
+  ```json
+  {
+    "message": "✅ Status order diubah ke '{newStatus}'",
+    "order": { "order_data": "..." }
+  }
+  ```
+- **400**: Aksi tidak valid atau status tidak sesuai alur
+- **401**: Harus login sebagai seller
+- **404**: Order tidak ditemukan
+- **500**: Kesalahan server
+
+**Fitur**:
+- Validasi alur status (contoh: `pending` → `sedang di kemas` → `siap di ambil`/`sedang di antar` → `diterima`).
+- Notifikasi email dikirim secara asinkronus.
+- Update jumlah `terjual` produk saat status menjadi `diterima`.
+
+---
+
+### 4. Mendapatkan Profil Penjual
+Mengambil profil penjual beserta daftar followers.
+
+**Endpoint**: `GET /auth/profile/:id`
+
+**Response**:
+- **200**: Berhasil mengambil profil
+  ```json
+  {
+    "seller": {
+      "id": "string",
+      "store_name": "string",
+      "alamat_lengkap_combine": "string",
+      "total_followers": "number",
+      "followers": [{ "user_data": "..." }]
     }
-  ]
-}
-
-```
+  }
+  ```
+- **401**: Seller belum login
+- **404**: Seller tidak ditemukan
+- **500**: Kesalahan server
 
 ---
 
-## 6. Update Produk Flash Sale
+### 5. Membalas Rating
+Membalas rating dari pembeli.
 
-**Endpoint:**
+**Endpoint**: `POST /ratingseller/ratings/:id/reply`
 
-```
-PUT /flash-sale/:id/products
-```
-
-**Request Body:**
-
+**Body**:
 ```json
 {
-  "items": [
-    {
-      "product_id": "uuid-produk",
-      "stock": 5,
-      "discount_percentage": 10
-    },
-    {
-      "product_id": "uuid-produk-2",
-      "variants": [
-        { "variant_id": "uuid-variant", "stock": 3, "discount_percentage": 15 }
-      ]
-    }
-  ]
+  "replyText": "string"
 }
 ```
 
-**Response:**
-
-```json
-{
-  "message": "✅ Produk flash sale berhasil ditambahkan / diupdate",
-  "inserted": [ { ... } ],
-  "updated": [ { ... } ]
-}
-```
-
----
-
-## 7. Hapus Flash Sale / Produk
-
-**Endpoint:**
-
-```
-DELETE /flash-sale/:id
-```
-
-### Mode 1: Hapus semua item dalam flash sale
-
-```
-DELETE /flash-sale/:id
-```
-
-**Response:**
-
-```json
-{ "message": "✅ Semua item dalam flash sale berhasil dihapus" }
-```
-
-### Mode 2: Hapus produk non-variant
-
-```
-DELETE /flash-sale/:id?product_id=uuid-produk
-```
-
-**Response:**
-
-```json
-{ "message": "✅ Item uuid-produk berhasil dihapus" }
-```
-
-### Mode 3: Hapus produk variant tertentu
-
-```
-DELETE /flash-sale/:id?product_id=uuid-produk&variant_id=uuid-variant
-```
-
-**Response:**
-
-```json
-{ "message": "✅ Item uuid-produk varian uuid-variant berhasil dihapus" }
-```
+**Response**:
+- **200**: Balasan berhasil
+  ```json
+  {
+    "message": "✅ Balasan berhasil ditambahkan.",
+    "reply": { "reply_data": "..." }
+  }
+  ```
+- **400**: Balasan kosong atau rating sudah dibalas
+- **401**: Harus login sebagai seller
+- **403**: Rating bukan milik produk penjual
+- **500**: Kesalahan server
 
 ---
 
-# ⚠️ Catatan Penting
+### 6. Mendapatkan Semua Rating Penjual
+Mengambil semua rating untuk produk milik penjual.
 
-* Stok produk/varian akan otomatis **dikurangi** saat didaftarkan ke flash sale.
-* Tidak bisa menambahkan produk yang sudah terdaftar di flash sale yang sama.
-* `status` flash sale bisa berupa: `enabled` atau `disabled`.
+**Endpoint**: `GET /ratingseller/ratings`
+
+**Response**:
+- **200**: Berhasil mengambil rating
+  ```json
+  {
+    "message": "✅ {n} rating ditemukan",
+    "ratings": [{ "rating_data": "..." }]
+  }
+  ```
+- **401**: Harus login sebagai seller
+- **500**: Kesalahan server
+
+---
+
+### 7. Mendapatkan Rating Berdasarkan ID
+Mengambil rating tertentu milik penjual.
+
+**Endpoint**: `GET /ratingseller/ratings/:id`
+
+**Response**:
+- **200**: Berhasil mengambil rating
+  ```json
+  {
+    "message": "✅ Rating ditemukan",
+    "rating": { "rating_data": "..." }
+  }
+  ```
+- **401**: Harus login sebagai seller
+- **404**: Rating tidak ditemukan
+- **500**: Kesalahan server
+
+---
+
+## Catatan Tambahan
+- **Cache**: Digunakan untuk meningkatkan performa (produk, penjual, order).
+- **Notifikasi**: Notifikasi email dikirim secara asinkronus untuk checkout dan perubahan status order.
+- **Keamanan**:
+  - Validasi captcha dan deteksi spam pada login dan checkout.
+  - Pengecekan kepemilikan order dan rating untuk mencegah akses tidak sah.
+- **Error Handling**: Semua endpoint mengembalikan pesan error yang jelas dengan kode status HTTP yang sesuai.
+
+Untuk informasi lebih lanjut atau akses API, hubungi tim Backend Market.

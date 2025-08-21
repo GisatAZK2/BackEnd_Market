@@ -349,55 +349,6 @@ router.get("/seller/:orderId", async (req, res) => {
   }
 });
 
-router.post("/ratings/:id/reply", async (req, res) => {
-  try {
-    const sellerInfo = req.cookies?.seller_info ? JSON.parse(req.cookies.seller_info) : null;
-    if (!sellerInfo?.id) {
-      return res.status(401).json({ message: "❌ Harus login sebagai seller." });
-    }
-
-    const ratingId = req.params.id;
-    const { replyText } = req.body;
-
-    if (!replyText || replyText.trim() === "") {
-      return res.status(400).json({ message: "⚠️ Balasan tidak boleh kosong." });
-    }
-
-    // cek rating + pastikan rating memang produk seller ini
-    const { data: rating, error: ratingErr } = await supabase
-      .from("ratings")
-      .select("id, product_id, order_item_id, order_id, products(seller_id)")
-      .eq("id", ratingId)
-      .single();
-
-    if (ratingErr || !rating || rating.products?.seller_id !== sellerInfo.id) {
-      return res.status(403).json({ message: "⚠️ Rating bukan milik produk Anda." });
-    }
-
-    // opsional: pastikan belum ada reply
-    const { data: existingReply } = await supabase
-      .from("rating_replies")
-      .select("id")
-      .eq("rating_id", ratingId)
-      .maybeSingle();
-
-    if (existingReply) {
-      return res.status(400).json({ message: "⚠️ Rating ini sudah dibalas." });
-    }
-
-    // insert reply
-    const { data, error } = await supabase
-      .from("rating_replies")
-      .insert([{ rating_id: ratingId, seller_id: sellerInfo.id, reply_text: replyText }])
-      .select();
-
-    if (error) return res.status(500).json({ message: "❌ Gagal simpan balasan.", error });
-
-    return res.status(200).json({ message: "✅ Balasan berhasil ditambahkan.", reply: data[0] });
-  } catch (err) {
-    return res.status(500).json({ message: "❌ Server error", error: err.message });
-  }
-});
 
 // ==================== UPDATE STATUS ORDER ====================
 router.put("/orders/:id/status", async (req, res) => {
@@ -413,135 +364,161 @@ router.put("/orders/:id/status", async (req, res) => {
     const orderId = req.params.id;
     const { action, barcodeId } = req.body;
 
-    // ===== 1. Ambil order utama =====
-    const { data: order, error: fetchError } = await supabase
-      .from("orders")
-      .select(
+    // ===== Helpers =====
+    const fetchOrder = async () => {
+      return await supabase
+        .from("orders")
+        .select(
+          `
+          *,
+          buyer:users(email,username),
+          seller:sellers(
+            id,email,
+            latitude,longitude,
+            store_address,kelurahan,kecamatan,kabupaten,provinsi
+          )
         `
-        *,
-        buyer:users(email,username),
-        seller:sellers(
-          id,email,
-          latitude,longitude,
-          store_address,kelurahan,kecamatan,kabupaten,provinsi
         )
-      `
-      )
-      .eq("id", orderId)
-      .eq("seller_id", sellerInfo.id)
-      .single();
+        .eq("id", orderId)
+        .eq("seller_id", sellerInfo.id)
+        .single();
+    };
 
+    const fetchOrderItems = async () => {
+      return await supabase
+        .from("order_items")
+        .select("id, quantity, price_per_item, product_id, variant_id")
+        .eq("order_id", orderId);
+    };
+
+    const fetchProducts = async (productIds) => {
+      if (productIds.length === 0) return [];
+      const { data } = await supabase
+        .from("products")
+        .select("id, product_name, product_image_url")
+        .in("id", productIds);
+      return data || [];
+    };
+
+    const fetchVariants = async (variantIds) => {
+      if (variantIds.length === 0) return [];
+      const { data } = await supabase
+        .from("product_variants")
+        .select("id, variant_name, variant_image_url")
+        .in("id", variantIds);
+      return data || [];
+    };
+
+    const determineNewStatus = (order, action, barcodeId) => {
+      const now = new Date();
+      const payload = {};
+      let status = "";
+
+      const commonActions = {
+        accept: () => {
+          status = "sedang di kemas";
+          payload.confirm_deadline = null;
+        },
+        cancel: () => {
+          status = "dibatalkan";
+          payload.cancel_reason = "❌ Dibatalkan seller.";
+        },
+      };
+
+      if (commonActions[action]) {
+        commonActions[action]();
+      } else if (order.pickup_method === "diambil") {
+        if (action === "ready") {
+          status = "siap di ambil";
+          payload.pickup_deadline = new Date(now.getTime() + 12 * 60 * 60 * 1000).toISOString();
+        } else if (action === "complete") {
+          if (!barcodeId || barcodeId !== order.id.toString()) {
+            throw new Error("⚠ Barcode ID tidak valid.");
+          }
+          status = "diterima";
+        }
+      } else if (order.pickup_method === "diantar") {
+        if (action === "ship") {
+          status = "sedang di antar";
+          payload.delivery_deadline = new Date(now.getTime() + 12 * 60 * 60 * 1000).toISOString();
+        } else if (action === "complete") {
+          status = "diterima";
+        }
+      }
+
+      return { status, payload };
+    };
+
+    const validateStatusFlow = (current, next) => {
+      const statusFlow = {
+        pending: ["sedang di kemas", "dibatalkan"],
+        "sedang di kemas": ["siap di ambil", "sedang di antar", "dibatalkan"],
+        "siap di ambil": ["diterima"],
+        "sedang di antar": ["diterima"],
+      };
+      return statusFlow[current]?.includes(next);
+    };
+
+    const buildProductDetails = (items, products, variants) =>
+      items.map((item) => {
+        const product = products.find((p) => p.id === item.product_id);
+        const variant = variants.find((v) => v.id === item.variant_id);
+        return {
+          product_name: product?.product_name,
+          variant_name: variant?.variant_name || null,
+          quantity: item.quantity,
+          total_price: item.price_per_item * item.quantity,
+          product_image_url:
+            variant?.variant_image_url || safeParseImageUrl(product?.product_image_url),
+        };
+      });
+
+    // ===== Main Flow =====
+    const { data: order, error: fetchError } = await fetchOrder();
     if (fetchError || !order) {
       return res.status(404).json({ message: "❌ Order tidak ditemukan." });
     }
 
-    // ===== 2. Ambil order_items =====
-    const { data: orderItems } = await supabase
-      .from("order_items")
-      .select("id, quantity, price_per_item, product_id, variant_id")
-      .eq("order_id", orderId);
+    const { data: orderItems, error: itemsError } = await fetchOrderItems();
+    if (itemsError) {
+      return res.status(500).json({ message: "❌ Gagal ambil order items." });
+    }
 
-    // ===== 3. Ambil data produk =====
     const productIds = [...new Set(orderItems.map((i) => i.product_id))];
-    let products = [];
-    if (productIds.length > 0) {
-      const { data: productData } = await supabase
-        .from("products")
-        .select("id, product_name, product_image_url")
-        .in("id", productIds);
-      products = productData || [];
-    }
+    const variantIds = orderItems.map((i) => i.variant_id).filter(Boolean);
 
-    // ===== 4. Ambil data variants =====
-    const variantIds = orderItems.map((i) => i.variant_id).filter((id) => id !== null);
-    let variants = [];
-    if (variantIds.length > 0) {
-      const { data: variantData } = await supabase
-        .from("product_variants")
-        .select("id, variant_name, variant_image_url")
-        .in("id", variantIds);
-      variants = variantData || [];
-    }
+    const [products, variants] = await Promise.all([
+      fetchProducts(productIds),
+      fetchVariants(variantIds),
+    ]);
 
-    // ===== 5. Gabungkan order_items + produk + variants =====
-    const itemsWithDetails = orderItems.map((item) => {
-      const product = products.find((p) => p.id === item.product_id);
-      const variant = variants.find((v) => v.id === item.variant_id);
-      return { ...item, product: product || {}, variant: variant || null };
-    });
-
-    // ===== 6. Tentukan status baru berdasarkan action =====
-    let newStatus = "";
-    let updatePayload = {};
-    const now = new Date();
-
-    if (order.pickup_method === "diambil") {
-      if (action === "accept") {
-        newStatus = "sedang di kemas";
-        updatePayload.confirm_deadline = null;
-      } else if (action === "cancel") {
-        newStatus = "dibatalkan";
-        updatePayload.cancel_reason = "❌ Dibatalkan seller.";
-      } else if (action === "ready") {
-        newStatus = "siap di ambil";
-        updatePayload.pickup_deadline = new Date(
-          now.getTime() + 12 * 60 * 60 * 1000
-        ).toISOString();
-      } else if (action === "complete") {
-        if (!barcodeId || barcodeId !== order.id.toString()) {
-          return res.status(400).json({ message: "⚠ Barcode ID tidak valid." });
-        }
-        newStatus = "diterima";
-      }
-    }
-
-    if (order.pickup_method === "diantar") {
-      if (action === "accept") {
-        newStatus = "sedang di kemas";
-        updatePayload.confirm_deadline = null;
-      } else if (action === "cancel") {
-        newStatus = "dibatalkan";
-        updatePayload.cancel_reason = "❌ Dibatalkan seller.";
-      } else if (action === "ship") {
-        newStatus = "sedang di antar";
-        updatePayload.delivery_deadline = new Date(
-          now.getTime() + 12 * 60 * 60 * 1000
-        ).toISOString();
-      } else if (action === "complete") {
-        newStatus = "diterima";
-      }
+    let newStatus, updatePayload;
+    try {
+      const result = determineNewStatus(order, action, barcodeId);
+      newStatus = result.status;
+      updatePayload = result.payload;
+    } catch (err) {
+      return res.status(400).json({ message: err.message });
     }
 
     if (!newStatus) {
       return res.status(400).json({ message: "⚠ Aksi tidak valid." });
     }
 
-    // ===== 6b. Cegah double request =====
     if (order.status === newStatus) {
       return res.status(200).json({
-        message: `⚠ Order sudah berada di status '${newStatus}', tidak ada perubahan.`,
+        message: `⚠ Order sudah di status '${newStatus}', tidak ada perubahan.`,
         order,
       });
     }
 
-    // ===== 6c. Validasi transisi status =====
-    const statusFlow = {
-      pending: ["sedang di kemas", "dibatalkan"],
-      "sedang di kemas": ["siap di ambil", "sedang di antar", "dibatalkan"],
-      "siap di ambil": ["diterima"],
-      "sedang di antar": ["diterima"],
-    };
-
-    const validNext = statusFlow[order.status] || [];
-    if (!validNext.includes(newStatus)) {
+    if (!validateStatusFlow(order.status, newStatus)) {
       return res.status(400).json({
-        message: `⚠ Status '${order.status}' tidak bisa langsung diubah ke '${newStatus}'.`,
+        message: `⚠ Status '${order.status}' tidak bisa langsung ke '${newStatus}'.`,
       });
     }
 
     updatePayload.status = newStatus;
-
-    // ===== 7. Tambah seller_address (JSON) =====
     updatePayload.seller_address = {
       store_address: order.seller.store_address,
       kelurahan: order.seller.kelurahan,
@@ -552,7 +529,6 @@ router.put("/orders/:id/status", async (req, res) => {
       longitude: order.seller.longitude,
     };
 
-    // ===== 8. Update order =====
     const { data: updatedOrder, error: updateError } = await supabase
       .from("orders")
       .update(updatePayload)
@@ -564,18 +540,18 @@ router.put("/orders/:id/status", async (req, res) => {
       return res.status(500).json({ message: "❌ Gagal update order." });
     }
 
-    // ===== 9. Format produk untuk email =====
-    const productDetails = itemsWithDetails.map((i) => ({
-      product_name: i.product.product_name,
-      variant_name: i.variant?.variant_name || null,
-      quantity: i.quantity,
-      total_price: i.price_per_item * i.quantity,
-      product_image_url:
-        i.variant?.variant_image_url || safeParseImageUrl(i.product.product_image_url),
-    }));
+    // update terjual batch jika order diterima
+    if (newStatus === "diterima") {
+      const { error: rpcError } = await supabase.rpc("increment_terjual", {
+        order_id_input: orderId,
+      });
+      if (rpcError) console.error("⚠ Gagal update terjual batch:", rpcError.message);
+    }
 
-    // ===== 10. Kirim email =====
-    await sendOrderNotification({
+    const productDetails = buildProductDetails(orderItems, products, variants);
+
+    // ⚡ Kirim email / notifikasi di background, tanpa blocking response
+    sendOrderNotification({
       order_id: orderId,
       products: productDetails,
       buyer_email: order.buyer?.email,
@@ -585,10 +561,11 @@ router.put("/orders/:id/status", async (req, res) => {
       new_status: newStatus,
       seller_address: updatePayload.seller_address,
       cancel_reason: updatePayload.cancel_reason || null,
-    });
+    }).catch((err) => console.error("❌ Gagal kirim notifikasi:", err));
 
+    // ✅ response cepat
     return res.status(200).json({
-      message: `✅ Status order diubah menjadi '${newStatus}'`,
+      message: `✅ Status order diubah ke '${newStatus}'`,
       order: updatedOrder,
     });
   } catch (err) {

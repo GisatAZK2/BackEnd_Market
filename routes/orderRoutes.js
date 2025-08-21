@@ -4,7 +4,6 @@ const supabase = require("../config/supabase");
 const sendOrderNotification = require("../utils/email");
 const detectspam = require("../middleware/detectSpam");
 const verifyCaptcha = require("../middleware/verifyCaptcha");
-const multer = require("multer");
 const {
   attachVariantsStockDiscountWithRealDiscount,
 } = require("../utils/applyDiscountAndVariants");
@@ -14,7 +13,6 @@ const { DateTime } = require("luxon");
 const NodeCache = require("node-cache");
 const cache = new NodeCache({ stdTTL: 60, checkperiod: 120 });
 const orderCache = new NodeCache({ stdTTL: 30, checkperiod: 60 });
-const upload = multer({ storage: multer.memoryStorage() });
 
 // Helper: parsing aman untuk URL gambar
 function safeParseImageUrl(data) {
@@ -445,191 +443,6 @@ router.post("/cart/delivery-fee", async (req, res) => {
   }
 });
 
-router.post("/:id/rating", upload.array("images"), async (req, res) => {
-  try {
-    const userInfo = req.cookies?.user_info ? JSON.parse(req.cookies.user_info) : null;
-    if (!userInfo?.id) {
-      return res.status(401).json({ message: "❌ Harus login." });
-    }
-
-    const orderId = req.params.id;
-    const { ratings } = JSON.parse(req.body.data);
-
-    // ✅ ambil orders + order_items
-    const { data: order, error: orderError } = await supabase
-      .from("orders")
-      .select(`
-        id,
-        status,
-        user_id,
-        order_items (id, product_id, variant_id)
-      `)
-      .eq("id", orderId)
-      .single();
-
-    if (orderError || !order) {
-      console.error("❌ Gagal ambil order:", orderError);
-      return res.status(500).json({ message: "❌ Gagal ambil order." });
-    }
-
-    if (String(order.user_id) !== String(userInfo.id)) {
-      return res.status(403).json({ message: "⚠️ Tidak punya akses ke order ini." });
-    }
-
-    if (order.status !== "diterima") {
-      return res.status(400).json({ message: "⚠️ Hanya bisa kasih rating setelah order diterima." });
-    }
-
-    // bikin map dari order_items
-    const validMap = new Map(
-      order.order_items.map(i => [
-        String(i.id).toLowerCase(),
-        { product_id: i.product_id, variant_id: i.variant_id }
-      ])
-    );
-
-    // upload images
-    const uploadedUrls = [];
-    for (const file of req.files) {
-      const filePath = `reviews/${Date.now()}_${file.originalname}`;
-      const { error: uploadError } = await supabase.storage
-        .from("review-images")
-        .upload(filePath, file.buffer, { contentType: file.mimetype, upsert: true });
-
-      if (uploadError) {
-        console.error("❌ Upload error:", uploadError);
-        return res.status(500).json({ message: "❌ Gagal upload gambar." });
-      }
-
-      const { data: publicUrl } = supabase.storage
-        .from("review-images")
-        .getPublicUrl(filePath);
-
-      uploadedUrls.push(publicUrl.publicUrl);
-    }
-
-    const resultRatings = [];
-
-    for (const r of ratings) {
-      const validItem = validMap.get(String(r.orderItemId).toLowerCase());
-
-      if (
-        !validItem ||
-        String(validItem.product_id).toLowerCase() !== String(r.productId).toLowerCase()
-      ) {
-        console.log("⚠️ Rating dilewati karena tidak valid", { r, validItem });
-        continue;
-      }
-
-      // 🔎 ambil variant_id valid
-      let finalVariantId = null;
-      if (validItem.variant_id) {
-        const { data: variantCheck, error: variantError } = await supabase
-          .from("product_variants")
-          .select("id")
-          .eq("id", validItem.variant_id)
-          .eq("product_id", validItem.product_id)
-          .maybeSingle();
-
-        if (variantError) {
-          console.warn("⚠️ Gagal cek variant:", variantError);
-        }
-        finalVariantId = variantCheck ? variantCheck.id : null;
-      }
-
-      // cek existing rating
-      const { data: existing, error: existingError } = await supabase
-        .from("ratings")
-        .select("id")
-        .eq("order_item_id", r.orderItemId)
-        .eq("user_id", userInfo.id)
-        .maybeSingle();
-
-      if (existingError) {
-        console.error("❌ Gagal cek rating lama:", existingError);
-        return res.status(500).json({ message: "❌ Gagal cek rating lama." });
-      }
-
-      if (existing) {
-        return res.status(400).json({
-          message: "⚠️ Kamu sudah memberi rating untuk item ini, tidak bisa duplikat."
-        });
-      }
-
-      // 🔎 ambil detail produk
-      const { data: product, error: productError } = await supabase
-        .from("products")
-        .select("id, product_name, product_image_url")
-        .eq("id", r.productId)
-        .single();
-
-      if (productError || !product) {
-        console.error("❌ Produk tidak ditemukan:", productError);
-        return res.status(400).json({ message: "❌ Produk tidak ditemukan." });
-      }
-
-      // 🔎 ambil detail varian jika ada
-      let variant = null;
-      if (finalVariantId) {
-        const { data: v, error: variantError } = await supabase
-          .from("product_variants")
-          .select("id, variant_name, variant_image_url")
-          .eq("id", finalVariantId)
-          .single();
-
-        if (!variantError && v) {
-          variant = v;
-        }
-      }
-
-      // 📦 buat snapshot JSON
-      const productSnapshot = {
-        product_id: product.id,
-        product_name: product.product_name,
-        product_image_url: product.product_image_url,
-        variant_id: variant?.id || null,
-        variant_name: variant?.variant_name || null,
-        variant_image_url: variant?.variant_image_url || null,
-      };
-
-      // ➕ insert rating baru
-      const { data: inserted, error: insertError } = await supabase
-        .from("ratings")
-        .insert([{
-          order_id: orderId,
-          order_item_id: r.orderItemId,
-          product_id: r.productId,
-          variant_id: finalVariantId,
-          user_id: userInfo.id,
-          rating: r.rating,
-          review_text: r.reviewText,
-          review_images: uploadedUrls,
-          product_snapshot: productSnapshot, // <<-- JSONB
-        }])
-        .select()
-        .single();
-
-      if (insertError) {
-        console.error("❌ Insert rating error:", insertError);
-        return res.status(500).json({ message: "❌ Gagal insert rating.", error: insertError.message });
-      }
-
-      resultRatings.push(inserted);
-    }
-
-    if (resultRatings.length === 0) {
-      return res.status(400).json({ message: "⚠️ Tidak ada rating valid." });
-    }
-
-    return res.status(200).json({
-      message: "✅ Rating berhasil disimpan.",
-      ratings: resultRatings,
-    });
-  } catch (err) {
-    console.error("❌ Server crash:", err);
-    return res.status(500).json({ message: "❌ Server error", error: err.message });
-  }
-});
 
 // Fungsi bantu untuk hitung persen diskon dari harga dasar dan harga diskon
 function calculateDiscountFromPrice(basePrice, discountedPrice) {

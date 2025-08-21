@@ -151,7 +151,7 @@ router.post(
 );
 
 // ======================== VERIFIKASI OTP ========================
-router.post("/verify-otp", detectSpam, verifyCaptcha, async (req, res) => {
+router.post("/verify-otp", async (req, res) => {
   const { email, otp, mode = "email" } = req.body;
 
   try {
@@ -236,11 +236,16 @@ router.post("/login", detectSpam, verifyCaptcha, async (req, res) => {
   const { email, password } = req.body;
 
   try {
-    const { data: user } = await supabase
+    // === Cari user ===
+    const { data: user, error: userError } = await supabase
       .from("users")
       .select("*")
       .eq("email", email)
       .single();
+
+    if (userError) {
+      console.error("Supabase user error:", userError);
+    }
 
     if (!user || !user.verified) {
       return res
@@ -248,9 +253,23 @@ router.post("/login", detectSpam, verifyCaptcha, async (req, res) => {
         .json({ error: "Akun tidak ditemukan atau belum diverifikasi." });
     }
 
+    // === Validasi password ===
     const match = await bcrypt.compare(password, user.password);
     if (!match) return res.status(401).json({ error: "Password salah." });
 
+    // === Cek apakah user juga seller ===
+    const { data: seller, error: sellerError } = await supabase
+      .from("sellers")
+      .select("id, email")
+      .eq("email", email)
+      .single();
+
+    if (sellerError && sellerError.code !== "PGRST116") {
+      // PGRST116 = no rows found → aman diabaikan
+      console.error("Supabase seller error:", sellerError);
+    }
+
+    // === Buat JWT ===
     const token = jwt.sign({ id: user.id }, process.env.JWT_SECRET, {
       expiresIn: "7d",
     });
@@ -263,23 +282,25 @@ router.post("/login", detectSpam, verifyCaptcha, async (req, res) => {
         email: user.email,
         username: user.username,
         avatar: user.avatar,
+        seller_id: seller ? seller.id : null, // kalau ada seller, simpan seller_id
       }),
       {
         httpOnly: true,
         secure: process.env.NODE_ENV === "production",
         sameSite: "None",
         maxAge: 7 * 24 * 60 * 60 * 1000,
-      },
+      }
     );
 
-    // === Respon ke frontend (tambahkan avatar) ===
+    // === Respon ke frontend ===
     res.json({
       message: "Login sukses.",
       token,
       id: user.id,
       email: user.email,
       username: user.username,
-      avatar: user.avatar, // <---- avatar ikut dikirim
+      avatar: user.avatar,
+      seller_id: seller ? seller.id : null, // kirim juga biar frontend tau
     });
   } catch (err) {
     console.error("Login error:", err);
@@ -348,6 +369,7 @@ router.post("/reset-password", detectSpam, verifyCaptcha, async (req, res) => {
 });
 
 // ======================== GET USER BY ID (Validasi Cookie) ========================
+// GET User info + jumlah seller yang difollow
 router.get("/user/:id", async (req, res) => {
   const cookie = req.cookies.user_info;
   if (!cookie) return res.status(401).json({ error: "Tidak ada sesi login." });
@@ -385,10 +407,41 @@ router.get("/user/:id", async (req, res) => {
     .filter(Boolean) // buang yg falsy/null/undefined
     .join(", ");
 
+  // Hitung jumlah seller yang difollow user ini
+  const { count: totalFollowing, error: followError } = await supabase
+    .from("follows")
+    .select("*", { count: "exact", head: true })
+    .eq("user_id", req.params.id);
+
+  if (followError) {
+    return res.status(500).json({
+      error: "Gagal mengambil data follow.",
+      detail: followError.message,
+    });
+  }
+
+  // (Opsional) ambil list seller yang difollow
+  const { data: followingSellers, error: sellersError } = await supabase
+    .from("follows")
+    .select(
+      `seller_id,
+       sellers (id, store_name, store_image_url, created_at)`
+    )
+    .eq("user_id", req.params.id);
+
+  if (sellersError) {
+    return res.status(500).json({
+      error: "Gagal mengambil daftar seller yang difollow.",
+      detail: sellersError.message,
+    });
+  }
+
   res.json({
     user: {
       ...user,
       alamat_lengkap_combine,
+      total_following: totalFollowing || 0,
+      following_sellers: followingSellers?.map((f) => f.sellers) || [],
     },
   });
 });
