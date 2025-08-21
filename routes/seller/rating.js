@@ -2,6 +2,10 @@ const express = require("express");
 const router = express.Router();
 const supabase = require("../../config/supabase");
 
+/**
+ * POST /ratings/:id/reply
+ * Seller balas rating (hanya 1x per rating)
+ */
 router.post("/ratings/:id/reply", async (req, res) => {
   try {
     const sellerInfo = req.cookies?.seller_info
@@ -19,14 +23,19 @@ router.post("/ratings/:id/reply", async (req, res) => {
       return res.status(400).json({ message: "⚠️ Balasan tidak boleh kosong." });
     }
 
-    // cek rating + pastikan rating milik produk seller
+    // cek rating + validasi seller lewat orders!inner
     const { data: rating, error: ratingErr } = await supabase
       .from("ratings")
-      .select("id, product_id, products(seller_id)")
+      .select(`
+        id,
+        order_id,
+        orders!inner (seller_id)
+      `)
       .eq("id", ratingId)
+      .eq("orders.seller_id", sellerInfo.id)
       .single();
 
-    if (ratingErr || !rating || rating.products?.seller_id !== sellerInfo.id) {
+    if (ratingErr || !rating) {
       return res.status(403).json({ message: "⚠️ Rating bukan milik produk Anda." });
     }
 
@@ -57,7 +66,7 @@ router.post("/ratings/:id/reply", async (req, res) => {
 
 /**
  * GET /ratings
- * Ambil semua rating milik seller, termasuk product_variants
+ * Ambil semua rating milik seller
  */
 router.get("/ratings", async (req, res) => {
   try {
@@ -68,13 +77,17 @@ router.get("/ratings", async (req, res) => {
     if (!sellerInfo?.id)
       return res.status(401).json({ message: "❌ Harus login sebagai seller." });
 
-    // Ambil rating + join ke orders untuk filter seller_id
     const { data, error } = await supabase
       .from("ratings")
       .select(`
-        *,
+        id,
+        rating,
+        review_text,
+        review_images,
+        created_at,
+        product_snapshot,
         rating_replies(reply_text, created_at),
-        orders(seller_id)
+        orders!inner (seller_id)
       `)
       .eq("orders.seller_id", sellerInfo.id)
       .order("created_at", { ascending: false });
@@ -92,7 +105,7 @@ router.get("/ratings", async (req, res) => {
 
 /**
  * GET /ratings/:id
- * Ambil rating by ID (pastikan milik seller) + product_variants
+ * Ambil rating by ID (pastikan milik seller)
  */
 router.get("/ratings/:id", async (req, res) => {
   try {
@@ -105,13 +118,17 @@ router.get("/ratings/:id", async (req, res) => {
 
     const ratingId = req.params.id;
 
-    // Ambil rating tertentu + join ke orders untuk validasi seller_id
     const { data, error } = await supabase
       .from("ratings")
       .select(`
-        *,
+        id,
+        rating,
+        review_text,
+        review_images,
+        created_at,
+        product_snapshot,
         rating_replies(reply_text, created_at),
-        orders(seller_id)
+        orders!inner (seller_id)
       `)
       .eq("id", ratingId)
       .eq("orders.seller_id", sellerInfo.id)
@@ -128,6 +145,5 @@ router.get("/ratings/:id", async (req, res) => {
     return res.status(500).json({ message: "❌ Server error", error: err.message });
   }
 });
-
 
 module.exports = router;
