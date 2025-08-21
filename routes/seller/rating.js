@@ -132,13 +132,15 @@ router.get("/ratings/:id", async (req, res) => {
       `)
       .eq("id", ratingId)
       .eq("orders.seller_id", sellerInfo.id)
-      .single();
+      .maybeSingle(); // 🔥 aman kalau 0 row
 
-    if (error)
+    if (error) {
       return res.status(500).json({ message: "❌ Gagal ambil rating.", error });
+    }
 
-    if (!data)
-      return res.status(404).json({ message: "❌ Rating tidak ditemukan atau bukan milik seller ini." });
+    if (!data) {
+      return res.status(403).json({ message: "⚠️ Rating ini bukan milik Anda." });
+    }
 
     return res.status(200).json({ message: "✅ Rating ditemukan", rating: data });
   } catch (err) {
