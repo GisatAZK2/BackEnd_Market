@@ -1,24 +1,59 @@
 # Dokumentasi API Backend Market
 
-Selamat datang di dokumentasi resmi API Backend Market! API ini menyediakan fungsionalitas untuk dua jenis pengguna: **User** (pembeli) dan **Seller** (penjual). Berikut adalah panduan lengkap untuk endpoint yang tersedia, termasuk pembaruan besar untuk kedua kategori.
+Selamat datang di dokumentasi resmi **API Backend Market**! API ini dirancang untuk mendukung dua jenis pengguna: **Pembeli (User)** dan **Penjual (Seller)**. Dokumentasi ini memberikan panduan lengkap tentang endpoint yang tersedia, autentikasi, serta fitur utama untuk kedua kategori pengguna.
+
+# Kebutuhan pengambilan OrderItemsId Untuk Rating 
+
+Untuk Pengambilan OrderItems Sebagai Kebutuhan Request Yang Lengkap Untuk Endpoint **Ratings** Ada Pada Bagian Di **[Endpoint untuk Pembeli]** pada Pagian **[3. Daftar Order Pengguna](#3-daftar-order-pengguna) Dan [4. Detail Order](#4-detail-order)**
+
+## Daftar Isi
+- [Base URL](#base-url)
+- [Autentikasi](#autentikasi)
+- [Endpoint untuk Pembeli](#endpoint-untuk-pembeli)
+  - [1. Login](#1-login)
+  - [2. Checkout](#2-checkout)
+  - [3. Daftar Order Pengguna](#3-daftar-order-pengguna)
+  - [4. Detail Order](#4-detail-order)
+  - [5. Memberikan Rating](#5-memberikan-rating)
+  - [6. Mendapatkan Semua Rating Pengguna](#6-mendapatkan-semua-rating-pengguna)
+  - [7. Mendapatkan Rating per Order](#7-mendapatkan-rating-per-order)
+  - [8. Mendapatkan Data Seller](#8-mendapatkan-data-seller)
+  - [9. Mendapatkan Seller Berdasarkan ID](#9-mendapatkan-seller-berdasarkan-id)
+  - [10. Mendapatkan Rating Seller](#10-mendapatkan-rating-seller)
+  - [11. Follow Seller](#11-follow-seller)
+  - [12. Unfollow Seller](#12-unfollow-seller)
+  - [13. Mendapatkan Detail Produk](#13-mendapatkan-detail-produk)
+  - [14. Mendapatkan Rating Produk](#14-mendapatkan-rating-produk)
+- [Endpoint untuk Penjual](#endpoint-untuk-penjual)
+  - [1. Mendapatkan Semua Order](#1-mendapatkan-semua-order)
+  - [2. Mendapatkan Detail Order](#2-mendapatkan-detail-order)
+  - [3. Update Status Order](#3-update-status-order)
+  - [4. Mendapatkan Profil Penjual](#4-mendapatkan-profil-penjual)
+  - [5. Membalas Rating](#5-membalas-rating)
+  - [6. Mendapatkan Semua Rating Penjual](#6-mendapatkan-semua-rating-penjual)
+  - [7. Mendapatkan Rating Berdasarkan ID](#7-mendapatkan-rating-berdasarkan-id)
+- [Catatan Tambahan](#catatan-tambahan)
 
 ## Base URL
-- **User**: `https://backendmarket-production.up.railway.app/`
-- **Seller**: `https://backendmarket-production.up.railway.app/seller/V1`
+- **Pembeli**: `https://backendmarket-production.up.railway.app/`
+- **Penjual**: `https://backendmarket-production.up.railway.app/seller/V1`
 
 ## Autentikasi
-- Semua endpoint yang memerlukan autentikasi menggunakan **cookie** (`user_info` untuk pembeli, `seller_info` untuk penjual) yang berisi informasi pengguna dalam format JSON.
-- **JWT** digunakan untuk autentikasi login, dengan masa berlaku 7 hari.
-- Pastikan untuk menyertakan cookie `user_info` atau `seller_info` pada request yang memerlukan autentikasi.
+- Semua endpoint yang memerlukan autentikasi menggunakan **cookie**:
+  - `user_info` untuk pembeli.
+  - `seller_info` untuk penjual.
+  - Cookie berisi informasi pengguna dalam format JSON.
+- **JWT** digunakan untuk autentikasi login dengan masa berlaku **7 hari**.
+- Sertakan cookie `user_info` atau `seller_info` pada setiap request yang memerlukan autentikasi.
 
 ---
 
-## Endpoint untuk User
+## Endpoint untuk Pembeli
 
 ### 1. Login
-Endpoint untuk login sebagai pembeli, termasuk pengecekan apakah pengguna juga terdaftar sebagai penjual untuk mencegah pembelian barang sendiri.
+Login sebagai pembeli dengan pengecekan apakah pengguna juga terdaftar sebagai penjual untuk mencegah pembelian barang sendiri.
 
-**Endpoint**: `POST auth/login`
+**Endpoint**: `POST /auth/login`
 
 **Body**:
 ```json
@@ -46,13 +81,11 @@ Endpoint untuk login sebagai pembeli, termasuk pengecekan apakah pengguna juga t
 - **500**: Kesalahan server
 
 **Catatan**:
-- Cookie `user_info` akan diset dengan informasi pengguna, termasuk `seller_id` jika pengguna juga terdaftar sebagai penjual.
+- Cookie `user_info` diset dengan informasi pengguna, termasuk `seller_id` jika pengguna terdaftar sebagai penjual.
 - Pengecekan `seller_id` mencegah penjual membeli barang sendiri.
 
----
-
 ### 2. Checkout
-Endpoint untuk melakukan checkout dari keranjang belanja. Mendukung pengelompokan order per penjual dan metode pengambilan (`diantar` atau `diambil`).
+Melakukan checkout dari keranjang belanja dengan pengelompokan order per penjual dan metode pengambilan (`diantar` atau `diambil`).
 
 **Endpoint**: `POST /order/cart/checkout`
 
@@ -85,14 +118,122 @@ Endpoint untuk melakukan checkout dari keranjang belanja. Mendukung pengelompoka
 **Fitur**:
 - Validasi alamat lengkap untuk metode `diantar`.
 - Pengelompokan order berdasarkan `seller_id` dan `pickup_method`.
-- Cache untuk produk dan penjual guna meningkatkan performa.
-- Notifikasi email dikirim secara asinkronus setelah checkout.
+- Cache untuk produk dan penjual untuk performa optimal.
+- Notifikasi email dikirim secara asinkronus.
 - Item yang di-checkout dihapus dari keranjang.
 
----
+### 3. Daftar Order Pengguna
+Mengambil semua order milik pengguna yang sedang login.
 
-### 3. Memberikan Rating
-Endpoint untuk memberikan rating pada item order yang telah diterima.
+**Endpoint**: `GET /order/all`
+
+**Headers**:
+- `Cookie: user_info` (berisi JSON string dengan `id` pengguna)
+
+**Contoh Request**:
+```
+GET /all HTTP/1.1
+Host: backendmarket-production.up.railway.app
+Cookie: user_info={"id": "123"}
+```
+
+**Response**:
+- **200**: Berhasil mengambil daftar order
+  ```json
+  {
+    "message": "✅ Daftar order berhasil diambil.",
+    "orders": [
+      {
+        "id": "order_id",
+        "created_at": "2025-08-21T10:29:00Z",
+        "total_price": 100000,
+        "delivery_fee": 10000,
+        "status": "pending",
+        "pickup_method": "delivery",
+        "confirm_deadline": "2025-08-22T10:29:00Z",
+        "buyer_address": { /* Objek alamat pembeli */ },
+        "buyer_full_address": "Jl. Contoh, Kel. Test, Kec. Test, Kota Test, Provinsi Test, 12345",
+        "seller_address": { /* Objek alamat penjual */ },
+        "seller_full_address": "Toko Contoh, Kel. Test, Kec. Test, Kota Test, Provinsi Test",
+        "order_items": [
+          {
+            "orderItemId": "item_id",
+            "product_id": "product_id",
+            "product_name": "Nama Produk",
+            "product_image_url": "https://example.com/image.jpg",
+            "quantity": 2,
+            "price_per_item": 50000,
+            "discount_percentage": 10,
+            "variant": null
+          }
+        ],
+        "total_quantity": 2
+      }
+    ]
+  }
+  ```
+- **401**: Pengguna belum login
+- **500**: Kesalahan server
+
+**Catatan**:
+- Data diambil dari tabel `orders`, `order_items`, dan `order_details_items` di Supabase.
+- Cache digunakan dengan kunci `orders:list:<user_id>` untuk respons cepat.
+- Jika tidak ada order, mengembalikan array kosong dengan pesan "Tidak ada order."
+
+### 4. Detail Order
+Mengambil detail spesifik dari satu order berdasarkan ID.
+
+**Endpoint**: `GET /order/:orderId`
+
+**Headers**:
+- `Cookie: user_info` (berisi JSON string dengan `id` pengguna)
+
+**Contoh Request**:
+```
+GET /order_123 HTTP/1.1
+Host: backendmarket-production.up.railway.app
+Cookie: user_info={"id": "123"}
+```
+
+**Response**:
+- **200**: Berhasil mengambil detail order
+  ```json
+  {
+    "message": "✅ Detail order berhasil diambil.",
+    "order": {
+      "id": "order_id",
+      "created_at": "2025-08-21T10:29:00Z",
+      "total_price": 100000,
+      "delivery_fee": 10000,
+      "status": "pending",
+      "pickup_method": "delivery",
+      "confirm_deadline": "2025-08-22T10:29:00Z",
+      "buyer_address": { /* Objek alamat pembeli */ },
+      "buyer_full_address": "Jl. Contoh, Kel. Test, Kec. Test, Kota Test, Provinsi Test, 12345",
+      "seller_address": { /* Objek alamat penjual */ },
+      "seller_full_address": "Toko Contoh, Kel. Test, Kec. Test, Kota Test, Provinsi Test",
+      "order_items": [
+        {
+          "orderItemId": "item_id",
+          "product_id": "product_id",
+          "product_name": "Nama Produk",
+          "product_image_url": "https://example.com/image.jpg",
+          "quantity": 2,
+          "price_per_item": 50000,
+          "discount_percentage": 10,
+          "variant": null
+        }
+      ],
+      "total_quantity": 2
+    }
+  }
+  ```
+- **401**: Pengguna belum login
+- **404**: Order tidak ditemukan
+- **500**: Kesalahan server
+
+### 5. Memberikan Rating
+Memberikan rating pada item order yang telah diterima.
 
 **Endpoint**: `POST /rating/:orderId/rating`
 
@@ -128,13 +269,11 @@ Endpoint untuk memberikan rating pada item order yang telah diterima.
 - **500**: Kesalahan server
 
 **Fitur**:
-- Validasi bahwa order sudah berstatus `diterima`.
+- Validasi bahwa order berstatus `diterima`.
 - Upload gambar review ke Supabase storage.
 - Snapshot produk disimpan untuk referensi.
 
----
-
-### 4. Mendapatkan Semua Rating Pengguna
+### 6. Mendapatkan Semua Rating Pengguna
 Mengambil semua rating yang diberikan oleh pengguna.
 
 **Endpoint**: `GET /rating/all`
@@ -152,9 +291,7 @@ Mengambil semua rating yang diberikan oleh pengguna.
 **Fitur**:
 - Mengembalikan rating beserta balasan dari penjual (jika ada).
 
----
-
-### 5. Mendapatkan Rating per Order
+### 7. Mendapatkan Rating per Order
 Mengambil rating untuk order tertentu.
 
 **Endpoint**: `GET /order/:orderId`
@@ -169,9 +306,7 @@ Mengambil rating untuk order tertentu.
   ```
 - **500**: Kesalahan server
 
----
-
-### 6. Mendapatkan Data Seller
+### 8. Mendapatkan Data Seller
 Mengambil daftar semua penjual beserta produk, rating rata-rata, total terjual, dan jumlah followers.
 
 **Endpoint**: `GET /seller/allseller`
@@ -199,9 +334,7 @@ Mengambil daftar semua penjual beserta produk, rating rata-rata, total terjual, 
 - Cache selama 30 detik untuk performa.
 - Mengembalikan produk dengan varian, rating rata-rata, dan jumlah followers.
 
----
-
-### 7. Mendapatkan Seller Berdasarkan ID
+### 9. Mendapatkan Seller Berdasarkan ID
 Mengambil detail penjual berdasarkan ID, termasuk produk dan jumlah followers.
 
 **Endpoint**: `GET /seller/:id`
@@ -220,9 +353,7 @@ Mengambil detail penjual berdasarkan ID, termasuk produk dan jumlah followers.
 - **404**: Seller tidak ditemukan
 - **500**: Kesalahan server
 
----
-
-### 8. Mendapatkan Rating Seller
+### 10. Mendapatkan Rating Seller
 Mengambil semua rating untuk produk milik penjual tertentu.
 
 **Endpoint**: `GET /seller/:sellerId/ratings`
@@ -239,9 +370,7 @@ Mengambil semua rating untuk produk milik penjual tertentu.
   ```
 - **500**: Kesalahan server
 
----
-
-### 9. Follow Seller
+### 11. Follow Seller
 Mengikuti penjual tertentu.
 
 **Endpoint**: `POST /seller/sellers/:id/follow`
@@ -255,9 +384,7 @@ Mengikuti penjual tertentu.
 - **401**: Harus login
 - **500**: Kesalahan server
 
----
-
-### 10. Unfollow Seller
+### 12. Unfollow Seller
 Berhenti mengikuti penjual tertentu.
 
 **Endpoint**: `DELETE /seller/sellers/:id/unfollow`
@@ -270,9 +397,7 @@ Berhenti mengikuti penjual tertentu.
 - **401**: Harus login
 - **500**: Kesalahan server
 
----
-
-### 11. Mendapatkan Detail Produk
+### 13. Mendapatkan Detail Produk
 Mengambil detail produk berdasarkan ID, termasuk informasi penjual.
 
 **Endpoint**: `GET /product/:id`
@@ -292,9 +417,7 @@ Mengambil detail produk berdasarkan ID, termasuk informasi penjual.
 - Cache untuk performa.
 - Mengembalikan varian produk dan informasi penjual.
 
----
-
-### 12. Mendapatkan Rating Produk
+### 14. Mendapatkan Rating Produk
 Mengambil semua rating untuk produk tertentu.
 
 **Endpoint**: `GET /product/:productId/ratings`
@@ -313,7 +436,7 @@ Mengambil semua rating untuk produk tertentu.
 
 ---
 
-## Endpoint untuk Seller
+## Endpoint untuk Penjual
 
 ### 1. Mendapatkan Semua Order
 Mengambil semua order milik penjual.
@@ -351,8 +474,6 @@ Mengambil semua order milik penjual.
 - Cache selama 30 detik.
 - Mengembalikan detail item, jumlah kuantitas, dan alamat pembeli/penjual.
 
----
-
 ### 2. Mendapatkan Detail Order
 Mengambil detail order berdasarkan ID.
 
@@ -369,8 +490,6 @@ Mengambil detail order berdasarkan ID.
 - **401**: Harus login sebagai seller
 - **404**: Order tidak ditemukan
 - **500**: Kesalahan server
-
----
 
 ### 3. Update Status Order
 Mengubah status order dengan validasi alur status.
@@ -403,8 +522,6 @@ Mengubah status order dengan validasi alur status.
 - Notifikasi email dikirim secara asinkronus.
 - Update jumlah `terjual` produk saat status menjadi `diterima`.
 
----
-
 ### 4. Mendapatkan Profil Penjual
 Mengambil profil penjual beserta daftar followers.
 
@@ -426,8 +543,6 @@ Mengambil profil penjual beserta daftar followers.
 - **401**: Seller belum login
 - **404**: Seller tidak ditemukan
 - **500**: Kesalahan server
-
----
 
 ### 5. Membalas Rating
 Membalas rating dari pembeli.
@@ -454,8 +569,6 @@ Membalas rating dari pembeli.
 - **403**: Rating bukan milik produk penjual
 - **500**: Kesalahan server
 
----
-
 ### 6. Mendapatkan Semua Rating Penjual
 Mengambil semua rating untuk produk milik penjual.
 
@@ -471,8 +584,6 @@ Mengambil semua rating untuk produk milik penjual.
   ```
 - **401**: Harus login sebagai seller
 - **500**: Kesalahan server
-
----
 
 ### 7. Mendapatkan Rating Berdasarkan ID
 Mengambil rating tertentu milik penjual.
@@ -494,11 +605,11 @@ Mengambil rating tertentu milik penjual.
 ---
 
 ## Catatan Tambahan
-- **Cache**: Digunakan untuk meningkatkan performa (produk, penjual, order).
+- **Cache**: Digunakan untuk meningkatkan performa pada produk, penjual, dan order (dengan durasi 30 detik).
 - **Notifikasi**: Notifikasi email dikirim secara asinkronus untuk checkout dan perubahan status order.
 - **Keamanan**:
   - Validasi captcha dan deteksi spam pada login dan checkout.
   - Pengecekan kepemilikan order dan rating untuk mencegah akses tidak sah.
 - **Error Handling**: Semua endpoint mengembalikan pesan error yang jelas dengan kode status HTTP yang sesuai.
 
-Untuk informasi lebih lanjut atau akses API, hubungi tim Backend Market.
+Untuk informasi lebih lanjut atau akses API, hubungi tim **Backend Market** .

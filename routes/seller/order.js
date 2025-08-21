@@ -23,6 +23,9 @@ function safeParseImageUrl(data) {
   }
 }
 
+// ======================
+// GET Semua Order Seller
+// ======================
 router.get("/seller/all", async (req, res) => {
   try {
     const sellerInfo = req.cookies?.seller_info ? JSON.parse(req.cookies.seller_info) : null;
@@ -54,7 +57,7 @@ router.get("/seller/all", async (req, res) => {
 
     // 🔹 Ambil order_items & detailItems sekaligus
     const [orderItemsRes, detailItemsRes] = await Promise.all([
-      supabase.from("order_items").select("order_id, product_id, variant_id, quantity").in("order_id", orderIds),
+      supabase.from("order_items").select("id, order_id, product_id, variant_id, quantity").in("order_id", orderIds),
       supabase.from("order_details_items").select("*").in("order_id", orderIds),
     ]);
 
@@ -65,7 +68,7 @@ router.get("/seller/all", async (req, res) => {
     const orderItemMap = {};
     orderItems.forEach(oi => {
       const key = `${oi.order_id}-${oi.product_id}-${oi.variant_id ?? "null"}`;
-      orderItemMap[key] = oi.quantity ?? 0;
+      orderItemMap[key] = { id: oi.id, quantity: oi.quantity ?? 0 };
     });
 
     // 🔹 Total quantity per order
@@ -81,14 +84,15 @@ router.get("/seller/all", async (req, res) => {
       if (!itemsByOrder[item.order_id]) itemsByOrder[item.order_id] = [];
 
       const key = `${item.order_id}-${item.product_id}-${item.variant_id ?? "null"}`;
-      const quantity = orderItemMap[key] ?? 0;
+      const match = orderItemMap[key] || { id: null, quantity: 0 };
 
       itemsByOrder[item.order_id].push({
-        order_item_id: item.order_item_id,
+        order_item_id: item.order_item_id, // dari detailItems
+        orderItemId: match.id,       // dari order_items (buat rating)
         product_id: item.product_id,
         product_name: item.product_name,
         product_image_url: safeParseImageUrl(item.product_image_url),
-        quantity,
+        quantity: match.quantity,
         price_per_item: item.variant_final_price ?? item.final_price ?? item.product_price,
         discount_percentage: item.variant_discount_percentage ?? item.discount_percentage ?? 0,
         variant: item.variant_id
@@ -125,7 +129,7 @@ router.get("/seller/all", async (req, res) => {
         }
       }
 
-      // 🔸 seller_address (langsung dari JSON kolom orders)
+      // 🔸 seller_address
       if (order.seller_address) {
         try {
           sellerData = typeof order.seller_address === "string"
@@ -139,7 +143,6 @@ router.get("/seller/all", async (req, res) => {
         }
       }
 
-      // 🔸 Jangan keluarkan seller_info kalau pickup_method = "kedua"
       return {
         ...order,
         order_items: itemsByOrder[order.id] || [],
@@ -163,50 +166,39 @@ router.get("/seller/all", async (req, res) => {
   }
 });
 
+
+// ======================
+// GET Detail Order Seller
+// ======================
 router.get("/seller/:orderId", async (req, res) => {
   try {
-    const sellerInfo = req.cookies?.seller_info
-      ? JSON.parse(req.cookies.seller_info)
-      : null;
-
+    const sellerInfo = req.cookies?.seller_info ? JSON.parse(req.cookies.seller_info) : null;
     if (!sellerInfo?.id) {
       return res.status(401).json({ message: "❌ Harus login sebagai seller." });
     }
 
     const { orderId } = req.params;
     const cacheKey = `order:seller:${sellerInfo.id}:${orderId}`;
-
     const cached = orderCache.get(cacheKey);
     if (cached) {
-      return res.status(200).json({
-        message: "✅ Detail order seller berhasil diambil (cache).",
-        order: cached,
-      });
+      return res.status(200).json({ message: "✅ Detail order seller berhasil diambil (cache).", order: cached });
     }
 
     // 🔹 Ambil order utama
     const { data: orderData, error: orderError } = await supabase
       .from("orders")
-      .select(
-        "id, created_at, total_price, delivery_fee, status, pickup_method, confirm_deadline, buyer_address, seller_address"
-      )
+      .select("id, created_at, total_price, delivery_fee, status, pickup_method, confirm_deadline, buyer_address, seller_address")
       .eq("id", orderId)
       .eq("seller_id", sellerInfo.id)
       .single();
 
     if (orderError || !orderData) {
-      return res
-        .status(404)
-        .json({ message: "❌ Order tidak ditemukan.", error: orderError });
+      return res.status(404).json({ message: "❌ Order tidak ditemukan.", error: orderError });
     }
 
     // 🔹 Ambil order_items & detailItems
     const [orderItemsRes, detailItemsRes] = await Promise.all([
-      supabase
-        .from("order_items")
-        .select("order_id, product_id, variant_id, quantity")
-        .eq("order_id", orderId),
-
+      supabase.from("order_items").select("id, order_id, product_id, variant_id, quantity").eq("order_id", orderId),
       supabase.from("order_details_items").select("*").eq("order_id", orderId),
     ]);
 
@@ -214,32 +206,28 @@ router.get("/seller/:orderId", async (req, res) => {
     const detailItems = detailItemsRes.data || [];
 
     // 🔹 Lookup quantity
-    const quantityMap = {};
-    orderItems.forEach((oi) => {
+    const orderItemMap = {};
+    orderItems.forEach(oi => {
       const key = `${oi.order_id}-${oi.product_id}-${oi.variant_id ?? "null"}`;
-      quantityMap[key] = oi.quantity ?? 0;
+      orderItemMap[key] = { id: oi.id, quantity: oi.quantity ?? 0 };
     });
 
-    const totalQuantity = orderItems.reduce(
-      (sum, item) => sum + (item.quantity ?? 0),
-      0
-    );
+    const totalQuantity = orderItems.reduce((sum, item) => sum + (item.quantity ?? 0), 0);
 
     // 🔹 Map detailItems
-    const items = detailItems.map((item) => {
+    const items = detailItems.map(item => {
       const key = `${item.order_id}-${item.product_id}-${item.variant_id ?? "null"}`;
-      const quantity = quantityMap[key] ?? 0;
+      const match = orderItemMap[key] || { id: null, quantity: 0 };
 
       return {
         order_item_id: item.order_item_id,
+        orderItemId: match.id, // id asli dari tabel order_items
         product_id: item.product_id,
         product_name: item.product_name,
         product_image_url: safeParseImageUrl(item.product_image_url),
-        quantity,
-        price_per_item:
-          item.variant_final_price ?? item.final_price ?? item.product_price,
-        discount_percentage:
-          item.variant_discount_percentage ?? item.discount_percentage ?? 0,
+        quantity: match.quantity,
+        price_per_item: item.variant_final_price ?? item.final_price ?? item.product_price,
+        discount_percentage: item.variant_discount_percentage ?? item.discount_percentage ?? 0,
         variant: item.variant_id
           ? {
               id: item.variant_id,
@@ -254,72 +242,35 @@ router.get("/seller/:orderId", async (req, res) => {
     });
 
     // 🔹 Parse buyer_address
-    let buyerInfo = null,
-      buyerFullAddress = null;
+    let buyerInfo = null, buyerFullAddress = null;
     if (orderData.buyer_address) {
       try {
-        buyerInfo =
-          typeof orderData.buyer_address === "string"
-            ? JSON.parse(orderData.buyer_address)
-            : orderData.buyer_address;
+        buyerInfo = typeof orderData.buyer_address === "string"
+          ? JSON.parse(orderData.buyer_address)
+          : orderData.buyer_address;
 
-        const {
-          alamat_lengkap = "",
-          kelurahan = "",
-          kecamatan = "",
-          kota_kabupaten = "",
-          provinsi = "",
-          kode_pos = "",
-        } = buyerInfo;
-
-        buyerFullAddress = [
-          alamat_lengkap,
-          kelurahan,
-          kecamatan,
-          kota_kabupaten,
-          provinsi,
-          kode_pos,
-        ]
-          .filter(Boolean)
-          .join(", ");
+        const { alamat_lengkap = "", kelurahan = "", kecamatan = "", kota_kabupaten = "", provinsi = "", kode_pos = "" } = buyerInfo;
+        buyerFullAddress = [alamat_lengkap, kelurahan, kecamatan, kota_kabupaten, provinsi, kode_pos].filter(Boolean).join(", ");
       } catch (e) {
         console.warn("⚠️ Gagal parse buyer_address:", orderData.buyer_address);
       }
     }
 
     // 🔹 Parse seller_address
-    let sellerData = null,
-      sellerFullAddress = null;
+    let sellerData = null, sellerFullAddress = null;
     if (orderData.seller_address) {
       try {
-        sellerData =
-          typeof orderData.seller_address === "string"
-            ? JSON.parse(orderData.seller_address)
-            : orderData.seller_address;
+        sellerData = typeof orderData.seller_address === "string"
+          ? JSON.parse(orderData.seller_address)
+          : orderData.seller_address;
 
-        const {
-          store_address = "",
-          kelurahan = "",
-          kecamatan = "",
-          kota_kabupaten = "",
-          provinsi = "",
-        } = sellerData;
-
-        sellerFullAddress = [
-          store_address,
-          kelurahan,
-          kecamatan,
-          kota_kabupaten,
-          provinsi,
-        ]
-          .filter(Boolean)
-          .join(", ");
+        const { store_address = "", kelurahan = "", kecamatan = "", kota_kabupaten = "", provinsi = "" } = sellerData;
+        sellerFullAddress = [store_address, kelurahan, kecamatan, kota_kabupaten, provinsi].filter(Boolean).join(", ");
       } catch (e) {
         console.warn("⚠️ Gagal parse seller_address:", orderData.seller_address);
       }
     }
 
-    // 🔹 Build result
     const orderResult = {
       ...orderData,
       order_items: items,
@@ -334,18 +285,11 @@ router.get("/seller/:orderId", async (req, res) => {
           }),
     };
 
-    // 🔹 Cache
     orderCache.set(cacheKey, orderResult);
-
-    return res.status(200).json({
-      message: "✅ Detail order seller berhasil diambil.",
-      order: orderResult,
-    });
+    return res.status(200).json({ message: "✅ Detail order seller berhasil diambil.", order: orderResult });
   } catch (err) {
     console.error("❌ Server error (seller/:orderId):", err);
-    return res
-      .status(500)
-      .json({ message: "❌ Terjadi kesalahan server", error: err.message });
+    return res.status(500).json({ message: "❌ Terjadi kesalahan server", error: err.message });
   }
 });
 
@@ -410,44 +354,45 @@ router.put("/orders/:id/status", async (req, res) => {
     };
 
     const determineNewStatus = (order, action, barcodeId) => {
-      const now = new Date();
-      const payload = {};
-      let status = "";
+        const now = new Date();
+        const payload = {};
+        let status = "";
 
-      const commonActions = {
-        accept: () => {
-          status = "sedang di kemas";
-          payload.confirm_deadline = null;
-        },
-        cancel: () => {
-          status = "dibatalkan";
-          payload.cancel_reason = "❌ Dibatalkan seller.";
-        },
-      };
+        const commonActions = {
+            accept: () => {
+              status = "sedang di kemas";
+              payload.confirm_deadline = null;
+            },
+            cancel: () => {
+              status = "dibatalkan";
+              payload.cancel_reason = "❌ Dibatalkan seller.";
+            },
+          };
 
-      if (commonActions[action]) {
-        commonActions[action]();
-      } else if (order.pickup_method === "diambil") {
-        if (action === "ready") {
-          status = "siap di ambil";
-          payload.pickup_deadline = new Date(now.getTime() + 12 * 60 * 60 * 1000).toISOString();
-        } else if (action === "complete") {
-          if (!barcodeId || barcodeId !== order.id.toString()) {
-            throw new Error("⚠ Barcode ID tidak valid.");
-          }
-          status = "diterima";
+          if (commonActions[action]) {
+            commonActions[action]();
+          } else if (order.pickup_method === "diambil") {
+            if (action === "ready") {
+              status = "siap di ambil";
+              payload.pickup_deadline = new Date(now.getTime() + 12 * 60 * 60 * 1000).toISOString();
+            } else if (action === "complete") {
+              // barcodeId jadi opsional
+              if (barcodeId && barcodeId !== order.id.toString()) {
+                throw new Error("⚠ Barcode ID tidak valid.");
+              }
+              status = "diterima";
+            }
+          } else if (order.pickup_method === "diantar") {
+            if (action === "ship") {
+              status = "sedang di antar";
+              payload.delivery_deadline = new Date(now.getTime() + 12 * 60 * 60 * 1000).toISOString();
+            } else if (action === "complete") {
+              status = "diterima";
+            }
         }
-      } else if (order.pickup_method === "diantar") {
-        if (action === "ship") {
-          status = "sedang di antar";
-          payload.delivery_deadline = new Date(now.getTime() + 12 * 60 * 60 * 1000).toISOString();
-        } else if (action === "complete") {
-          status = "diterima";
-        }
-      }
 
       return { status, payload };
-    };
+      };
 
     const validateStatusFlow = (current, next) => {
       const statusFlow = {
