@@ -198,7 +198,13 @@ router.get("/all", requireUser, async (req, res) => {
         review_images,
         created_at,
         product_snapshot,
-        rating_replies(reply_text, created_at)
+        rating_replies (
+          id,
+          reply_text,
+          created_at,
+          seller_id,
+          sellers ( id, store_name, store_image_url )
+        )
       `)
       .eq("user_id", req.user.id)
       .order("created_at", { ascending: false })
@@ -206,7 +212,7 @@ router.get("/all", requireUser, async (req, res) => {
 
     res.status(200).json({
       message: `✅ ${ratings.length} rating ditemukan`,
-      ratings
+      ratings,
     });
   } catch (err) {
     console.error("❌ GET all rating error:", err);
@@ -219,20 +225,38 @@ router.get("/all", requireUser, async (req, res) => {
 // ======================
 router.get("/order/:orderId", requireUser, async (req, res) => {
   try {
-    const { orderId } = req.params;
-    const { data: ratings } = await supabase
+    const orderId = req.params.orderId; // langsung pakai string UUID
+
+    const { data: ratings, error } = await supabase
       .from("ratings")
       .select(`
-        *,
-        rating_replies(reply_text, created_at)
+        id,
+        order_id,
+        order_item_id,
+        product_id,
+        variant_id,
+        rating,
+        review_text,
+        review_images,
+        created_at,
+        product_snapshot,
+        rating_replies (
+          id,
+          reply_text,
+          created_at,
+          seller_id,
+          sellers ( id, store_name, store_image_url )
+        )
       `)
       .eq("user_id", req.user.id)
-      .eq("order_id", orderId)
-      .throwOnError();
+      .eq("order_id", orderId) // filter langsung ke kolom ratings.order_id
+      .order("created_at", { ascending: false });
+
+    if (error) throw error;
 
     res.status(200).json({
       message: `✅ ${ratings.length} rating untuk order ${orderId}`,
-      ratings
+      ratings,
     });
   } catch (err) {
     console.error("❌ GET rating order error:", err);
