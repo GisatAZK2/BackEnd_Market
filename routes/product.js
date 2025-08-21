@@ -450,7 +450,14 @@ router.get("/:productId/ratings", async (req, res) => {
         review_images,
         created_at,
         user_id,
-        users ( id, username, avatar )
+        users ( id, username, avatar ),
+        rating_replies (
+          id,
+          reply_text,
+          created_at,
+          seller_id,
+          sellers ( id, store_name, store_image_url )
+        )
         `
       )
       .eq("product_id", productId)
