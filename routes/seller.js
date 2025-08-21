@@ -9,16 +9,10 @@ const { DateTime } = require("luxon");
 const NodeCache = require("node-cache");
 const cache = new NodeCache({ stdTTL: 10 });
 
-// GET Semua seller + produk + total produk terjual
 // GET Semua seller + produk + total produk terjual + followers
 router.get("/allseller", async (req, res) => {
   const cached = cache.get("all_sellers_with_products");
-  if (cached) {
-    return res.status(200).json({
-      message: `✅ ${cached.length} seller berhasil diambil (cache)`,
-      data: cached,
-    });
-  }
+  const userInfo = req.cookies?.user_info ? JSON.parse(req.cookies.user_info) : null;
 
   try {
     const { data: sellers, error: sellerError } = await supabase.from("sellers").select(`
@@ -34,9 +28,7 @@ router.get("/allseller", async (req, res) => {
     }
 
     const allProducts = sellers.flatMap((s) => s.products);
-
-    const productsWithVariants =
-      await attachVariantsStockDiscountWithRealDiscount(allProducts);
+    const productsWithVariants = await attachVariantsStockDiscountWithRealDiscount(allProducts);
 
     const productMap = new Map();
     for (const product of productsWithVariants) {
@@ -83,6 +75,19 @@ router.get("/allseller", async (req, res) => {
       followerMap.set(sid, (followerMap.get(sid) || 0) + 1);
     }
 
+    // Ambil semua seller yang di-follow user saat ini (kalau login)
+    let followedSet = new Set();
+    if (userInfo?.id) {
+      const { data: userFollows, error: userFollowError } = await supabase
+        .from("follows")
+        .select("seller_id")
+        .eq("user_id", userInfo.id);
+
+      if (!userFollowError && userFollows) {
+        followedSet = new Set(userFollows.map((f) => f.seller_id));
+      }
+    }
+
     const sellersWithProducts = sellers.map((seller) => {
       const products = productMap.get(seller.id) || [];
       const totalSold = products.reduce((acc, p) => acc + (p.terjual || 0), 0);
@@ -94,6 +99,7 @@ router.get("/allseller", async (req, res) => {
           : "0.00";
 
       const totalFollowers = followerMap.get(seller.id) || 0;
+      const isFollowed = followedSet.has(seller.id);
 
       return {
         seller: { ...seller, products: undefined },
@@ -102,6 +108,7 @@ router.get("/allseller", async (req, res) => {
         average_rating: avgRating,
         total_reviews: sellerRatings.length,
         total_followers: totalFollowers,
+        is_followed: isFollowed,
       };
     });
 
@@ -121,10 +128,12 @@ router.get("/allseller", async (req, res) => {
 
 
 // GET Seller by ID + produk + followers
+// GET Seller by ID + produk + followers + is_followed
 router.get("/:id", async (req, res) => {
   const sellerId = req.params.id;
+  const userInfo = req.cookies?.user_info ? JSON.parse(req.cookies.user_info) : null;
 
-  const cached = cache.get(`seller_${sellerId}`);
+  const cached = cache.get(`seller_${sellerId}_${userInfo?.id || "guest"}`);
   if (cached) {
     return res.status(200).json({
       message: `✅ Seller & ${cached.products.length} produk berhasil diambil (cache)`,
@@ -133,6 +142,7 @@ router.get("/:id", async (req, res) => {
   }
 
   try {
+    // Ambil data seller
     const { data: seller, error: sellerError } = await supabase
       .from("sellers")
       .select("*")
@@ -143,6 +153,7 @@ router.get("/:id", async (req, res) => {
       return res.status(404).json({ message: "❌ Seller tidak ditemukan" });
     }
 
+    // Ambil produk seller
     const { data: products, error: productError } = await supabase
       .from("products")
       .select("*")
@@ -176,14 +187,31 @@ router.get("/:id", async (req, res) => {
       });
     }
 
+    // cek apakah user mengikuti seller ini
+    let isFollowed = false;
+    if (userInfo?.id) {
+      const { data: followData, error: followError } = await supabase
+        .from("follows")
+        .select("id")
+        .eq("user_id", userInfo.id)
+        .eq("seller_id", sellerId)
+        .maybeSingle(); // gunakan maybeSingle agar tidak error jika tidak ada
+
+      if (!followError && followData) {
+        isFollowed = true;
+      }
+    }
+
     const result = {
       seller,
       products: productsWithVariants,
       total_sold: totalSold,
       total_followers: followerCount || 0,
+      is_followed: isFollowed,
     };
 
-    cache.set(`seller_${sellerId}`, result);
+    // cache dengan key unik per user
+    cache.set(`seller_${sellerId}_${userInfo?.id || "guest"}`, result);
 
     return res.status(200).json({
       message: `✅ Seller & ${productsWithVariants.length} produk berhasil diambil`,
