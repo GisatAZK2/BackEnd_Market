@@ -376,11 +376,11 @@ router.put("/orders/:id/status", async (req, res) => {
               status = "siap di ambil";
               payload.pickup_deadline = new Date(now.getTime() + 12 * 60 * 60 * 1000).toISOString();
             } else if (action === "complete") {
-              // barcodeId jadi opsional
-              if (barcodeId && barcodeId !== order.id.toString()) {
-                throw new Error("⚠ Barcode ID tidak valid.");
-              }
-              status = "diterima";
+                if (order.pickup_method === "diambil" && barcodeId && barcodeId !== order.id.toString()) {
+                  throw new Error("⚠ Barcode ID tidak valid.");
+                }
+                status = "diterima";
+                payload.confirm_by_buyers_deadline = new Date(now.getTime() + 5 * 60 * 60 * 1000).toISOString();
             }
           } else if (order.pickup_method === "diantar") {
             if (action === "ship") {

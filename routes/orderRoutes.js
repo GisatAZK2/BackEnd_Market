@@ -463,17 +463,27 @@ router.post("/orders/:id/confirm-receive", async (req, res) => {
     if (order.status !== "diterima")
       return res.status(400).json({ message: "⚠️ Hanya order yang Sudah Di Antar Oleh Penjual / Sudah Di ambil" });
 
-    // Update status
+    // Hitung rating deadline (1 hari dari sekarang, sesuai device user)
+    const ratingDeadline = new Date();
+    ratingDeadline.setDate(ratingDeadline.getDate() + 1);
+
+    // Update status + rating_deadline
     const { data: updated, error: updateError } = await supabase
       .from("orders")
-      .update({ status: "diterima oleh pembeli" })
+      .update({ 
+        status: "diterima oleh pembeli",
+        rating_deadline: ratingDeadline.toISOString()  // tetap simpan dalam format ISO
+      })
       .eq("id", orderId)
       .select()
       .single();
 
     if (updateError) return res.status(500).json({ message: "❌ Gagal update status." });
 
-    return res.status(200).json({ message: "✅ Order berhasil dikonfirmasi diterima.", order: updated });
+    return res.status(200).json({ 
+      message: "✅ Order berhasil dikonfirmasi diterima.", 
+      order: updated 
+    });
   } catch (err) {
     return res.status(500).json({ message: "❌ Server error", error: err.message });
   }
@@ -486,10 +496,10 @@ router.delete("/orders/:id", async (req, res) => {
 
     const orderId = req.params.id;
 
-    // Pastikan order milik user
+    // Pastikan order milik user + ambil status
     const { data: order, error } = await supabase
       .from("orders")
-      .select("id, user_id")
+      .select("id, user_id, status")
       .eq("id", orderId)
       .single();
 
@@ -497,7 +507,12 @@ router.delete("/orders/:id", async (req, res) => {
     if (String(order.user_id) !== String(userInfo.id))
       return res.status(403).json({ message: "⚠️ Tidak punya akses ke order ini." });
 
-    // Delete order tapi rating jangan dihapus
+    // Hanya boleh hapus kalau status "diterima oleh pembeli"
+    if (order.status !== "diterima oleh pembeli") {
+      return res.status(400).json({ message: "⚠️ Order hanya bisa dihapus jika sudah diterima oleh pembeli." });
+    }
+
+    // Delete order (rating tetap aman karena di tabel lain)
     const { error: delError } = await supabase
       .from("orders")
       .delete()
@@ -510,20 +525,6 @@ router.delete("/orders/:id", async (req, res) => {
     return res.status(500).json({ message: "❌ Server error", error: err.message });
   }
 });
-
-
-
-
-// Fungsi bantu untuk hitung persen diskon dari harga dasar dan harga diskon
-function calculateDiscountFromPrice(basePrice, discountedPrice) {
-  if (!basePrice || !discountedPrice || basePrice === 0) return 0;
-  const discount = ((basePrice - discountedPrice) / basePrice) * 100;
-  return discount > 0 ? discount : 0;
-}
-
-function combineFullAddress(user) {
-  return `${user.alamat_lengkap}, Kec. ${user.kecamatan}, Kel. ${user.kelurahan}, ${user.kota_kabupaten}, ${user.provinsi}, Kode Pos: ${user.kode_pos}`;
-}
 
 // Route GET /all - daftar order user
 // ======================

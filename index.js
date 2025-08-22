@@ -13,6 +13,8 @@ const rateLimiter = require("./middleware/ratelimiter");
 const startCronJobs = require("./utils/restoreStock");
 require("./utils/cron");
 require("./utils/autocancelorder.js");
+require("./utils/autodeletorder.js");
+require("./utils/autocompleteorder.js");
 
 // === Routes ===
 const authRoutes = require("./routes/auth");

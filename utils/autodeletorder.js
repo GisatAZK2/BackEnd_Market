@@ -1,40 +1,45 @@
 const cron = require("node-cron");
+const supabase = require("../config/supabase");
 
-// Cron job setiap 1 jam
+// Cron job: jalan tiap jam
 cron.schedule("0 * * * *", async () => {
-  try {
-    console.log("🔄 Cron job: cek order expired / auto-delete");
+  console.log("⏰ Cron running: auto delete orders after rating_deadline");
 
-    // Ambil order yang sudah expired misal status 'pending' lebih dari 7 hari
+  try {
+    const now = new Date().toISOString();
+
+    // Ambil order yang sudah lewat deadline
     const { data: expiredOrders, error } = await supabase
       .from("orders")
       .select("id")
-      .lt("created_at", new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString()); // 7 hari lalu
+      .lt("rating_deadline", now)
+      .eq("status", "diterima oleh pembeli");
 
     if (error) {
-      console.error("❌ Cron error ambil expired orders:", error);
+      console.error("❌ Error fetch expired orders:", error);
       return;
     }
 
-    if (!expiredOrders?.length) {
-      console.log("✅ Tidak ada order expired.");
+    if (!expiredOrders || expiredOrders.length === 0) {
+      console.log("✅ Tidak ada order yang expired.");
       return;
     }
 
-    const orderIds = expiredOrders.map((o) => o.id);
+    const expiredIds = expiredOrders.map((o) => o.id);
 
-    // Hapus order tapi jangan hapus rating (rating aman karena foreign key ON DELETE SET NULL)
+    // Hapus order
     const { error: delError } = await supabase
       .from("orders")
       .delete()
-      .in("id", orderIds);
+      .in("id", expiredIds);
 
     if (delError) {
-      console.error("❌ Cron gagal hapus orders:", delError);
-    } else {
-      console.log(`✅ Cron berhasil hapus ${orderIds.length} order(s).`);
+      console.error("❌ Error delete expired orders:", delError);
+      return;
     }
+
+    console.log(`🗑️ ${expiredIds.length} order expired berhasil dihapus.`);
   } catch (err) {
-    console.error("❌ Cron server error:", err);
+    console.error("❌ Cron job error:", err.message);
   }
 });
