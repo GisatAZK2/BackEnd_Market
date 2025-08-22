@@ -461,18 +461,19 @@ router.post("/orders/:id/confirm-receive", async (req, res) => {
     if (String(order.user_id) !== String(userInfo.id))
       return res.status(403).json({ message: "⚠️ Tidak punya akses ke order ini." });
     if (order.status !== "diterima")
-      return res.status(400).json({ message: "⚠️ Hanya order yang Sudah Di Antar Oleh Penjual / Sudah Di ambil" });
+      return res.status(400).json({ message: "⚠️ Hanya order yang sudah diantar oleh penjual / sudah diambil" });
 
-    // Hitung rating deadline (1 hari dari sekarang, sesuai device user)
+    // Hitung rating deadline (1 hari dari sekarang)
     const ratingDeadline = new Date();
     ratingDeadline.setDate(ratingDeadline.getDate() + 1);
 
-    // Update status + rating_deadline
+    // Update status, rating_deadline, dan kosongkan confirm_by_buyers_deadline
     const { data: updated, error: updateError } = await supabase
       .from("orders")
       .update({ 
         status: "diterima oleh pembeli",
-        rating_deadline: ratingDeadline.toISOString()  // tetap simpan dalam format ISO
+        rating_deadline: ratingDeadline.toISOString(),
+        confirm_by_buyers_deadline: null
       })
       .eq("id", orderId)
       .select()
@@ -512,7 +513,15 @@ router.delete("/orders/:id", async (req, res) => {
       return res.status(400).json({ message: "⚠️ Order hanya bisa dihapus jika sudah diterima oleh pembeli." });
     }
 
-    // Delete order (rating tetap aman karena di tabel lain)
+    // Hapus order_items terkait
+    const { error: itemsError } = await supabase
+      .from("order_items")
+      .delete()
+      .eq("order_id", orderId);
+
+    if (itemsError) return res.status(500).json({ message: "❌ Gagal hapus order_items." });
+
+    // Hapus order
     const { error: delError } = await supabase
       .from("orders")
       .delete()
@@ -520,7 +529,7 @@ router.delete("/orders/:id", async (req, res) => {
 
     if (delError) return res.status(500).json({ message: "❌ Gagal hapus order." });
 
-    return res.status(200).json({ message: "✅ Order berhasil dihapus. Rating tetap aman." });
+    return res.status(200).json({ message: "✅ Order dan order_items berhasil dihapus. Rating tetap aman." });
   } catch (err) {
     return res.status(500).json({ message: "❌ Server error", error: err.message });
   }

@@ -8,7 +8,7 @@ cron.schedule("0 * * * *", async () => {
   try {
     const now = new Date().toISOString();
 
-    // Ambil order yang sudah lewat deadline
+    // Ambil order yang sudah lewat deadline & status "diterima oleh pembeli"
     const { data: expiredOrders, error } = await supabase
       .from("orders")
       .select("id")
@@ -27,7 +27,18 @@ cron.schedule("0 * * * *", async () => {
 
     const expiredIds = expiredOrders.map((o) => o.id);
 
-    // Hapus order
+    // Hapus order_items dulu supaya FK ratings tetap aman
+    const { error: itemsError } = await supabase
+      .from("order_items")
+      .delete()
+      .in("order_id", expiredIds);
+
+    if (itemsError) {
+      console.error("❌ Error delete order_items of expired orders:", itemsError);
+      return;
+    }
+
+    // Hapus orders
     const { error: delError } = await supabase
       .from("orders")
       .delete()
