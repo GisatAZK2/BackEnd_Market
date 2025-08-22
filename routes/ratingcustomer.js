@@ -55,9 +55,10 @@ router.post("/:id/rating", upload.array("images"), async (req, res) => {
       return res.status(403).json({ message: "⚠️ Tidak punya akses ke order ini." });
     }
 
-    if (order.status !== "diterima oleh pembeli") {
-      return res.status(400).json({ message: "⚠️ Hanya bisa kasih rating setelah order diterima." });
-    }
+    if (order.status !== "diterima oleh pembeli" && order.status !== "diterima") {
+  return res.status(400).json({ message: "⚠️ Hanya bisa kasih rating setelah order diterima." });
+  }
+
 
     // Map order_items → validasi product_id & variant_id
     const validMap = new Map(
