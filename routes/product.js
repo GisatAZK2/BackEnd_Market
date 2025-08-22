@@ -221,6 +221,8 @@ const haversineDistance = (lat1, lon1, lat2, lon2) => {
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   return R * c;
 };
+
+// Nearby produk berdasarkan lokasi
 router.get("/nearby-by-location", async (req, res) => {
   const { lat, lng } = req.query;
   const userLat = parseFloat(lat);
@@ -231,12 +233,24 @@ router.get("/nearby-by-location", async (req, res) => {
   }
 
   try {
-    const { data: sellers } = await supabase
+    const { data: sellers, error: sellerErr } = await supabase
       .from("sellers")
       .select("id, name, latitude, longitude");
 
-    const { data: products } = await supabase.from("products").select("*");
+    if (sellerErr) throw sellerErr;
 
+    const { data: products, error: prodErr } = await supabase
+      .from("products")
+      .select(`
+        *,
+        ratings!left (
+          rating
+        )
+      `);
+
+    if (prodErr) throw prodErr;
+
+    // Gabungkan dengan data seller + hitung jarak
     const merged = products
       .map((product) => {
         const seller = sellers.find((s) => s.id === product.seller_id);
@@ -246,17 +260,28 @@ router.get("/nearby-by-location", async (req, res) => {
                 userLat,
                 userLng,
                 seller.latitude,
-                seller.longitude,
+                seller.longitude
               )
             : Infinity;
+
+        // Hitung avg rating
+        let avgRating = null;
+        if (product.ratings && product.ratings.length > 0) {
+          const sum = product.ratings.reduce((acc, r) => acc + r.rating, 0);
+          avgRating = sum / product.ratings.length;
+        }
+
         return {
           ...product,
           sellerName: seller?.name,
           distanceInKm: +distanceInKm.toFixed(2),
+          avg_rating: avgRating ? Number(avgRating.toFixed(2)) : null,
+          total_ratings: product.ratings ? product.ratings.length : 0,
         };
       })
       .filter((p) => p.distanceInKm <= 40);
 
+    // Tambahin varian + stok + diskon
     const mergedWithVariants =
       await attachVariantsStockDiscountWithRealDiscount(merged);
 
@@ -265,11 +290,67 @@ router.get("/nearby-by-location", async (req, res) => {
       products: mergedWithVariants,
     });
   } catch (error) {
+    console.error("❌ Error nearby:", error);
     return res
       .status(500)
-      .json({ message: "❌ Gagal mengambil produk", error: error.message });
+      .json({ message: "❌ Gagal mengambil produk nearby", error: error.message });
   }
 });
+
+
+// Produk terlaris (berdasarkan jumlah order)
+// Produk terlaris (berdasarkan field "terjual" di tabel products)
+router.get("/terlaris", async (req, res) => {
+  try {
+    // Ambil produk + rating
+    const { data: products, error } = await supabase
+      .from("products")
+      .select(`
+        *,
+        ratings!left (
+          rating
+        )
+      `);
+
+    if (error) throw error;
+
+    // Proses data -> tambahin avg rating + total terjual
+    const processed = products.map((p) => {
+      // Hitung rating
+      let avgRating = null;
+      if (p.ratings && p.ratings.length > 0) {
+        const sum = p.ratings.reduce((acc, r) => acc + r.rating, 0);
+        avgRating = sum / p.ratings.length;
+      }
+
+      return {
+        ...p,
+        avg_rating: avgRating ? Number(avgRating.toFixed(2)) : null,
+        total_ratings: p.ratings ? p.ratings.length : 0,
+        total_terjual: p.terjual ?? 0, // pake field "terjual"
+      };
+    });
+
+    // Urutkan produk terlaris (paling banyak terjual)
+    const sorted = processed.sort((a, b) => b.total_terjual - a.total_terjual);
+
+    // Attach varian + stok + diskon
+    const productsWithVariants =
+      await attachVariantsStockDiscountWithRealDiscount(sorted);
+
+    return res.status(200).json({
+      message: `🔥 ${productsWithVariants.length} produk terlaris`,
+      products: productsWithVariants,
+    });
+  } catch (error) {
+    console.error("❌ Error terlaris:", error);
+    return res.status(500).json({
+      message: "❌ Gagal mengambil produk terlaris",
+      error: error.message,
+    });
+  }
+});
+
 
 router.get("/allproduct", async (req, res) => {
   try {
@@ -318,16 +399,43 @@ router.get("/allproduct", async (req, res) => {
   }
 });
 
+// Produk dengan urutan diskon terbesar
 router.get("/sorted", async (req, res) => {
   try {
-    const { data: products } = await supabase.from("products").select("*");
+    const { data: products, error } = await supabase
+      .from("products")
+      .select(`
+        *,
+        ratings!left (
+          rating
+        )
+      `);
 
+    if (error) throw error;
+
+    // Hitung avg rating + total rating
+    const productsWithExtras = products.map((p) => {
+      let avgRating = null;
+
+      if (p.ratings && p.ratings.length > 0) {
+        const sum = p.ratings.reduce((acc, r) => acc + r.rating, 0);
+        avgRating = sum / p.ratings.length;
+      }
+
+      return {
+        ...p,
+        avg_rating: avgRating ? Number(avgRating.toFixed(2)) : null,
+        total_ratings: p.ratings ? p.ratings.length : 0,
+      };
+    });
+
+    // Attach varian + stok + diskon
     let productsWithVariants =
-      await attachVariantsStockDiscountWithRealDiscount(products);
+      await attachVariantsStockDiscountWithRealDiscount(productsWithExtras);
 
     // Urutkan berdasarkan diskon terbesar
     productsWithVariants = productsWithVariants.sort(
-      (a, b) => b.discountPercentage - a.discountPercentage,
+      (a, b) => b.discountPercentage - a.discountPercentage
     );
 
     return res.status(200).json({
@@ -335,6 +443,7 @@ router.get("/sorted", async (req, res) => {
       products: productsWithVariants,
     });
   } catch (error) {
+    console.error("❌ Error sorted:", error);
     return res.status(500).json({
       message: "❌ Gagal mengambil semua produk",
       error: error.message,
@@ -343,25 +452,51 @@ router.get("/sorted", async (req, res) => {
 });
 
 // === Ambil produk berdasarkan kategori ===
+// Produk berdasarkan kategori
 router.get("/by-category/:category_id", async (req, res) => {
   const { category_id } = req.params;
   try {
-    const { data: category } = await supabase
+    // Cek kategori
+    const { data: category, error: catErr } = await supabase
       .from("categories")
       .select("id, name")
       .eq("id", category_id)
       .single();
 
+    if (catErr) throw catErr;
     if (!category)
       return res.status(404).json({ message: "❌ Kategori tidak ditemukan" });
 
-    const { data: products } = await supabase
+    // Ambil produk + rating
+    const { data: products, error: prodErr } = await supabase
       .from("products")
-      .select("*")
+      .select(`
+        *,
+        ratings!left (
+          rating
+        )
+      `)
       .eq("category_id", category_id);
 
+    if (prodErr) throw prodErr;
+
+    // Hitung avg rating + total rating
+    const productsWithExtras = products.map((p) => {
+      let avgRating = null;
+      if (p.ratings && p.ratings.length > 0) {
+        const sum = p.ratings.reduce((acc, r) => acc + r.rating, 0);
+        avgRating = sum / p.ratings.length;
+      }
+      return {
+        ...p,
+        avg_rating: avgRating ? Number(avgRating.toFixed(2)) : null,
+        total_ratings: p.ratings ? p.ratings.length : 0,
+      };
+    });
+
+    // Attach varian + stok + diskon
     const productsWithVariants =
-      await attachVariantsStockDiscountWithRealDiscount(products);
+      await attachVariantsStockDiscountWithRealDiscount(productsWithExtras);
 
     return res.status(200).json({
       message: `✅ Ditemukan ${products.length} produk dalam kategori "${category.name}"`,
@@ -369,11 +504,16 @@ router.get("/by-category/:category_id", async (req, res) => {
       products: productsWithVariants,
     });
   } catch (error) {
-    return res
-      .status(500)
-      .json({ message: "❌ Server error", error: error.message });
+    console.error("❌ Error by-category:", error);
+    return res.status(500).json({
+      message: "❌ Server error",
+      error: error.message,
+    });
   }
 });
+
+
+// Produk terkait (suggestions)
 
 router.get("/:id", async (req, res) => {
   const { id } = req.params;
@@ -497,74 +637,107 @@ router.get("/:productId/ratings", async (req, res) => {
 router.get("/:id/suggestions", async (req, res) => {
   const { id } = req.params;
   try {
-    // Ambil produk utama
-    const { data: product } = await supabase
+    // Ambil produk utama + rating
+    const { data: product, error: prodErr } = await supabase
       .from("products")
-      .select("*")
+      .select(`
+        *,
+        ratings!left (
+          rating
+        )
+      `)
       .eq("id", id)
       .single();
 
+    if (prodErr) throw prodErr;
     if (!product) {
       return res.status(404).json({ message: "❌ Produk tidak ditemukan" });
     }
 
-    // ✅ ambil field nama sesuai database
-    const productName = product.product_name;
+    // Hitung avg rating produk utama
+    let avgRating = null;
+    if (product.ratings && product.ratings.length > 0) {
+      const sum = product.ratings.reduce((acc, r) => acc + r.rating, 0);
+      avgRating = sum / product.ratings.length;
+    }
+    const baseProduct = {
+      id: product.id,
+      name: product.product_name,
+      avg_rating: avgRating ? Number(avgRating.toFixed(2)) : null,
+      total_ratings: product.ratings ? product.ratings.length : 0,
+    };
 
-    if (!productName) {
+    if (!product.product_name) {
       return res.status(400).json({
         message:
           "❌ Produk tidak punya field product_name untuk pencarian terkait",
       });
     }
 
-    // Pisahkan nama jadi kata-kata unik (abaikan yg terlalu pendek)
-    const keywords = productName.split(" ").filter((w) => w.length > 2);
+    // Buat keyword dari nama produk
+    const keywords = product.product_name
+      .split(" ")
+      .filter((w) => w.length > 2);
 
     if (!keywords.length) {
       return res.status(200).json({
         message: "✅ Tidak ada keyword relevan untuk produk terkait",
-        base_product: { id: product.id, name: productName },
+        base_product: baseProduct,
         suggestions: [],
       });
     }
 
-    // Buat filter OR (contoh: product_name.ilike.%Wafer%,product_name.ilike.%Tango%)
+    // Buat OR filter: product_name.ilike.%<kw>%
     const orFilter = keywords
       .map((kw) => `product_name.ilike.%${kw}%`)
       .join(",");
 
-    const { data: relatedProducts, error } = await supabase
+    // Ambil produk terkait + rating
+    const { data: relatedProducts, error: relErr } = await supabase
       .from("products")
-      .select("*")
+      .select(`
+        *,
+        ratings!left (
+          rating
+        )
+      `)
       .or(orFilter)
       .neq("id", id)
       .limit(10);
 
-    if (error) {
-      return res.status(500).json({
-        message: "❌ Gagal mengambil produk terkait",
-        error: error.message,
-      });
-    }
+    if (relErr) throw relErr;
 
-    const productsWithVariants = relatedProducts?.length
-      ? await attachVariantsStockDiscountWithRealDiscount(relatedProducts)
-      : [];
+    // Hitung avg rating
+    const relatedWithExtras = relatedProducts.map((p) => {
+      let avgRating = null;
+      if (p.ratings && p.ratings.length > 0) {
+        const sum = p.ratings.reduce((acc, r) => acc + r.rating, 0);
+        avgRating = sum / p.ratings.length;
+      }
+      return {
+        ...p,
+        avg_rating: avgRating ? Number(avgRating.toFixed(2)) : null,
+        total_ratings: p.ratings ? p.ratings.length : 0,
+      };
+    });
+
+    // Attach varian + stok + diskon
+    const productsWithVariants =
+      await attachVariantsStockDiscountWithRealDiscount(relatedWithExtras);
 
     return res.status(200).json({
       message: `✅ ${productsWithVariants.length} produk terkait ditemukan`,
-      base_product: { id: product.id, name: productName },
+      base_product: baseProduct,
       suggestions: productsWithVariants,
     });
   } catch (error) {
+    console.error("❌ Error suggestions:", error);
     return res.status(500).json({
       message: "❌ Gagal mengambil produk terkait",
       error: error.message,
     });
   }
 });
-
 // === ROUTE UPDATE PRODUK ===
 // === ROUTE UPDATE PRODUK (Konversi semua gambar ke WebP) ===
 router.put("/:id", uploadForEdit, async (req, res) => {
