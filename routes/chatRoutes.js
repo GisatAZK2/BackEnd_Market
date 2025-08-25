@@ -1,70 +1,52 @@
-const express = require("express");
-const phoenixService = require("../service/phoenixService");
+const { createProxyMiddleware } = require("http-proxy-middleware");
+const { createProxyServer } = require("http-proxy");
 
-const router = express.Router();
+module.exports = (app, server) => {
+  const GO_CHAT_SERVICE =
+    "http://localhost:8080";
 
-// GET /api/chats
-router.get("/", async (req, res) => {
-  try {
-    const chats = await phoenixService.listChats();
-    res.json(chats);
-  } catch (err) {
-    console.error("❌ Error fetch chats:", err);
-    res.status(500).json({ error: "Gagal ambil chat" });
-  }
-});
+  console.log("🔌 Proxy target Go service:", GO_CHAT_SERVICE);
 
-// GET /api/chats/:id
-router.get("/:id", async (req, res) => {
-  const { id } = req.params;
-  try {
-    const chat = await phoenixService.getChat(id);
-    res.json(chat);
-  } catch (err) {
-    console.error("❌ Error fetch chat:", err);
-    res.status(500).json({ error: "Gagal ambil chat" });
-  }
-});
+  // --- Proxy REST API ---
+  // Customer routes
+  app.use(
+  ["/chats", "/messages"],
+  createProxyMiddleware({
+    target: GO_CHAT_SERVICE,
+    changeOrigin: true,
+    pathRewrite: (path, req) => path, // biarin path asli
+  })
+);
 
-// POST /api/chats
-router.post("/", async (req, res) => {
-  try {
-    const chat = await phoenixService.createChat(req.body);
-    res.json(chat);
-  } catch (err) {
-    console.error("❌ Error create chat:", err);
-    res.status(400).json({ error: "Gagal buat chat", details: err });
-  }
-});
+app.use(
+  ["/seller/v1/chats", "/seller/v1/messages"],
+  createProxyMiddleware({
+    target: GO_CHAT_SERVICE,
+    changeOrigin: true,
+    pathRewrite: (path, req) => path, // biarin path asli juga
+  })
+);
 
-// GET /api/messages?chat_id=123
-router.get("/messages", async (req, res) => {
-  const { chat_id } = req.query;
-  if (!chat_id) return res.status(400).json({ error: "chat_id wajib" });
 
-  try {
-    const messages = await phoenixService.listMessages(chat_id);
-    res.json(messages);
-  } catch (err) {
-    console.error("❌ Error fetch messages:", err);
-    res.status(500).json({ error: "Gagal ambil messages" });
-  }
-});
+  // --- Proxy WebSocket ---
+  const proxy = createProxyServer({
+    target: GO_CHAT_SERVICE,
+    ws: true,
+    changeOrigin: true,
+  });
 
-// POST /api/messages
-router.post("/messages", async (req, res) => {
-  const { chat_id, sender_id, body } = req.body;
-  if (!chat_id || !sender_id || !body) {
-    return res.status(400).json({ error: "chat_id, sender_id, dan body wajib" });
-  }
+  proxy.on("error", (err) => {
+    console.error("❌ Proxy error:", err.message);
+  });
 
-  try {
-    const message = await phoenixService.sendMessage(chat_id, { sender_id, body });
-    res.json(message);
-  } catch (err) {
-    console.error("❌ Error send message:", err);
-    res.status(500).json({ error: "Gagal kirim message" });
-  }
-});
+  server.on("upgrade", (req, socket, head) => {
+    console.log("⚡️ Incoming WS upgrade:", req.url);
 
-module.exports = router;
+    // Bisa bedain path ws
+    if (req.url.startsWith("/ws-seller") || req.url.startsWith("/ws-customer")) {
+      req.url = "/ws"; // arahkan ke Go
+    }
+
+    proxy.ws(req, socket, head);
+  });
+};

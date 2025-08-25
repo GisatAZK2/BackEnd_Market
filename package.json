@@ -29,6 +29,8 @@
     "dotenv": "^16.5.0",
     "express": "^5.1.0",
     "google-auth-library": "^10.2.1",
+    "http": "^0.0.1-security",
+    "http-proxy-middleware": "^3.0.5",
     "install": "^0.13.0",
     "jsonwebtoken": "^9.0.2",
     "luxon": "^3.7.1",
