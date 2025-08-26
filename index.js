@@ -4,8 +4,8 @@ const bodyParser = require("body-parser");
 const cookieParser = require("cookie-parser");
 const apicache = require("apicache");
 const path = require("path");
+const http = require("http");
 require("dotenv").config();
-
 
 // === Middleware & Utils ===
 const requireApiKey = require("./middleware/requireApiKey");
@@ -24,7 +24,7 @@ const search = require("./routes/search");
 const clean = require("./utils/cleanup");
 const order = require("./routes/orderRoutes");
 const share = require("./routes/ogpmeta");
-//const chat = require("./routes/chatRoutes.js");
+const chatProxy = require("./routes/chatRoutes.js"); // proxy chat
 const cart = require("./routes/cart");
 const ratingcustomer = require("./routes/ratingcustomer.js");
 const discount = require("./routes/discount");
@@ -39,14 +39,17 @@ const promoteproductseller = require("./routes/seller/promote.js");
 const productseller = require("./routes/seller/product.js");
 const ratingselelr = require("./routes/seller/rating.js");
 
+// === App & Server ===
 const app = express();
-startCronJobs();
+const server = http.createServer(app);
 
+// Jalankan cron job otomatis
+startCronJobs();
 
 // === CORS ORIGINS ===
 const allowedOrigins = process.env.CORS_ORIGIN
   ? process.env.CORS_ORIGIN.split(",").map((link) =>
-      link.trim().replace(/\/$/, ""),
+      link.trim().replace(/\/$/, "")
     )
   : [];
 
@@ -82,10 +85,13 @@ const corsOptions = {
   optionsSuccessStatus: 200,
 };
 
-// === Middleware global ===
+// === Middleware global (pasang paling awal) ===
 app.use(cors(corsOptions));
 app.use(bodyParser.json());
 app.use(cookieParser());
+
+// === Mount chat proxy (harus setelah CORS tapi sebelum requireApiKey) ===
+chatProxy(app, server);
 
 // === favicon.ico ===
 app.get("/favicon.ico", (req, res) => {
@@ -105,11 +111,16 @@ app.use(
     }
     next();
   },
-  share,
+  share
 );
 
-// === Middleware API key (semua route wajib pakai) ===
-app.use(requireApiKey);
+// === Middleware API key (skip /share dan /chat) ===
+app.use((req, res, next) => {
+  if (req.path.startsWith("/share")) return next();
+  if (req.path.startsWith("/chat") || req.path.startsWith("/chats") || req.path.startsWith("/messages"))
+    return next(); // skip API key untuk proxy chat
+  return requireApiKey(req, res, next);
+});
 
 // === Middleware rate limiter (skip /forum-pendaftaran) ===
 app.use((req, res, next) => {
@@ -128,10 +139,9 @@ app.use("/categories", cache("10 minutes"), category);
 app.use("/search", cache("2 minutes"), search);
 app.use("/clean", clean);
 app.use("/order", order);
-//app.use("/chat", chat);
 app.use("/cart", cache("10 seconds"), cart);
 app.use("/discount", discount);
-app.use("/rating",ratingcustomer);
+app.use("/rating", ratingcustomer);
 app.use("/seller", cache("10 seconds"), sellerWithProductsRoutes);
 
 // === Seller V1 routes (nested router) ===
@@ -149,4 +159,4 @@ app.use("/seller/V1", sellerRouter);
 
 // === Start server ===
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`🚀 API running on port ${PORT}`));
+server.listen(PORT, () => console.log(`🚀 API running on port ${PORT}`));
