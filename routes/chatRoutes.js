@@ -5,7 +5,7 @@ const cookieParser = require("cookie-parser");
 
 module.exports = (app, server) => {
   // Ambil dari environment variable, kasih default ke localhost:8080
-  const GO_CHAT_SERVICE = "http://localhost:8080";
+  const GO_CHAT_SERVICE = process.env.GO_CHAT_SERVICE || "http://localhost:8080";
 
   console.log("🔌 Proxy target Go service:", GO_CHAT_SERVICE);
 
