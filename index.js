@@ -85,21 +85,8 @@ const corsOptions = {
   },
   credentials: true,
   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization", "x-api-key"], // ✅ fix preflight
   optionsSuccessStatus: 200,
 };
-
-// === Debug CORS preflight ===
-app.use((req, res, next) => {
-  if (req.method === "OPTIONS") {
-    console.log("🔎 Preflight request:", {
-      origin: req.headers.origin,
-      "access-control-request-method": req.headers["access-control-request-method"],
-      "access-control-request-headers": req.headers["access-control-request-headers"],
-    });
-  }
-  next();
-});
 
 // === Middleware global ===
 app.use(cors(corsOptions));
