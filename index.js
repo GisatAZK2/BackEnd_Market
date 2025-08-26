@@ -128,7 +128,7 @@ app.use("/categories", cache("10 minutes"), category);
 app.use("/search", cache("2 minutes"), search);
 app.use("/clean", clean);
 app.use("/order", order);
-app.use("/chat", chat);
+//app.use("/chat", chat);
 app.use("/cart", cache("10 seconds"), cart);
 app.use("/discount", discount);
 app.use("/rating",ratingcustomer);
