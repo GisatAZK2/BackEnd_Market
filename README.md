@@ -213,7 +213,7 @@ Cookie harus di-encode dalam format URL-encoded JSON.
     - `500 Internal Server Error`: Kesalahan database atau penghapusan file di Supabase.
 
 ### 4. WebSocket
-- **Rute**: `/ws` (diakses melalui `ws://localhost:3000/ws-seller` untuk seller atau `ws://localhost:3000/ws-customer` untuk customer)
+- **Rute**: `/ws` (diakses melalui `ws://backendmarket-production.up.railway.app/ws-seller` untuk seller atau `ws://backendmarket-production.up.railway.app/ws-customer` untuk customer)
 - **Deskripsi**: Menangani komunikasi real-time untuk chat, termasuk subscribe ke chat, mengirim pesan, dan mengambil riwayat pesan.
 - **Header**:
   - `Cookie: user_info=<encoded_json>` atau `Cookie: seller_info=<encoded_json>`
