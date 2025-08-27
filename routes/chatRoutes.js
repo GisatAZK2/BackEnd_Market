@@ -10,34 +10,41 @@ module.exports = (app, server) => {
 
   // === Middleware khusus chat ===
   app.use(
-    cors({
-      origin: (origin, callback) => {
-        if (!origin) return callback(null, true);
+  cors({
+    origin: (origin, callback) => {
+      if (!origin) return callback(null, true);
 
-        // semua origin yang ada di .env CORS_ORIGIN
-        const allowedOrigins = process.env.CORS_ORIGIN
-          ? process.env.CORS_ORIGIN.split(",").map((o) => o.trim())
-          : [];
+      const allowedOrigins = process.env.CORS_ORIGIN
+        ? process.env.CORS_ORIGIN.split(",").map((o) => o.trim())
+        : [];
 
-        if (
-          process.env.NODE_ENV !== "production" &&
-          origin.includes("localhost")
-        ) {
-          return callback(null, true);
-        }
+      if (
+        process.env.NODE_ENV !== "production" &&
+        origin.includes("localhost")
+      ) {
+        return callback(null, true);
+      }
 
-        if (allowedOrigins.includes(origin)) {
-          return callback(null, true);
-        }
+      if (allowedOrigins.includes(origin)) {
+        return callback(null, true);
+      }
 
-        console.warn("❌ CORS blocked for CHAT origin:", origin);
-        return callback(new Error("Not allowed by CORS (chat)"));
-      },
-      credentials: true,
-      allowedHeaders: ["Content-Type", "x-api-key"],
-      methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    })
-  );
+      console.warn("❌ CORS blocked for CHAT origin:", origin);
+      return callback(new Error("Not allowed by CORS (chat)"));
+    },
+    credentials: true,
+    // 🔥 tambahin semua header umum biar gak ditolak preflight
+    allowedHeaders: [
+      "Content-Type",
+      "Authorization",
+      "X-Requested-With",
+      "Accept",
+      "Origin",
+      "x-api-key",
+    ],
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+  })
+);
 
   app.use(cookieParser());
 
