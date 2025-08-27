@@ -24,7 +24,7 @@ const search = require("./routes/search");
 const clean = require("./utils/cleanup");
 const order = require("./routes/orderRoutes");
 const share = require("./routes/ogpmeta");
-const chatProxy = require("./routes/chatRoutes.js"); // proxy chat
+const chatProxy = require("./routes/chatRoutes.js");
 const cart = require("./routes/cart");
 const ratingcustomer = require("./routes/ratingcustomer.js");
 const discount = require("./routes/discount");
@@ -46,14 +46,11 @@ const server = http.createServer(app);
 // Jalankan cron job otomatis
 startCronJobs();
 
-// === Mount chat proxy dulu (tanpa CORS global) ===
+// === CHAT ROUTE BEBAS ===
+// pasang proxy duluan, biar gak kena middleware global
 chatProxy(app, server);
 
-// === Middleware umum ===
-app.use(bodyParser.json());
-app.use(cookieParser());
-
-// === CORS untuk route non-chat ===
+// === CORS ORIGINS ===
 const allowedOrigins = process.env.CORS_ORIGIN
   ? process.env.CORS_ORIGIN.split(",").map((link) =>
       link.trim().replace(/\/$/, "")
@@ -79,6 +76,7 @@ const corsOptions = {
       return callback(null, true);
     }
 
+    // check daftar allowed
     if (allowedOrigins.includes(cleanedOrigin)) {
       return callback(null, true);
     }
@@ -91,12 +89,14 @@ const corsOptions = {
   optionsSuccessStatus: 200,
 };
 
-// Pasang CORS untuk semua route kecuali /chat
+// === Middleware global (skip /chat) ===
 app.use((req, res, next) => {
-  if (req.path.startsWith("/chat") || req.path.startsWith("/chats") || req.path.startsWith("/messages"))
-    return next(); // skip CORS untuk chat
+  if (req.path.startsWith("/chat")) return next();
   return cors(corsOptions)(req, res, next);
 });
+
+app.use(bodyParser.json());
+app.use(cookieParser());
 
 // === favicon.ico ===
 app.get("/favicon.ico", (req, res) => {
@@ -119,17 +119,17 @@ app.use(
   share
 );
 
-// === Middleware API key ===
+// === Middleware API key (skip /share dan /chat) ===
 app.use((req, res, next) => {
   if (req.path.startsWith("/share")) return next();
-  if (req.path.startsWith("/chat") || req.path.startsWith("/chats") || req.path.startsWith("/messages"))
-    return next(); // skip API key untuk chat
+  if (req.path.startsWith("/chat")) return next();
   return requireApiKey(req, res, next);
 });
 
-// === Middleware rate limiter ===
+// === Middleware rate limiter (skip /forum-pendaftaran & /chat) ===
 app.use((req, res, next) => {
   if (req.path.startsWith("/forum-pendaftaran")) return next();
+  if (req.path.startsWith("/chat")) return next();
   return rateLimiter(req, res, next);
 });
 
