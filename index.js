@@ -38,6 +38,11 @@ const promoteproductseller = require("./routes/seller/promote.js");
 const productseller = require("./routes/seller/product.js");
 const ratingselelr = require("./routes/seller/rating.js");
 
+
+// ===== Global Sticker ====
+const sticker = require("./routes/sticker.js");
+
+
 // === App & Server ===
 const app = express();
 const server = http.createServer(app);
@@ -130,6 +135,7 @@ app.use("/search", cache("2 minutes"), search);
 app.use("/clean", clean);
 app.use("/order", order);
 app.use("/cart", cache("10 seconds"), cart);
+app.use("/sticker", sticker);
 app.use("/discount", discount);
 app.use("/rating", ratingcustomer);
 app.use("/seller", cache("10 seconds"), sellerWithProductsRoutes);
