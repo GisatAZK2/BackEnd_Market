@@ -24,7 +24,7 @@ const search = require("./routes/search");
 const clean = require("./utils/cleanup");
 const order = require("./routes/orderRoutes");
 const share = require("./routes/ogpmeta");
-const chatProxy = require("./routes/chatRoutes.js"); // proxy chat
+const chatProxy = require("./routes/chatRoutes.js");
 const cart = require("./routes/cart");
 const ratingcustomer = require("./routes/ratingcustomer.js");
 const discount = require("./routes/discount");
@@ -45,6 +45,9 @@ const server = http.createServer(app);
 
 // Jalankan cron job otomatis
 startCronJobs();
+
+// Mount chat proxy (harus pakai server, bukan cuma app)
+chatProxy(app, server);
 
 // === CORS ORIGINS ===
 const allowedOrigins = process.env.CORS_ORIGIN
@@ -85,13 +88,10 @@ const corsOptions = {
   optionsSuccessStatus: 200,
 };
 
-// === Middleware global (pasang paling awal) ===
+// === Middleware global ===
 app.use(cors(corsOptions));
 app.use(bodyParser.json());
 app.use(cookieParser());
-
-// === Mount chat proxy (harus setelah CORS tapi sebelum requireApiKey) ===
-chatProxy(app, server);
 
 // === favicon.ico ===
 app.get("/favicon.ico", (req, res) => {
@@ -114,11 +114,10 @@ app.use(
   share
 );
 
-// === Middleware API key (skip /share dan /chat) ===
+// === Middleware API key (semua route wajib pakai kecuali /share dan /chat) ===
 app.use((req, res, next) => {
-  if (req.path.startsWith("/share")) return next();
-  if (req.path.startsWith("/chat") || req.path.startsWith("/chats") || req.path.startsWith("/messages"))
-    return next(); // skip API key untuk proxy chat
+  if (req.path.startsWith("/share")) return next(); // skip /share
+  if (req.path.startsWith("/chat")) return next();  // skip /chat (WebSocket + REST)
   return requireApiKey(req, res, next);
 });
 

@@ -4,33 +4,19 @@ const cors = require("cors");
 const cookieParser = require("cookie-parser");
 
 module.exports = (app, server) => {
-  // Ambil target Go service dari ENV (default ke localhost:8080)
-  const GO_CHAT_SERVICE =
-    process.env.GO_CHAT_SERVICE || "http://localhost:8080";
+  // ====== Ambil dari ENV ======
+  const GO_CHAT_SERVICE = process.env.GO_CHAT_SERVICE || "http://localhost:8080";
+  const corsOrigins = process.env.CORS_ORIGIN
+    ? process.env.CORS_ORIGIN.split(",").map((o) => o.trim())
+    : //["http://localhost:5173"]; // default kalau .env kosong
 
   console.log("🔌 Proxy target Go service:", GO_CHAT_SERVICE);
-
-  // ====== Ambil allowed origins dari ENV ======
-  const allowedOrigins = process.env.CORS_ORIGIN
-    ? process.env.CORS_ORIGIN.split(",").map((o) =>
-        o.trim().replace(/\/$/, "")
-      )
-    : [];
+  console.log("🌍 Allowed CORS origins:", corsOrigins);
 
   // ====== CORS Middleware ======
   app.use(
     cors({
-      origin: (origin, callback) => {
-        if (!origin) return callback(null, true); // skip kalau request non-browser (misal curl/Postman)
-
-        const cleaned = origin.replace(/\/$/, "");
-        if (allowedOrigins.includes(cleaned)) {
-          return callback(null, true);
-        }
-
-        console.warn("❌ CORS blocked for:", origin);
-        return callback(new Error("Not allowed by CORS"));
-      },
+      origin: corsOrigins,
       credentials: true,
       allowedHeaders: ["Content-Type", "x-api-key"],
       methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
@@ -73,9 +59,8 @@ module.exports = (app, server) => {
   server.on("upgrade", (req, socket, head) => {
     console.log("⚡️ Incoming WS upgrade:", req.url);
 
-    // Mapping custom WS endpoint → Go WebSocket
     if (req.url.startsWith("/ws-seller") || req.url.startsWith("/ws-customer")) {
-      req.url = "/ws"; // arahkan ke Go service
+      req.url = "/ws"; // arahkan ke Go
     }
 
     proxy.ws(req, socket, head);
