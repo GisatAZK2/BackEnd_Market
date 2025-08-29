@@ -4,7 +4,7 @@ const cors = require("cors");
 const cookieParser = require("cookie-parser");
 
 module.exports = (app, server) => {
-  const GO_CHAT_SERVICE = "http://localhost:8080";
+  const GO_CHAT_SERVICE = process.env.GO_CHAT_SERVICE || "http://localhost:8080";
 
   // === CORS untuk REST API (chat) ===
   app.use(
