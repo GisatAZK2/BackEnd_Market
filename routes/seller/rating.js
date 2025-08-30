@@ -23,20 +23,21 @@ router.post("/ratings/:id/reply", async (req, res) => {
       return res.status(400).json({ message: "⚠️ Balasan tidak boleh kosong." });
     }
 
-    // --- Step 1: cek rating via orders (normal case)
-    let { data: rating } = await supabase
+    // ========== STEP 1: Cek rating via orders ==========
+    let { data: rating, error: ratingErr } = await supabase
       .from("ratings")
       .select(`
         id,
         order_id,
-        orders!inner(seller_id)
+        product_snapshot,
+        orders!inner (seller_id)
       `)
       .eq("id", ratingId)
       .eq("orders.seller_id", sellerInfo.id)
       .maybeSingle();
 
-    // --- Step 2: fallback cek via snapshot kalau order_id null
-    if (!rating) {
+    // ========== STEP 2: Jika rating tidak ada (mungkin orphan) ==========
+    if ((!rating || ratingErr) && !rating?.order_id) {
       const { data: orphanRating, error: orphanErr } = await supabase
         .from("ratings")
         .select("id, product_snapshot")
@@ -45,44 +46,30 @@ router.post("/ratings/:id/reply", async (req, res) => {
         .maybeSingle();
 
       if (orphanErr || !orphanRating) {
-        return res.status(403).json({ message: "⚠️ Rating bukan milik produk Anda." });
+        return res.status(403).json({ message: "⚠️ Rating tidak ditemukan atau bukan milik Anda." });
       }
 
+      // validasi product_snapshot -> product_id apakah milik seller
       const productId = orphanRating.product_snapshot?.product_id;
       if (!productId) {
-        return res.status(403).json({ message: "⚠️ Rating tidak valid." });
+        return res.status(403).json({ message: "⚠️ Rating orphan tidak valid." });
       }
 
-      // ambil name dari product
       const { data: product, error: productErr } = await supabase
         .from("products")
-        .select("name")
+        .select("id")
         .eq("id", productId)
+        .eq("seller_id", sellerInfo.id)
         .maybeSingle();
 
       if (productErr || !product) {
-        return res.status(403).json({ message: "⚠️ Produk tidak ditemukan." });
+        return res.status(403).json({ message: "⚠️ Produk orphan ini bukan milik Anda." });
       }
 
-      // ambil seller_name dari seller yang login
-      const { data: seller, error: sellerErr } = await supabase
-        .from("sellers")
-        .select("seller_name")
-        .eq("id", sellerInfo.id)
-        .maybeSingle();
-
-      if (sellerErr || !seller) {
-        return res.status(403).json({ message: "⚠️ Data seller tidak valid." });
-      }
-
-      if (product.name !== seller.seller_name) {
-        return res.status(403).json({ message: "⚠️ Rating bukan milik produk Anda." });
-      }
-
-      rating = orphanRating; // valid orphan rating
+      rating = orphanRating; // set rating valid untuk lanjut insert
     }
 
-    // --- Step 3: cek jika sudah ada reply
+    // ========== STEP 3: Cek sudah ada reply atau belum ==========
     const { data: existingReply } = await supabase
       .from("rating_replies")
       .select("id")
@@ -93,7 +80,7 @@ router.post("/ratings/:id/reply", async (req, res) => {
       return res.status(400).json({ message: "⚠️ Rating ini sudah dibalas." });
     }
 
-    // --- Step 4: insert reply
+    // ========== STEP 4: Insert reply ==========
     const { data, error } = await supabase
       .from("rating_replies")
       .insert([{ rating_id: ratingId, seller_id: sellerInfo.id, reply_text: replyText }])
@@ -105,7 +92,7 @@ router.post("/ratings/:id/reply", async (req, res) => {
 
     return res.status(200).json({
       message: "✅ Balasan berhasil ditambahkan.",
-      reply: data[0]
+      reply: data[0],
     });
   } catch (err) {
     return res.status(500).json({ message: "❌ Server error", error: err.message });
