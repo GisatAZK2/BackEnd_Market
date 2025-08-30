@@ -507,7 +507,6 @@ router.put(
     try {
       console.log("👉 Mulai proses update seller");
 
-      // Ambil data seller dari cookie
       const sellerInfo = req.cookies?.seller_info
         ? JSON.parse(req.cookies.seller_info)
         : null;
@@ -523,7 +522,6 @@ router.put(
       console.log("🔑 Seller ID dari param:", sellerId);
       console.log("🔑 Seller ID dari cookie:", sellerInfo.id);
 
-      // Pastikan ID dari URL sama dengan ID di cookie
       if (sellerId !== sellerInfo.id) {
         console.log("⚠️ Seller mencoba update data seller lain");
         return res.status(403).json({
@@ -554,7 +552,6 @@ router.put(
 
       const updatePayload = {};
 
-      // Basic fields
       if (email) updatePayload.email = email;
       if (name) updatePayload.name = name;
       if (business_name) updatePayload.business_name = business_name;
@@ -573,20 +570,16 @@ router.put(
       if (req.file) {
         console.log("🖼️ File upload diterima:", req.file.originalname);
         const filename = `store_${sellerId}_${Date.now()}.webp`;
-        console.log("📂 Nama file di storage:", filename);
 
-        // Konversi buffer ke WebP
-        console.log("⚙️ Konversi gambar ke WebP...");
         const buffer = await sharp(req.file.buffer)
           .webp({ quality: 80 })
           .toBuffer();
 
-        console.log("⬆️ Upload gambar ke Supabase...");
         const { error: uploadError } = await supabase.storage
           .from("store-photos")
           .upload(filename, buffer, {
             contentType: "image/webp",
-            upsert: true, // replace kalau sudah ada
+            upsert: true,
           });
 
         if (uploadError) {
@@ -597,41 +590,33 @@ router.put(
           });
         }
 
-        // Ambil URL publik
         const { data: publicUrl } = supabase.storage
           .from("store-photos")
           .getPublicUrl(filename);
 
-        console.log("✅ Gambar berhasil diupload, URL:", publicUrl.publicUrl);
         updatePayload.store_image_url = publicUrl.publicUrl;
-      } else {
-        console.log("ℹ️ Tidak ada file gambar diupload, skip image update");
       }
 
       // === Update wilayah ===
       if (provinsi_id) {
-        console.log("📍 Update provinsi:", provinsi_id);
         updatePayload.provinsi = await getWilayahName(
           "https://www.emsifa.com/api-wilayah-indonesia/api/provinces.json",
           provinsi_id
         );
       }
       if (kabupaten_id && provinsi_id) {
-        console.log("📍 Update kabupaten:", kabupaten_id);
         updatePayload.kabupaten = await getWilayahName(
           `https://www.emsifa.com/api-wilayah-indonesia/api/regencies/${provinsi_id}.json`,
           kabupaten_id
         );
       }
       if (kecamatan_id && kabupaten_id) {
-        console.log("📍 Update kecamatan:", kecamatan_id);
         updatePayload.kecamatan = await getWilayahName(
           `https://www.emsifa.com/api-wilayah-indonesia/api/districts/${kabupaten_id}.json`,
           kecamatan_id
         );
       }
       if (kelurahan_id && kecamatan_id) {
-        console.log("📍 Update kelurahan:", kelurahan_id);
         updatePayload.kelurahan = await getWilayahName(
           `https://www.emsifa.com/api-wilayah-indonesia/api/villages/${kecamatan_id}.json`,
           kelurahan_id
@@ -640,7 +625,7 @@ router.put(
 
       console.log("📤 Payload final yang akan diupdate:", updatePayload);
 
-      // === Update DB ===
+      // === Update DB seller ===
       const { data, error } = await supabase
         .from("sellers")
         .update(updatePayload)
@@ -653,6 +638,22 @@ router.put(
       }
 
       console.log("✅ Data seller berhasil diperbarui:", data);
+
+      // === Sinkronisasi seller_name di tabel products ===
+      if (name) {
+        console.log("🔄 Update semua produk seller dengan seller_name baru:", name);
+        const { error: productUpdateError } = await supabase
+          .from("products")
+          .update({ seller_name: name })
+          .eq("seller_id", sellerId);
+
+        if (productUpdateError) {
+          console.error("⚠️ Gagal sinkronisasi seller_name di products:", productUpdateError);
+          // jangan return error, biarkan update seller tetap berhasil
+        } else {
+          console.log("✅ Semua produk berhasil diupdate seller_name.");
+        }
+      }
 
       res.json({
         message: "✅ Data toko berhasil diperbarui",
