@@ -3,10 +3,9 @@ const { DateTime } = require("luxon");
 const supabase = require("../config/supabase");
 
 /* ===== RESET STOK & NONAKTIFKAN FLASH SALE YANG HABIS ===== */
-/* ===== RESET FLASH SALE EXPIRED ===== */
 cron.schedule("0 * * * *", async () => {
   console.log("[CRON] Cek & nonaktifkan flash sale expired...");
-  const now = DateTime.utc().toISO();
+  const now = DateTime.now().setZone("Asia/Jakarta").toISO();
 
   const { data: expiredSessions, error: expiredErr } = await supabase
     .from("flash_sales")
@@ -26,7 +25,41 @@ cron.schedule("0 * * * *", async () => {
 
   const expiredIds = expiredSessions.map((s) => s.id);
 
-  // Hapus semua produk dari flash sale expired
+  // Ambil semua produk dari sesi expired
+  const { data: expiredProducts, error: prodErr } = await supabase
+    .from("flash_sale_products")
+    .select("product_id, variant_id, flash_stock")
+    .in("flash_sale_id", expiredIds);
+
+  if (prodErr) {
+    console.error("❌ Gagal ambil produk flash sale:", prodErr);
+    return;
+  }
+
+  // Balikin stok ke produk utama atau variant
+  for (const p of expiredProducts) {
+    try {
+      if (p.variant_id) {
+        // Produk variant
+        const { error: vErr } = await supabase.rpc("increment_variant_stock", {
+          p_variant_id: p.variant_id,
+          qty: p.flash_stock,
+        });
+        if (vErr) throw vErr;
+      } else {
+        // Produk biasa
+        const { error: pErr } = await supabase.rpc("increment_stock", {
+          p_id: p.product_id,
+          qty: p.flash_stock,
+        });
+        if (pErr) throw pErr;
+      }
+    } catch (err) {
+      console.error("❌ Gagal kembalikan stok:", err);
+    }
+  }
+
+  // Hapus produk dari flash sale expired
   const { error: delErr } = await supabase
     .from("flash_sale_products")
     .delete()
@@ -37,7 +70,7 @@ cron.schedule("0 * * * *", async () => {
     return;
   }
 
-  // Nonaktifkan sesi
+  // Nonaktifkan sesi flash sale
   const { error: disableErr } = await supabase
     .from("flash_sales")
     .update({ status: "disabled" })
@@ -48,7 +81,7 @@ cron.schedule("0 * * * *", async () => {
     return;
   }
 
-  console.log(`🔄 Nonaktifkan ${expiredIds.length} sesi & hapus semua item flash sale.`);
+  console.log(`🔄 Nonaktifkan ${expiredIds.length} sesi & kembalikan stok produk/varian.`);
 });
 
 /* ===== GENERATE FLASH SALE SESSION HARIAN ===== */

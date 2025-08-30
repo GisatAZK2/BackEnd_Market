@@ -186,9 +186,10 @@ router.post("/:id/rating", upload.array("images"), async (req, res) => {
 // ======================
 router.get("/all", requireUser, async (req, res) => {
   try {
-    const { data: ratings } = await supabase
+    const { data: ratings, error } = await supabase
       .from("ratings")
-      .select(`
+      .select(
+        `
         id,
         order_id,
         order_item_id,
@@ -204,15 +205,21 @@ router.get("/all", requireUser, async (req, res) => {
           reply_text,
           created_at,
           seller_id,
-          sellers ( id, store_name, store_image_url )
+          sellers (
+            id,
+            store_name,
+            store_image_url
+          )
         )
-      `)
-      .eq("user_id", req.user.id)
-      .order("created_at", { ascending: false })
-      .throwOnError();
+      `
+      )
+      .eq("user_id", req.user.id) // hanya cek user_id
+      .order("created_at", { ascending: false });
+
+    if (error) throw error;
 
     res.status(200).json({
-      message: `✅ ${ratings.length} rating ditemukan`,
+      message: `✅ ${ratings?.length || 0} rating ditemukan`,
       ratings,
     });
   } catch (err) {
@@ -226,11 +233,13 @@ router.get("/all", requireUser, async (req, res) => {
 // ======================
 router.get("/order/:orderId", requireUser, async (req, res) => {
   try {
-    const orderId = req.params.orderId; // langsung pakai string UUID
+    const { orderId } = req.params;
 
-    const { data: ratings, error } = await supabase
+    // Ambil rating berdasarkan orderId & userId
+    let { data: ratings, error } = await supabase
       .from("ratings")
-      .select(`
+      .select(
+        `
         id,
         order_id,
         order_item_id,
@@ -246,17 +255,59 @@ router.get("/order/:orderId", requireUser, async (req, res) => {
           reply_text,
           created_at,
           seller_id,
-          sellers ( id, store_name, store_image_url )
+          sellers (
+            id,
+            store_name,
+            store_image_url
+          )
         )
-      `)
-      .eq("user_id", req.user.id)
-      .eq("order_id", orderId) // filter langsung ke kolom ratings.order_id
+      `
+      )
+      .match({ user_id: req.user.id, order_id: orderId })
       .order("created_at", { ascending: false });
 
     if (error) throw error;
 
+    // ✅ fallback: kalau rating kosong (mungkin order_id sudah dihapus),
+    // tetap tampilkan rating user tanpa filter order_id
+    if (!ratings?.length) {
+      const { data: fallback, error: fallbackErr } = await supabase
+        .from("ratings")
+        .select(
+          `
+          id,
+          order_id,
+          order_item_id,
+          product_id,
+          variant_id,
+          rating,
+          review_text,
+          review_images,
+          created_at,
+          product_snapshot,
+          rating_replies (
+            id,
+            reply_text,
+            created_at,
+            seller_id,
+            sellers (
+              id,
+              store_name,
+              store_image_url
+            )
+          )
+        `
+        )
+        .eq("user_id", req.user.id)
+        .order("created_at", { ascending: false });
+
+      if (fallbackErr) throw fallbackErr;
+
+      ratings = fallback;
+    }
+
     res.status(200).json({
-      message: `✅ ${ratings.length} rating untuk order ${orderId}`,
+      message: `✅ ${ratings?.length || 0} rating untuk order ${orderId} (atau fallback user_id)`,
       ratings,
     });
   } catch (err) {

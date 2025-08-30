@@ -700,11 +700,23 @@ router.post("/flash-sale/register", requireSeller, async (req, res) => {
             return res.status(400).json({ message: `❌ Produk ${item.product_id} (variant ${v.variant_id}) sudah terdaftar di flash sale ini` });
           }
 
-          // Kurangi stock variant
-          const { data: variant } = await supabase.from("product_variants").select("*").eq("id", v.variant_id).single();
+          // 🔹 Cek stock variant
+          const { data: variant } = await supabase.from("product_variants").select("id, stock").eq("id", v.variant_id).single();
           if (!variant) continue;
 
-          await supabase.from("product_variants").update({ variant_stock: (variant.variant_stock || 0) - v.stock }).eq("id", v.variant_id);
+          if ((variant.stock || 0) - v.stock < 0) {
+            return res.status(400).json({ message: `❌ Stock variant ${v.variant_id} untuk product ${item.product_id} tidak mencukupi` });
+          }
+
+          // 🔹 Panggil function decrement_variant_stock
+          const { error: decVarErr } = await supabase.rpc("decrement_variant_stock", {
+            p_variant_id: v.variant_id,
+            qty: v.stock,
+          });
+
+          if (decVarErr) {
+            return res.status(500).json({ message: `❌ Gagal mengurangi stock variant ${v.variant_id}`, error: decVarErr });
+          }
 
           rows.push({
             seller_id,
@@ -729,11 +741,23 @@ router.post("/flash-sale/register", requireSeller, async (req, res) => {
           return res.status(400).json({ message: `❌ Produk ${item.product_id} sudah terdaftar di flash sale ini` });
         }
 
-        // Kurangi stock produk
-        const { data: product } = await supabase.from("products").select("*").eq("id", item.product_id).single();
+        // 🔹 Cek stock produk
+        const { data: product } = await supabase.from("products").select("id, stock").eq("id", item.product_id).single();
         if (!product) continue;
 
-        await supabase.from("products").update({ stock: (product.stock || 0) - item.stock }).eq("id", item.product_id);
+        if ((product.stock || 0) - item.stock < 0) {
+          return res.status(400).json({ message: `❌ Stock produk ${item.product_id} tidak mencukupi` });
+        }
+
+        // 🔹 Panggil function decrement_stock
+        const { error: decProdErr } = await supabase.rpc("decrement_stock", {
+          p_id: item.product_id,
+          qty: item.stock,
+        });
+
+        if (decProdErr) {
+          return res.status(500).json({ message: `❌ Gagal mengurangi stock produk ${item.product_id}`, error: decProdErr });
+        }
 
         rows.push({
           seller_id,
@@ -760,6 +784,8 @@ router.post("/flash-sale/register", requireSeller, async (req, res) => {
     return res.status(500).json({ message: "❌ Terjadi kesalahan server", error: err.message });
   }
 });
+
+
 
 // Ambil Data Flash Sale Yang Avaible
 router.get("/flash-sale/date-list", async (req, res) => {
@@ -1096,7 +1122,7 @@ router.get("/flash-sale/:id/products/available", requireSeller, async (req, res)
 });
 
 /**
- * 📌 4. Edit flash sale (update name, waktu, timezone, status)
+ * 📌 4. Edit flash sale (update produk dalam flash sale)
  */
 router.put("/flash-sale/:id/products", requireSeller, async (req, res) => {
   try {
@@ -1132,7 +1158,6 @@ router.put("/flash-sale/:id/products", requireSeller, async (req, res) => {
     const rowsToUpdate = [];
 
     for (const item of items) {
-      // kalau ada variants
       if (item.variants && Array.isArray(item.variants) && item.variants.length > 0) {
         for (const v of item.variants) {
           if (!v.variant_id || v.stock === undefined || v.discount_percentage === undefined) {
@@ -1147,7 +1172,14 @@ router.put("/flash-sale/:id/products", requireSeller, async (req, res) => {
           const existing = existingMap.get(key);
 
           if (existing) {
-            // update
+            // Hitung selisih stok
+            const diff = v.stock - existing.flash_stock;
+            if (diff > 0) {
+              await supabase.rpc("decrement_variant_stock", { p_variant_id: v.variant_id, qty: diff });
+            } else if (diff < 0) {
+              await supabase.rpc("increment_variant_stock", { p_variant_id: v.variant_id, qty: Math.abs(diff) });
+            }
+
             rowsToUpdate.push({
               id: existing.id,
               flash_stock: v.stock,
@@ -1161,7 +1193,8 @@ router.put("/flash-sale/:id/products", requireSeller, async (req, res) => {
               return res.status(400).json({ message: `❌ Stok variant ${v.variant_id} tidak mencukupi` });
             }
 
-            // insert baru
+            await supabase.rpc("decrement_variant_stock", { p_variant_id: v.variant_id, qty: v.stock });
+
             rowsToInsert.push({
               seller_id,
               flash_sale_id,
@@ -1188,19 +1221,26 @@ router.put("/flash-sale/:id/products", requireSeller, async (req, res) => {
         const existing = existingMap.get(key);
 
         if (existing) {
-          // update
+          const diff = item.stock - existing.flash_stock;
+          if (diff > 0) {
+            await supabase.rpc("decrement_stock", { p_id: item.product_id, qty: diff });
+          } else if (diff < 0) {
+            await supabase.rpc("increment_stock", { p_id: item.product_id, qty: Math.abs(diff) });
+          }
+
           rowsToUpdate.push({
             id: existing.id,
             flash_stock: item.stock,
             discount_percentage: item.discount_percentage
           });
         } else {
-          // cek stok produk
           const { data: product } = await supabase.from("products").select("*").eq("id", item.product_id).single();
           if (!product) continue;
           if ((product.stock || 0) < item.stock) {
             return res.status(400).json({ message: `❌ Stok produk ${item.product_id} tidak mencukupi` });
           }
+
+          await supabase.rpc("decrement_stock", { p_id: item.product_id, qty: item.stock });
 
           rowsToInsert.push({
             seller_id,
@@ -1216,13 +1256,13 @@ router.put("/flash-sale/:id/products", requireSeller, async (req, res) => {
       }
     }
 
-    // Jalankan insert
+    // Insert
     if (rowsToInsert.length) {
       const { error: insertErr } = await supabase.from("flash_sale_products").insert(rowsToInsert);
       if (insertErr) return res.status(500).json({ message: "❌ Gagal menambah produk baru ke flash sale", error: insertErr });
     }
 
-    // Jalankan update
+    // Update
     for (const row of rowsToUpdate) {
       const { error: updateErr } = await supabase
         .from("flash_sale_products")
@@ -1246,12 +1286,9 @@ router.put("/flash-sale/:id/products", requireSeller, async (req, res) => {
   }
 });
 
+
 /**
- * 📌 5. Hapus flash sale
- * Mode:
- * - default => hapus semua produk
- * - query params products => hapus produk tertentu (non variant)
- * - query params produk dengan variant => hapus variant tertentu berdasarkan produk
+ * 📌 5. Hapus flash sale item (balikin stok otomatis)
  */
 router.delete("/flash-sale/:id", requireSeller, async (req, res) => {
   try {
@@ -1259,40 +1296,34 @@ router.delete("/flash-sale/:id", requireSeller, async (req, res) => {
     const seller_id = req.seller_id;
     const { product_id, variant_id } = req.query;
 
-    console.log("➡️ Params:", { id, seller_id, product_id, variant_id });
-
-    // Cek isi tabel untuk flash_sale_id dulu
-    const { data: rawItems, error: rawErr } = await supabase
+    const { data: rawItems } = await supabase
       .from("flash_sale_products")
-      .select("id, flash_sale_id, seller_id, product_id, variant_id")
+      .select("*")
       .eq("flash_sale_id", id);
-
-    console.log("➡️ Raw items in flash_sale_id", id, ":", rawItems, "err:", rawErr);
 
     if (!rawItems || rawItems.length === 0) {
       return res.status(404).json({ message: "⚠️ Tidak ada item dengan flash_sale_id itu" });
     }
 
-    // Baru apply filter seller_id, product_id, variant_id manual
     let items = rawItems.filter(i => i.seller_id === seller_id);
 
-    if (product_id) {
-      items = items.filter(i => i.product_id === product_id);
-    }
-
-    if (variant_id) {
-      items = items.filter(i => i.variant_id === variant_id);
-    }
-
-    console.log("➡️ After manual filter:", items);
+    if (product_id) items = items.filter(i => i.product_id === product_id);
+    if (variant_id) items = items.filter(i => i.variant_id === variant_id);
 
     if (!items.length) {
       return res.status(404).json({ message: "⚠️ Tidak ada item cocok untuk dihapus" });
     }
 
-    const idsToDelete = items.map(i => i.id);
-    console.log("➡️ IDs to delete:", idsToDelete);
+    // Balikin stok dulu sebelum hapus
+    for (const i of items) {
+      if (i.variant_id) {
+        await supabase.rpc("increment_variant_stock", { p_variant_id: i.variant_id, qty: i.flash_stock });
+      } else {
+        await supabase.rpc("increment_stock", { p_id: i.product_id, qty: i.flash_stock });
+      }
+    }
 
+    const idsToDelete = items.map(i => i.id);
     const { error: deleteErr } = await supabase
       .from("flash_sale_products")
       .delete()
@@ -1303,7 +1334,7 @@ router.delete("/flash-sale/:id", requireSeller, async (req, res) => {
     }
 
     return res.json({
-      message: `✅ ${idsToDelete.length} item berhasil dihapus dari flash_sale_id ${id}`,
+      message: `✅ ${idsToDelete.length} item berhasil dihapus & stok dikembalikan`,
       deleted_ids: idsToDelete,
     });
   } catch (err) {

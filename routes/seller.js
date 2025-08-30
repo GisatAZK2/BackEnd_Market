@@ -278,7 +278,7 @@ router.get("/:sellerId/ratings", async (req, res) => {
   }
 });
 
-// Follow seller
+// Follow seller (pakai upsert)
 router.post("/sellers/:id/follow", async (req, res) => {
   const userInfo = req.cookies?.user_info ? JSON.parse(req.cookies.user_info) : null;
   if (!userInfo?.id) {
@@ -287,15 +287,13 @@ router.post("/sellers/:id/follow", async (req, res) => {
 
   const sellerId = req.params.id;
 
-  // Cegah follow diri sendiri
   if (userInfo.seller_id === sellerId || userInfo.id === sellerId) {
     return res.status(400).json({ message: "❌ Tidak bisa follow diri sendiri." });
   }
 
-  // Insert follow (ignore duplicate jika sudah ada)
   const { error } = await supabase
     .from("follows")
-    .insert([{ user_id: userInfo.id, seller_id: sellerId }], { ignoreDuplicates: true });
+    .upsert([{ user_id: userInfo.id, seller_id: sellerId }], { onConflict: "user_id,seller_id" });
 
   if (error) return res.status(500).json({ message: "❌ Gagal follow.", error });
 
@@ -321,6 +319,7 @@ router.delete("/sellers/:id/unfollow", async (req, res) => {
 
   res.json({ message: "✅ Berhasil unfollow seller." });
 });
+
 
 
 
