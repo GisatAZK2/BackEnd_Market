@@ -1,288 +1,166 @@
-# Dokumentasi API Chat Service
+# Dokumentasi API Statistik Seller
 
-Dokumentasi ini menjelaskan cara melakukan request ke endpoint API chat service beserta format respons yang dihasilkan. Service ini mendukung komunikasi antara customer dan seller, termasuk pengiriman pesan teks, stiker, gambar, produk, dan varian produk. Semua endpoint memerlukan autentikasi melalui cookie (`user_info` untuk customer atau `seller_info` untuk seller).
+Berikut adalah dokumentasi untuk endpoint API statistik seller yang digunakan untuk mengambil data statistik penjualan dan pesanan harian seller. API ini dibangun menggunakan Express.js dengan integrasi Supabase untuk manajemen data dan NodeCache untuk caching.
 
 ## Base URL
-   = `https://backendmarket-production.up.railway.app`
- 
-
-## Autentikasi
-Semua request memerlukan cookie:
-- **Customer**: Cookie `user_info` berisi JSON dengan field `id`, `email`, `username`, `avatar`, dan opsional `seller_id`.
-- **Seller**: Cookie `seller_info` berisi JSON dengan field `id`, `email`, dan `store_name`.
-
-Cookie harus di-encode dalam format URL-encoded JSON.
+```
+https://backendmarket-production.up.railway.app/seller/V1/statsSeller
+```
 
 ## Endpoint
 
-### 1. Mendapatkan Daftar Chat
-- **Rute**: `GET /seller/v1/chats/chats/list` (untuk seller) atau `GET /chats/chats/list` (untuk customer)
-- **Deskripsi**: Mengambil daftar chat yang terkait dengan user atau seller berdasarkan cookie.
-- **Header**:
-  - `Content-Type: application/json`
-  - `Cookie: user_info=<encoded_json>` (untuk customer) atau `Cookie: seller_info=<encoded_json>` (untuk seller)
-- **Query Parameters**: Tidak ada
-- **Response**:
-  - **Status**: `200 OK`
-  - **Body** (JSON):
-    ```json
-    [
-      {
-        "id": "uuid",
-        "user_id": "uuid",
-        "seller_id": "uuid|null",
-        "admin_id": "uuid|null",
-        "type": "seller|admin",
-        "queue_number": "integer|null",
-        "created_at": "timestamp",
-        "username": "string|null", // hanya untuk seller
-        "avatar": "string|null", // hanya untuk seller
-        "store_name": "string|null", // hanya untuk customer
-        "store_image_url": "string|null" // hanya untuk customer
-      }
-    ]
-    ```
-  - **Error**:
-    - `400 Bad Request`: Tidak ada cookie `user_info` atau `seller_info`.
-    - `500 Internal Server Error`: Kesalahan database.
+### 1. GET /history-order-by-day
+Mengambil statistik penjualan harian seller untuk rentang waktu tertentu.
 
-### 2. Mengirim Pesan
-- **Rute**: `POST /chats/messages/send` (untuk customer) atau `POST /seller/v1/messages/messages/send` (untuk seller)
-- **Deskripsi**: Mengirim pesan teks, stiker, gambar, produk, atau varian produk. Mendukung upload file untuk gambar.
-- **Header**:
-  - Untuk teks/stiker/produk/varian:
-    - `Content-Type: application/json`
-    - `Cookie: user_info=<encoded_json>` (customer) atau `Cookie: seller_info=<encoded_json>` (seller)
-  - Untuk gambar:
-    - `Content-Type: multipart/form-data`
-    - `Cookie: user_info=<encoded_json>` atau `Cookie: seller_info=<encoded_json>`
-- **Body**:
-  - **JSON** (untuk teks/stiker/produk/varian):
-    ```json
+#### Parameter Query
+- `seller_id` (opsional): ID seller. Jika tidak disediakan, akan diambil dari cookie `seller_info` atau `user_info`.
+- `start` (opsional): Tanggal mulai (format: `YYYY-MM-DD`). Jika tidak disediakan, akan menggunakan rentang default.
+- `end` (opsional): Tanggal akhir (format: `YYYY-MM-DD`). Jika tidak disediakan, akan menggunakan tanggal hari ini.
+- `range` (opsional): Rentang waktu. Nilai yang didukung:
+  - `1week` atau `7days`: 7 hari terakhir.
+  - `7weeks`: 7 minggu terakhir.
+  - `1year` atau `year`: 1 tahun terakhir.
+  - `<jumlah>days`: Misalnya, `30days` untuk 30 hari terakhir.
+- `days` (opsional): Jumlah hari untuk rentang waktu (misalnya, `30` untuk 30 hari).
+
+#### Contoh Permintaan
+1. **Statistik Hari Ini**
+   ```
+   GET https://backendmarket-production.up.railway.app/seller/V1/statsSeller/history-order-by-day?range=1day
+   ```
+2. **Statistik 7 Hari Terakhir**
+   ```
+   GET https://backendmarket-production.up.railway.app/seller/V1/statsSeller/history-order-by-day?range=7days
+   ```
+3. **Statistik 1 Bulan Terakhir (30 Hari)**
+   ```
+   GET https://backendmarket-production.up.railway.app/seller/V1/statsSeller/history-order-by-day?range=30days
+   ```
+4. **Statistik 1 Tahun Terakhir**
+   ```
+   GET https://backendmarket-production.up.railway.app/seller/V1/statsSeller/history-order-by-day?range=1year
+   ```
+
+#### Contoh Respons
+```json
+{
+  "message": "✅ Statistik berhasil diambil.",
+  "seller_id": "12345",
+  "range": {
+    "start": "2025-08-25",
+    "end": "2025-08-31"
+  },
+  "summary": {
+    "total_days": 7,
+    "total_orders": 50,
+    "total_new_customers": 10,
+    "total_sales": 5000000.00
+  },
+  "per_day": [
     {
-      "chat_id": "uuid",
-      "sender_type": "user|seller",
-      "body": "string|uuid",
-      "type": "text|sticker|product|variant"
-    }
-    ```
-  - **Multipart Form** (untuk gambar):
-    - `chat_id`: UUID chat
-    - `sender_type`: `user` atau `seller`
-    - `body`: String (opsional, diabaikan jika ada file)
-    - `type`: String (opsional, otomatis `image` jika ada file)
-    - `file`: File gambar (PNG/JPG)
-- **Catatan**:
-  - Jika `chat_id` kosong dan `sender_type` adalah `user`, chat baru akan dibuat otomatis dengan tipe `seller` (memerlukan `seller_id` di cookie `user_info`).
-  - Untuk tipe `sticker`, `product`, atau `variant`, `body` harus berupa UUID yang valid dari entitas terkait.
-  - Untuk tipe `image`, `body` akan diisi dengan URL hasil upload ke Supabase.
-- **Response**:
-  - **Status**: `200 OK`
-  - **Body** (JSON):
-    ```json
+      "date": "2025-08-25",
+      "orders_count": 5,
+      "new_customers_count": 1,
+      "total_sales": 500000.00,
+      "cumulative_sales": 500000.00,
+      "cumulative_orders": 5
+    },
+    ...
+  ]
+}
+```
+
+#### Catatan
+- Data di-cache hingga tengah malam waktu Asia/Jakarta untuk mengurangi beban server.
+- Jika `seller_id` tidak valid atau tidak ada, respons akan mengembalikan status `401`.
+- Jika format tanggal tidak valid, respons akan mengembalikan status `400`.
+
+---
+
+### 2. GET /order/daily
+Mengambil daftar pesanan harian seller untuk hari ini.
+
+#### Parameter Query
+- Tidak ada parameter query yang diperlukan. Seller diidentifikasi melalui cookie `seller_info`.
+
+#### Contoh Permintaan
+```
+GET https://backendmarket-production.up.railway.app/seller/V1/statsSeller/order/daily
+```
+
+#### Contoh Respons
+```json
+{
+  "message": "✅ Daftar order harian seller berhasil diambil.",
+  "orders": [
     {
-      "id": "uuid",
-      "chat_id": "uuid",
-      "sender_type": "user|seller",
-      "sender_id": "uuid",
-      "body": "string|uuid|url",
-      "type": "text|sticker|product|variant|image",
-      "meta": {
-        // Untuk product:
-        "id": "uuid",
-        "product_name": "string",
-        "product_price": "integer",
-        "product_image_url": "string",
-        // Untuk variant:
-        "id": "uuid",
-        "variant_name": "string",
-        "variant_price": "float",
-        "variant_image_url": "string",
-        "product_id": "uuid",
-        // Untuk sticker:
-        "id": "uuid",
-        "sticker_name": "string",
-        "sticker_image_url": "string",
-        // Untuk image:
-        "url": "string"
+      "id": "67890",
+      "created_at": "2025-08-31T10:00:00.000Z",
+      "total_price": 150000,
+      "delivery_fee": 10000,
+      "status": "pending",
+      "pickup_method": "delivery",
+      "confirm_deadline": "2025-09-01T10:00:00.000Z",
+      "buyer_info": {
+        "alamat_lengkap": "Jalan Contoh No. 123",
+        "kelurahan": "Kelurahan Contoh",
+        "kecamatan": "Kecamatan Contoh",
+        "kota_kabupaten": "Kota Contoh",
+        "provinsi": "Provinsi Contoh",
+        "kode_pos": "12345"
       },
-      "created_at": "timestamp"
-    }
-    ```
-## Cara Upload File (Gambar, Stiker, Produk, Varian)
-
-### 2.1. Upload Gambar
-- **Metode**: Gunakan endpoint `POST /chats/messages/send` Untuk Customer / `POST /seller/v1/messages/messages/send` (untuk seller) dengan `Content-Type: multipart/form-data` apabila Anda Menggunakan Websocket Gunakan action `send`.
-- **Form Fields**:
-  - `chat_id`: UUID chat
-  - `sender_type`: `user` atau `seller`
-  - `file`: File gambar (PNG/JPG)
-  - `body`: Opsional (diabaikan jika ada file)
-  - `type`: Opsional (otomatis `image` jika ada file)
-- **Proses**:
-  - File diunggah ke Supabase bucket `chat-images`.
-  - URL publik file disimpan sebagai `body` pesan dengan tipe `image`.
-  - Meta berisi `{ "url": "public_url" }`.
-- **Contoh cURL**:
-  ```bash
-  curl -X POST http://localhost:3000/messages/send \
-    -H "Cookie: user_info=<encoded_json>" \
-    -F "chat_id=<uuid>" \
-    -F "sender_type=user" \
-    -F "file=@/path/to/image.jpg"
-  ```
-
-### 2.2. Mengirim Stiker
-- Gunakan endpoint `POST /chats/messages/send` Untuk Customer / `POST /seller/v1/messages/messages/send` (untuk seller) dengan `Content-Type: multipart/form-data` apabila Anda Menggunakan Websocket Gunakan action `send`.
-- **Body**:
-  - `type`: `sticker`
-  - `body`: UUID stiker yang valid (dari tabel `stickers`)
-- **Proses**:
-  - UUID divalidasi terhadap tabel `stickers`.
-  - Meta diisi dengan `{ "id": "uuid", "sticker_name": "string", "sticker_image_url": "string" }`.
-- **Contoh JSON**:
-  ```json
-  {
-    "chat_id": "uuid",
-    "sender_type": "user",
-    "body": "sticker_uuid",
-    "type": "sticker"
-  }
-  ```
-
-### 2.3. Mengirim Produk
-- **Metode**: Gunakan endpoint `POST /chats/messages/send` Untuk Customer / `POST /seller/v1/messages/messages/send` (untuk seller) dengan `Content-Type: multipart/form-data` apabila Anda Menggunakan Websocket Gunakan action `send`.
-- **Body**:
-  - `type`: `product`
-  - `body`: UUID produk yang valid (dari tabel `products`)
-- **Proses**:
-  - UUID divalidasi terhadap tabel `products`.
-  - Meta diisi dengan `{ "id": "uuid", "product_name": "string", "product_price": "integer", "product_image_url": "string" }`.
-- **Contoh JSON**:
-  ```json
-  {
-    "chat_id": "uuid",
-    "sender_type": "seller",
-    "body": "product_uuid",
-    "type": "product"
-  }
-  ```
-
-### 2.4. Mengirim Varian Produk
-- **Metode**: Gunakan endpoint `POST /chats/messages/send` Untuk Customer / `POST /seller/v1/messages/messages/send` (untuk seller) dengan `Content-Type: multipart/form-data` apabila Anda Menggunakan Websocket Gunakan action `send`.
-- **Body**:
-  - `type`: `variant`
-  - `body`: UUID varian yang valid (dari tabel `product_variants`)
-- **Proses**:
-  - UUID divalidasi terhadap tabel `product_variants`.
-  - Meta diisi dengan `{ "id": "uuid", "variant_name": "string", "variant_price": "float", "variant_image_url": "string", "product_id": "uuid" }`.
-- **Contoh JSON**:
-  ```json
-  {
-    "chat_id": "uuid",
-    "sender_type": "seller",
-    "body": "variant_uuid",
-    "type": "variant"
-  }
-  ```
-  
-  - **Error**:
-    - `400 Bad Request`: Body tidak valid, `sender_type` salah, atau `chat_id` kosong (jika tidak bisa membuat chat baru).
-    - `401 Unauthorized`: Cookie `user_info` atau `seller_info` tidak ada.
-    - `500 Internal Server Error`: Kesalahan database atau upload ke Supabase.
-
-
-
-### 3. Menghapus Chat
-- **Rute**: `/chats/chats/:idchat` Untuk Customer Atau `/seller/V1/chats/chats/:idchat` untuk Seller 
-- **Deskripsi**: Menghapus chat dan semua pesan terkait, termasuk file gambar di Supabase.
-- **Header**:
-  - `Cookie: user_info=<encoded_json>` atau `Cookie: seller_info=<encoded_json>`
-- **Path Parameter**:
-  - `id`: UUID chat
-- **Response**:
-  - **Status**: `200 OK`
-  - **Body** (JSON):
-    ```json
-    {
-      "message": "chat and messages deleted"
-    }
-    ```
-  - **Error**:
-    - `400 Bad Request`: `id` tidak valid atau kosong.
-    - `500 Internal Server Error`: Kesalahan database atau penghapusan file di Supabase.
-
-### 4. WebSocket
-- **Rute**: `/ws` (diakses melalui `ws://backendmarket-production.up.railway.app/ws-seller` untuk seller atau `ws://backendmarket-production.up.railway.app/ws-customer` untuk customer)
-- **Deskripsi**: Menangani komunikasi real-time untuk chat, termasuk subscribe ke chat, mengirim pesan, dan mengambil riwayat pesan.
-- **Header**:
-  - `Cookie: user_info=<encoded_json>` atau `Cookie: seller_info=<encoded_json>`
-- **Payload WebSocket** (JSON):
-  - **Subscribe**:
-    ```json
-    {
-      "action": "subscribe",
-      "chat_id": "uuid"
-    }
-    ```
-  - **Send**:
-    ```json
-    {
-      "action": "send",
-      "chat_id": "uuid",
-      "sender_type": "user|seller",
-      "body": "string|uuid",
-      "type": "text|sticker|product|variant"
-    }
-    ```
-  - **History**:
-    ```json
-    {
-      "action": "history",
-      "chat_id": "uuid"
-    }
-    ```
-- **Response WebSocket**:
-  - **Untuk Subscribe/Send**: Broadcast pesan baru ke semua klien di `chat_id`:
-    ```json
-    {
-      "id": "uuid",
-      "chat_id": "uuid",
-      "sender_type": "user|seller",
-      "sender_id": "uuid",
-      "body": "string|uuid|url",
-      "type": "text|sticker|product|variant|image",
-      "meta": {...}, // sama seperti di endpoint send message
-      "created_at": "timestamp"
-    }
-    ```
-  - **Untuk History**:
-    ```json
-    {
-      "action": "history",
-      "chat_id": "uuid",
-      "messages": [
+      "buyer_full_address": "Jalan Contoh No. 123, Kelurahan Contoh, Kecamatan Contoh, Kota Contoh, Provinsi Contoh, 12345",
+      "seller_info": {
+        "store_address": "Jalan Toko No. 456",
+        "kelurahan": "Kelurahan Toko",
+        "kecamatan": "Kecamatan Toko",
+        "kota_kabupaten": "Kota Toko",
+        "provinsi": "Provinsi Toko"
+      },
+      "seller_full_address": "Jalan Toko No. 456, Kelurahan Toko, Kecamatan Toko, Kota Toko, Provinsi Toko",
+      "order_items": [
         {
-          "id": "uuid",
-          "chat_id": "uuid",
-          "sender_type": "user|seller",
-          "sender_id": "uuid",
-          "body": "string|uuid|url",
-          "type": "text|sticker|product|variant|image",
-          "meta": {...},
-          "created_at": "timestamp"
+          "order_item_id": "item123",
+          "orderItemId": "item123",
+          "product_id": "prod456",
+          "product_name": "Produk Contoh",
+          "product_image_url": "https://example.com/image.jpg",
+          "quantity": 2,
+          "price_per_item": 70000,
+          "discount_percentage": 5,
+          "variant": null
         }
-      ]
+      ],
+      "total_quantity": 2
     }
-    ```
-- **Catatan**:
-  - WebSocket akan otomatis mengarahkan `/ws-seller` atau `/ws-customer` ke `/ws` di backend.
-  - Pastikan cookie valid disertakan saat koneksi.
+  ],
+  "range": {
+    "startOfDay": "2025-08-31T00:00:00.000+07:00",
+    "endOfDay": "2025-08-31T23:59:59.999+07:00"
+  }
+}
+```
 
+#### Catatan
+- Data di-cache hingga tengah malam waktu Asia/Jakarta.
+- Jika cookie `seller_info` tidak tersedia atau tidak valid, respons akan mengembalikan status `401`.
+- Jika tidak ada pesanan untuk hari ini, respons akan mengembalikan array `orders` kosong dengan status `200`.
 
+## Autentikasi
+- Endpoint memerlukan autentikasi melalui cookie `seller_info` atau `user_info` untuk mengidentifikasi seller.
+- Untuk endpoint `/history-order-by-day`, `seller_id` dapat disediakan sebagai query parameter sebagai alternatif.
 
-## Catatan Tambahan
-- **Supabase**: File gambar diunggah ke bucket `chat-images` di Supabase. Pastikan bucket diset sebagai publik untuk akses URL.
-- **WebSocket**: Gunakan untuk komunikasi real-time. Pastikan klien subscribe ke `chat_id` sebelum mengirim atau menerima pesan.
-- **Pembersihan Data**: Pesan lebih dari 4 bulan akan otomatis dihapus melalui proses cleanup harian.
-- **Error Handling**: Selalu periksa kode status dan pesan error dalam respons untuk menangani kasus gagal.
+## Caching
+- Data statistik dan pesanan di-cache menggunakan `node-cache` untuk meningkatkan performa.
+- Cache akan kadaluarsa setiap tengah malam waktu Asia/Jakarta.
+
+## Error Handling
+- **401 Unauthorized**: Jika seller tidak terautentikasi atau `seller_id` tidak valid.
+- **400 Bad Request**: Jika format tanggal atau parameter tidak valid.
+- **500 Internal Server Error**: Jika terjadi kesalahan server atau gagal mengambil data dari Supabase.
+
+## Dependensi
+- **Express.js**: Framework untuk menangani routing dan permintaan HTTP.
+- **Supabase**: Untuk mengakses dan mengelola data penjualan dan pesanan.
+- **Luxon**: Untuk manipulasi tanggal dan waktu dalam zona waktu Asia/Jakarta.
+- **NodeCache**: Untuk caching data guna meningkatkan performa.

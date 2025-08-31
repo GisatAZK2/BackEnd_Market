@@ -37,6 +37,7 @@ const formseller = require("./routes/seller/forum-pendaftaran.js");
 const promoteproductseller = require("./routes/seller/promote.js");
 const productseller = require("./routes/seller/product.js");
 const ratingselelr = require("./routes/seller/rating.js");
+const StatistikSeller = require("./routes/seller/stastikdata.js");
 
 
 // ===== Global Sticker ====
@@ -148,6 +149,7 @@ sellerRouter.use("/forum-pendaftaran", formseller);
 sellerRouter.use("/products", productseller);
 sellerRouter.use("/promoteseller", promoteproductseller);
 sellerRouter.use("/ratingseller", ratingselelr);
+sellerRouter.use("/statsSeller", StatistikSeller);
 sellerRouter.get("/test", (req, res) => {
   res.json({ message: "Seller V1 API aktif 🚀" });
 });
