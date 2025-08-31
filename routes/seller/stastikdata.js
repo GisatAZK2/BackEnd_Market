@@ -6,25 +6,6 @@ const NodeCache = require("node-cache");
 const router = express.Router();
 const statsCache = new NodeCache(); // we'll set TTL per-key dynamically
 
-// helper: parse range
-function parseRangeQuery(q) {
-  if (!q) return { type: "days", days: 7 };
-  q = String(q).toLowerCase();
-  if (q === "1week" || q === "7days") return { type: "days", days: 7 };
-  if (q === "7weeks") return { type: "weeks", weeks: 7 };
-  if (q === "1year" || q === "year") return { type: "years", years: 1 };
-  const m = q.match(/^(\d+)(days|day)$/);
-  if (m) return { type: "days", days: Number(m[1]) };
-  return { type: "days", days: 7 };
-}
-
-// helper: seconds until next midnight in Asia/Jakarta
-function secondsUntilTomorrowJakarta() {
-  const now = DateTime.now().setZone("Asia/Jakarta");
-  const tomorrow = now.plus({ days: 1 }).startOf("day");
-  return Math.max(60, Math.floor(tomorrow.diff(now, "seconds").seconds)); // at least 60s
-}
-
 function safeParseImageUrl(data) {
   if (!data) return null;
   try {
@@ -38,83 +19,124 @@ function safeParseImageUrl(data) {
   }
 }
 
+function parseRangeQuery(range) {
+  if (!range) return null;
+  const lower = range.toLowerCase();
+
+  if (lower === "today") return { type: "preset", preset: "today" };
+  if (lower === "yesterday") return { type: "preset", preset: "yesterday" };
+  if (lower.endsWith("days")) return { type: "days", days: parseInt(range) };
+  if (lower.endsWith("weeks")) return { type: "weeks", weeks: parseInt(range) };
+  if (lower.endsWith("month")) return { type: "months", months: 1 };
+  if (lower.endsWith("year")) return { type: "years", years: 1 };
+  if (lower.endsWith("years")) return { type: "years", years: parseInt(range) };
+
+  return null;
+}
 
 router.get("/history-order-by-day", async (req, res) => {
   try {
-    // 1) identify seller
+    // 1) Identify seller
     const cookieSeller = req.cookies?.seller_info ? JSON.parse(req.cookies.seller_info) : null;
     const cookieUser = req.cookies?.user_info ? JSON.parse(req.cookies.user_info) : null;
-    const sellerId = (cookieSeller && cookieSeller.id) || req.query.seller_id || (cookieUser && cookieUser.seller_id);
+    const sellerId =
+      (cookieSeller && cookieSeller.id) ||
+      req.query.seller_id ||
+      (cookieUser && cookieUser.seller_id);
 
-    if (!sellerId) return res.status(401).json({ message: "❌ Harus login sebagai seller atau sertakan seller_id." });
+    if (!sellerId) {
+      return res
+        .status(401)
+        .json({ message: "❌ Harus login sebagai seller atau sertakan seller_id." });
+    }
 
-    // 2) parse date range (sama seperti sebelumnya)
+    // 2) Parse date range
     let startDate, endDate;
-    const { start, end, days } = req.query;
+    const { start, end, range, days } = req.query;
+    const now = DateTime.now().setZone("Asia/Jakarta");
+
     if (start && end) {
       startDate = DateTime.fromISO(start, { zone: "Asia/Jakarta" }).startOf("day");
       endDate = DateTime.fromISO(end, { zone: "Asia/Jakarta" }).endOf("day");
       if (!startDate.isValid || !endDate.isValid) {
-        return res.status(400).json({ message: "❌ Format tanggal tidak valid. Gunakan YYYY-MM-DD." });
+        return res
+          .status(400)
+          .json({ message: "❌ Format tanggal tidak valid. Gunakan YYYY-MM-DD." });
       }
-    } else if (req.query.range || days) {
-      const rangeSpec = parseRangeQuery(req.query.range || `${days}days`);
-      endDate = DateTime.now().setZone("Asia/Jakarta").endOf("day");
-      if (rangeSpec.type === "days") {
+    } else if (range || days) {
+      const rangeSpec = parseRangeQuery(range || `${days}days`);
+      endDate = now.endOf("day");
+
+      if (!rangeSpec) {
+        startDate = endDate.minus({ days: 6 }).startOf("day"); // default 7 hari
+      } else if (rangeSpec.type === "preset") {
+        if (rangeSpec.preset === "today") {
+          startDate = now.startOf("day");
+          endDate = now.endOf("day");
+        } else if (rangeSpec.preset === "yesterday") {
+          startDate = now.minus({ days: 1 }).startOf("day");
+          endDate = now.minus({ days: 1 }).endOf("day");
+        }
+      } else if (rangeSpec.type === "days") {
         startDate = endDate.minus({ days: rangeSpec.days - 1 }).startOf("day");
       } else if (rangeSpec.type === "weeks") {
         startDate = endDate.minus({ weeks: rangeSpec.weeks }).startOf("day");
+      } else if (rangeSpec.type === "months") {
+        startDate = endDate.minus({ months: rangeSpec.months }).startOf("day");
       } else if (rangeSpec.type === "years") {
         startDate = endDate.minus({ years: rangeSpec.years }).startOf("day");
       } else {
         startDate = endDate.minus({ days: 6 }).startOf("day");
       }
     } else {
-      endDate = DateTime.now().setZone("Asia/Jakarta").endOf("day");
+      endDate = now.endOf("day");
       startDate = endDate.minus({ days: 6 }).startOf("day");
     }
 
-    const cacheKey = `seller_stats:${sellerId}:${startDate.toISODate()}:${endDate.toISODate()}`;
-    const cached = statsCache.get(cacheKey);
-    if (cached) {
-      return res.status(200).json({ message: "✅ Statistik (cache).", ...cached });
-    }
+    // 3) Query Supabase
+    const startIsoDate = startDate.toISODate(); // "YYYY-MM-DD"
+    const endIsoDate = endDate.toISODate();
 
-    // === ambil summary dari seller_daily_stats ===
-    const { data: statsRowsRaw, error: statsError } = await supabase
+    let { data: statsRowsRaw, error: statsError } = await supabase
       .from("seller_daily_stats")
       .select("date, orders_count, new_customers_count, total_sales")
       .eq("seller_id", sellerId)
-      .gte("date", startDate.toISODate())
-      .lte("date", endDate.toISODate())
+      .gte("date", startIsoDate)
+      .lte("date", endIsoDate)
       .order("date", { ascending: true });
 
     if (statsError) {
       console.error("❌ Gagal ambil data summary:", statsError);
-      return res.status(500).json({ message: "❌ Gagal ambil data summary.", error: statsError.message || statsError });
+      return res
+        .status(500)
+        .json({ message: "❌ Gagal ambil data summary.", error: statsError.message || statsError });
     }
 
     const statsRows = statsRowsRaw || [];
 
-    // buat map cepat: date(YYYY-MM-DD) => row
+    // 4) Build map date -> stats
     const statsMap = {};
-    statsRows.forEach(r => {
+    statsRows.forEach((r) => {
       const key = DateTime.fromISO(String(r.date), { zone: "Asia/Jakarta" }).toISODate();
       statsMap[key] = {
         orders_count: Number(r.orders_count || 0),
         new_customers_count: Number(r.new_customers_count || 0),
-        total_sales: Number(r.total_sales || 0)
+        total_sales: Number(r.total_sales || 0),
       };
     });
 
-    // isi per-day dari startDate..endDate (termasuk hari tanpa data)
+    // 5) Fill per-day
     const perDay = [];
     let cursor = startDate;
     let cumulativeSales = 0;
     let cumulativeOrders = 0;
     while (cursor <= endDate) {
       const key = cursor.toISODate();
-      const row = statsMap[key] || { orders_count: 0, new_customers_count: 0, total_sales: 0 };
+      const row = statsMap[key] || {
+        orders_count: 0,
+        new_customers_count: 0,
+        total_sales: 0,
+      };
       cumulativeSales += Number(row.total_sales || 0);
       cumulativeOrders += Number(row.orders_count || 0);
 
@@ -124,13 +146,13 @@ router.get("/history-order-by-day", async (req, res) => {
         new_customers_count: row.new_customers_count,
         total_sales: +Number(row.total_sales).toFixed(2),
         cumulative_sales: +cumulativeSales.toFixed(2),
-        cumulative_orders: cumulativeOrders
+        cumulative_orders: cumulativeOrders,
       });
 
       cursor = cursor.plus({ days: 1 });
     }
 
-    // 9) summary stats for period (gunakan perDay, bukan sortedDates)
+    // 6) Summary
     const totalOrders = perDay.reduce((s, r) => s + r.orders_count, 0);
     const totalNewCustomers = perDay.reduce((s, r) => s + r.new_customers_count, 0);
     const totalSales = perDay.reduce((s, r) => s + r.total_sales, 0);
@@ -144,19 +166,18 @@ router.get("/history-order-by-day", async (req, res) => {
         total_new_customers: totalNewCustomers,
         total_sales: +totalSales.toFixed(2),
       },
-      per_day: perDay
+      per_day: perDay,
     };
-
-    // cache until Jakarta midnight
-    const ttl = secondsUntilTomorrowJakarta();
-    statsCache.set(cacheKey, payload, ttl);
 
     return res.status(200).json({ message: "✅ Statistik berhasil diambil.", ...payload });
   } catch (err) {
     console.error("❌ Server error /history-order-by-day:", err);
-    return res.status(500).json({ message: "❌ Terjadi kesalahan server.", error: err.message || err });
+    return res
+      .status(500)
+      .json({ message: "❌ Terjadi kesalahan server.", error: err.message || err });
   }
 });
+
 
 // ======================
 // GET Order Seller Hari Ini (Detail + Cache)
