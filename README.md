@@ -1,183 +1,164 @@
 # Dokumentasi API Statistik Seller
 
-Berikut adalah dokumentasi untuk endpoint API statistik seller yang digunakan untuk mengambil data statistik penjualan dan pesanan harian seller. API ini dibangun menggunakan Express.js dengan integrasi Supabase untuk manajemen data dan NodeCache untuk caching.
+Berikut adalah dokumentasi untuk endpoint API statistik seller yang tersedia pada base URL:  
+**`https://backendmarket-production.up.railway.app/seller/V1/statsSeller`**
 
-## Base URL
-```
-https://backendmarket-production.up.railway.app/seller/V1/statsSeller
-```
+API ini menyediakan dua endpoint utama untuk mengambil data statistik penjualan harian dan daftar order harian untuk seller. Endpoint ini mendukung berbagai rentang waktu seperti hari ini, kemarin, beberapa hari, minggu, bulan, atau tahun.
 
-## Endpoint
+## Autentikasi
+- **Cookie**: Endpoint ini memerlukan autentikasi melalui cookie `seller_info` atau `user_info` yang berisi informasi seller (termasuk `seller_id`). Jika tidak ada cookie, Anda dapat menyertakan `seller_id` sebagai query parameter.
+- **Format Cookie**: JSON string, contoh: `{"id": "seller123", "nama": "Toko ABC"}`.
 
-### 1. GET /history-order-by-day
-Mengambil statistik penjualan harian seller untuk rentang waktu tertentu.
+## Endpoint 1: Statistik Order Harian (`/history-order-by-day`)
 
-#### Parameter Query
-- `seller_id` (opsional): ID seller. Jika tidak disediakan, akan diambil dari cookie `seller_info` atau `user_info`.
-- `start` (opsional): Tanggal mulai (format: `YYYY-MM-DD`). Jika tidak disediakan, akan menggunakan rentang default.
-- `end` (opsional): Tanggal akhir (format: `YYYY-MM-DD`). Jika tidak disediakan, akan menggunakan tanggal hari ini.
-- `range` (opsional): Rentang waktu. Nilai yang didukung:
-  - `1week` atau `7days`: 7 hari terakhir.
-  - `7weeks`: 7 minggu terakhir.
-  - `1year` atau `year`: 1 tahun terakhir.
-  - `<jumlah>days`: Misalnya, `30days` untuk 30 hari terakhir.
-- `days` (opsional): Jumlah hari untuk rentang waktu (misalnya, `30` untuk 30 hari).
+### Deskripsi
+Mengambil statistik penjualan harian untuk seller dalam rentang waktu tertentu. Data yang dikembalikan mencakup jumlah pesanan, pelanggan baru, total penjualan, serta data kumulatif per hari.
 
-#### Contoh Permintaan
-1. **Statistik Hari Ini**
+### Method dan URL
+**GET** `/history-order-by-day`
+
+### Query Parameters
+| Parameter | Tipe   | Deskripsi                                                                 |
+|-----------|--------|---------------------------------------------------------------------------|
+| `seller_id` | String | ID seller (opsional, jika tidak ada cookie `seller_info` atau `user_info`). |
+| `start`   | String | Tanggal mulai dalam format `YYYY-MM-DD` (opsional).                        |
+| `end`     | String | Tanggal akhir dalam format `YYYY-MM-DD` (opsional).                        |
+| `range`   | String | Rentang waktu, contoh: `today`, `yesterday`, `7days`, `2weeks`, `1month`, `1year`. |
+| `days`    | String | Jumlah hari ke belakang, contoh: `3` untuk 3 hari terakhir.               |
+
+**Catatan**:
+- Jika `start` dan `end` disediakan, parameter ini akan diutamakan.
+- Jika `range` atau `days` disediakan, rentang waktu akan dihitung berdasarkan nilai tersebut.
+- Jika tidak ada parameter waktu, defaultnya adalah 7 hari terakhir (termasuk hari ini).
+
+### Contoh Permintaan
+1. **Hari Ini**:
    ```
-   GET https://backendmarket-production.up.railway.app/seller/V1/statsSeller/history-order-by-day?range=1day
+   GET https://backendmarket-production.up.railway.app/seller/V1/statsSeller/history-order-by-day?range=today
    ```
-2. **Statistik 7 Hari Terakhir**
+2. **Kemarin**:
    ```
-   GET https://backendmarket-production.up.railway.app/seller/V1/statsSeller/history-order-by-day?range=7days
+   GET https://backendmarket-production.up.railway.app/seller/V1/statsSeller/history-order-by-day?range=yesterday
+
+4. **Rentang Kustom Per Hari ( 2 hari / Seterusnya )**:
    ```
-3. **Statistik 1 Bulan Terakhir (30 Hari)**
+   GET https://backendmarket-production.up.railway.app/seller/V1/statsSeller/history-order-by-day?range=3days
    ```
-   GET https://backendmarket-production.up.railway.app/seller/V1/statsSeller/history-order-by-day?range=30days
+3. **Rentang 1 Minggu /Seterusnya (2 Minggu Atau Lebih)**:
    ```
-4. **Statistik 1 Tahun Terakhir**
+   GET https://backendmarket-production.up.railway.app/seller/V1/statsSeller/history-order-by-day?range=1weeks
+   ```
+
+5. **Rentang 1 Bulan Terakhir /Seterusnya**:
+   ```
+   GET https://backendmarket-production.up.railway.app/seller/V1/statsSeller/history-order-by-day?range=1month
+   ```
+6. **1 Tahun Terakhir**:
    ```
    GET https://backendmarket-production.up.railway.app/seller/V1/statsSeller/history-order-by-day?range=1year
    ```
 
-#### Contoh Respons
+### Contoh Respon
 ```json
 {
   "message": "✅ Statistik berhasil diambil.",
-  "seller_id": "12345",
+  "seller_id": "seller123",
   "range": {
     "start": "2025-08-25",
     "end": "2025-08-31"
   },
   "summary": {
     "total_days": 7,
-    "total_orders": 50,
-    "total_new_customers": 10,
-    "total_sales": 5000000.00
+    "total_orders": 150,
+    "total_new_customers": 30,
+    "total_sales": 7500000.00
   },
   "per_day": [
     {
       "date": "2025-08-25",
-      "orders_count": 5,
-      "new_customers_count": 1,
-      "total_sales": 500000.00,
-      "cumulative_sales": 500000.00,
-      "cumulative_orders": 5
+      "orders_count": 20,
+      "new_customers_count": 5,
+      "total_sales": 1000000.00,
+      "cumulative_sales": 1000000.00,
+      "cumulative_orders": 20
     },
     ...
   ]
 }
 ```
 
-#### Catatan
-- Data di-cache hingga tengah malam waktu Asia/Jakarta untuk mengurangi beban server.
-- Jika `seller_id` tidak valid atau tidak ada, respons akan mengembalikan status `401`.
-- Jika format tanggal tidak valid, respons akan mengembalikan status `400`.
+### Status Kode
+- **200**: Berhasil mengambil data statistik.
+- **400**: Format tanggal tidak valid atau parameter salah.
+- **401**: Seller tidak terautentikasi atau `seller_id` tidak ditemukan.
+- **500**: Kesalahan server atau gagal mengambil data dari database.
 
 ---
 
-### 2. GET /order/daily
-Mengambil daftar pesanan harian seller untuk hari ini.
+## Endpoint 2: Daftar Order Harian (`/order/daily`)
 
-#### Parameter Query
-- Tidak ada parameter query yang diperlukan. Seller diidentifikasi melalui cookie `seller_info`.
+### Deskripsi
+Mengambil daftar order harian untuk seller pada hari ini (berdasarkan zona waktu Asia/Jakarta). Data yang dikembalikan mencakup detail order seperti ID, status, waktu pembuatan, informasi pembeli, dan item pesanan. Endpoint ini menggunakan cache untuk meningkatkan performa.
 
-#### Contoh Permintaan
+### Method dan URL
+**GET** `/order/daily`
+
+### Query Parameters
+Tidak ada query parameter tambahan. Endpoint ini hanya mengambil data untuk hari ini berdasarkan zona waktu Asia/Jakarta.
+
+### Contoh Permintaan
 ```
 GET https://backendmarket-production.up.railway.app/seller/V1/statsSeller/order/daily
 ```
 
-#### Contoh Respons
+### Contoh Respon
 ```json
 {
-    "message": "✅ Daftar order harian seller berhasil diambil.",
-    "orders": [
+  "message": "✅ Daftar order harian seller berhasil diambil.",
+  "orders": [
+    {
+      "id": "order123",
+      "status": "pending",
+      "created_at": "2025-08-31T10:00:00.000+07:00",
+      "buyer_info": {
+        "username": "buyer123"
+      },
+      "order_items": [
         {
-            "id": "1252239b-9fff-4ce9-a865-6a74f169daf6",
-            "status": "pending",
-            "created_at": "2025-08-31T17:40:31.636916",
-            "buyer_info": {
-                "username": "Azz"
-            },
-            "order_items": [
-                {
-                    "product_id": "a05296c6-b63c-4080-96fd-1692fb21a972",
-                    "product_name": "Wafer Superstar",
-                    "product_image_url": "https://hihfiptclwrwuklojdec.supabase.co/storage/v1/object/public/product-images/f6480e57-017c-47a1-be8e-b85f33882f6c/products/09a40cdf-10a9-49ba-85aa-9c2946550f6c.webp",
-                    "quantity": 0,
-                    "price_per_item": 17778,
-                    "discount_percentage": 0,
-                    "variant": null
-                }
-            ]
-        },
-        {
-            "id": "e634e414-1b50-41a6-baaa-e3c3585264e6",
-            "status": "sedang di kemas",
-            "created_at": "2025-08-31T17:37:10.097117",
-            "buyer_info": {
-                "username": "gisatazk2"
-            },
-            "order_items": [
-                {
-                    "product_id": "69bec226-9b43-40a0-ab70-b582e4e2728d",
-                    "product_name": "Slai Olai",
-                    "product_image_url": "https://hihfiptclwrwuklojdec.supabase.co/storage/v1/object/public/product-images/f6480e57-017c-47a1-be8e-b85f33882f6c/products/ffa084b4-3a28-4fda-9641-af526f0f673a.webp",
-                    "quantity": 0,
-                    "price_per_item": 42000,
-                    "discount_percentage": 0,
-                    "variant": null
-                }
-            ]
-        },
-        {
-            "id": "1fc9378a-2839-40cf-b2ee-fdc08b054dad",
-            "status": "sedang di kemas",
-            "created_at": "2025-08-31T10:23:18.773687",
-            "buyer_info": {
-                "username": "gisatazk2"
-            },
-            "order_items": [
-                {
-                    "product_id": "ef261209-39c0-4cba-afff-b90e2f6178be",
-                    "product_name": "Test",
-                    "product_image_url": "https://hihfiptclwrwuklojdec.supabase.co/storage/v1/object/public/product-images/f6480e57-017c-47a1-be8e-b85f33882f6c/products/82c0c3cd-5626-41a9-9465-68813399d12b.webp",
-                    "quantity": 0,
-                    "price_per_item": 30000,
-                    "discount_percentage": 0,
-                    "variant": null
-                }
-            ]
+          "order_item_id": "item456",
+          "product_id": "prod789",
+          "product_name": "Produk A",
+          "product_image_url": "https://example.com/image.jpg",
+          "quantity": 2,
+          "price_per_item": 50000,
+          "discount_percentage": 10,
+          "variant": null
         }
-    ],
-    "range": {
-        "startOfDay": "2025-08-31T00:00:00.000+07:00",
-        "endOfDay": "2025-08-31T23:59:59.999+07:00"
+      ]
     }
+  ],
+  "range": {
+    "startOfDay": "2025-08-31T00:00:00.000+07:00",
+    "endOfDay": "2025-08-31T23:59:59.999+07:00"
+  }
 }
 ```
 
-#### Catatan
-- Data di-cache hingga tengah malam waktu Asia/Jakarta.
-- Jika cookie `seller_info` tidak tersedia atau tidak valid, respons akan mengembalikan status `401`.
-- Jika tidak ada pesanan untuk hari ini, respons akan mengembalikan array `orders` kosong dengan status `200`.
+### Status Kode
+- **200**: Berhasil mengambil daftar order (dari cache atau database).
+- **401**: Seller tidak terautentikasi (cookie `seller_info` tidak ditemukan).
+- **500**: Kesalahan server atau gagal mengambil data dari database.
 
-## Autentikasi
-- Endpoint memerlukan autentikasi melalui cookie `seller_info` atau `user_info` untuk mengidentifikasi seller.
-- Untuk endpoint `/history-order-by-day`, `seller_id` dapat disediakan sebagai query parameter sebagai alternatif.
+---
 
-## Caching
-- Data statistik dan pesanan di-cache menggunakan `node-cache` untuk meningkatkan performa.
-- Cache akan kadaluarsa setiap tengah malam waktu Asia/Jakarta.
-
-## Error Handling
-- **401 Unauthorized**: Jika seller tidak terautentikasi atau `seller_id` tidak valid.
-- **400 Bad Request**: Jika format tanggal atau parameter tidak valid.
-- **500 Internal Server Error**: Jika terjadi kesalahan server atau gagal mengambil data dari Supabase.
+## Catatan Tambahan
+- **Zona Waktu**: Semua tanggal dan waktu menggunakan zona waktu **Asia/Jakarta**.
+- **Cache**: Endpoint `/order/daily` menggunakan cache untuk mempercepat respons. Cache dihasilkan berdasarkan `seller_id` dan tanggal hari ini.
+- **Format Tanggal**: Gunakan format `YYYY-MM-DD` untuk parameter `start` dan `end` pada endpoint `/history-order-by-day`.
+- **Kesalahan Parsing**: Jika data seperti `buyer_address` atau `product_image_url` tidak dapat di-parse sebagai JSON, API akan menangani kasus tersebut dengan aman dan memberikan nilai fallback.
 
 ## Dependensi
-- **Express.js**: Framework untuk menangani routing dan permintaan HTTP.
-- **Supabase**: Untuk mengakses dan mengelola data penjualan dan pesanan.
-- **Luxon**: Untuk manipulasi tanggal dan waktu dalam zona waktu Asia/Jakarta.
-- **NodeCache**: Untuk caching data guna meningkatkan performa.
+- **Express**: Framework untuk menangani routing HTTP.
+- **Supabase**: Digunakan untuk mengakses database.
+- **Luxon**: Untuk pengelolaan tanggal dan waktu.
+- **Node-Cache**: Untuk caching data order harian.
