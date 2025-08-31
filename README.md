@@ -91,53 +91,70 @@ GET https://backendmarket-production.up.railway.app/seller/V1/statsSeller/order/
 #### Contoh Respons
 ```json
 {
-  "message": "✅ Daftar order harian seller berhasil diambil.",
-  "orders": [
-    {
-      "id": "67890",
-      "created_at": "2025-08-31T10:00:00.000Z",
-      "total_price": 150000,
-      "delivery_fee": 10000,
-      "status": "pending",
-      "pickup_method": "delivery",
-      "confirm_deadline": "2025-09-01T10:00:00.000Z",
-      "buyer_info": {
-        "alamat_lengkap": "Jalan Contoh No. 123",
-        "kelurahan": "Kelurahan Contoh",
-        "kecamatan": "Kecamatan Contoh",
-        "kota_kabupaten": "Kota Contoh",
-        "provinsi": "Provinsi Contoh",
-        "kode_pos": "12345"
-      },
-      "buyer_full_address": "Jalan Contoh No. 123, Kelurahan Contoh, Kecamatan Contoh, Kota Contoh, Provinsi Contoh, 12345",
-      "seller_info": {
-        "store_address": "Jalan Toko No. 456",
-        "kelurahan": "Kelurahan Toko",
-        "kecamatan": "Kecamatan Toko",
-        "kota_kabupaten": "Kota Toko",
-        "provinsi": "Provinsi Toko"
-      },
-      "seller_full_address": "Jalan Toko No. 456, Kelurahan Toko, Kecamatan Toko, Kota Toko, Provinsi Toko",
-      "order_items": [
+    "message": "✅ Daftar order harian seller berhasil diambil.",
+    "orders": [
         {
-          "order_item_id": "item123",
-          "orderItemId": "item123",
-          "product_id": "prod456",
-          "product_name": "Produk Contoh",
-          "product_image_url": "https://example.com/image.jpg",
-          "quantity": 2,
-          "price_per_item": 70000,
-          "discount_percentage": 5,
-          "variant": null
+            "id": "1252239b-9fff-4ce9-a865-6a74f169daf6",
+            "status": "pending",
+            "created_at": "2025-08-31T17:40:31.636916",
+            "buyer_info": {
+                "username": "Azz"
+            },
+            "order_items": [
+                {
+                    "product_id": "a05296c6-b63c-4080-96fd-1692fb21a972",
+                    "product_name": "Wafer Superstar",
+                    "product_image_url": "https://hihfiptclwrwuklojdec.supabase.co/storage/v1/object/public/product-images/f6480e57-017c-47a1-be8e-b85f33882f6c/products/09a40cdf-10a9-49ba-85aa-9c2946550f6c.webp",
+                    "quantity": 0,
+                    "price_per_item": 17778,
+                    "discount_percentage": 0,
+                    "variant": null
+                }
+            ]
+        },
+        {
+            "id": "e634e414-1b50-41a6-baaa-e3c3585264e6",
+            "status": "sedang di kemas",
+            "created_at": "2025-08-31T17:37:10.097117",
+            "buyer_info": {
+                "username": "gisatazk2"
+            },
+            "order_items": [
+                {
+                    "product_id": "69bec226-9b43-40a0-ab70-b582e4e2728d",
+                    "product_name": "Slai Olai",
+                    "product_image_url": "https://hihfiptclwrwuklojdec.supabase.co/storage/v1/object/public/product-images/f6480e57-017c-47a1-be8e-b85f33882f6c/products/ffa084b4-3a28-4fda-9641-af526f0f673a.webp",
+                    "quantity": 0,
+                    "price_per_item": 42000,
+                    "discount_percentage": 0,
+                    "variant": null
+                }
+            ]
+        },
+        {
+            "id": "1fc9378a-2839-40cf-b2ee-fdc08b054dad",
+            "status": "sedang di kemas",
+            "created_at": "2025-08-31T10:23:18.773687",
+            "buyer_info": {
+                "username": "gisatazk2"
+            },
+            "order_items": [
+                {
+                    "product_id": "ef261209-39c0-4cba-afff-b90e2f6178be",
+                    "product_name": "Test",
+                    "product_image_url": "https://hihfiptclwrwuklojdec.supabase.co/storage/v1/object/public/product-images/f6480e57-017c-47a1-be8e-b85f33882f6c/products/82c0c3cd-5626-41a9-9465-68813399d12b.webp",
+                    "quantity": 0,
+                    "price_per_item": 30000,
+                    "discount_percentage": 0,
+                    "variant": null
+                }
+            ]
         }
-      ],
-      "total_quantity": 2
+    ],
+    "range": {
+        "startOfDay": "2025-08-31T00:00:00.000+07:00",
+        "endOfDay": "2025-08-31T23:59:59.999+07:00"
     }
-  ],
-  "range": {
-    "startOfDay": "2025-08-31T00:00:00.000+07:00",
-    "endOfDay": "2025-08-31T23:59:59.999+07:00"
-  }
 }
 ```
 
