@@ -1,164 +1,128 @@
-# Dokumentasi API Statistik Seller
+# Dokumentasi API Backend Market
 
-Berikut adalah dokumentasi untuk endpoint API statistik seller yang tersedia pada base URL:  
-**`https://backendmarket-production.up.railway.app/seller/V1/statsSeller`**
+Dokumentasi ini menjelaskan rute API yang tersedia untuk mengelola Air Waybill (AWB) dan pesanan (order) pada aplikasi Backend Market. API ini dirancang untuk mendukung fungsi seller dan buyer dalam mengelola pesanan, termasuk pembuatan AWB, melihat daftar pesanan yang dibatalkan, dan pesanan yang diterima.
 
-API ini menyediakan dua endpoint utama untuk mengambil data statistik penjualan harian dan daftar order harian untuk seller. Endpoint ini mendukung berbagai rentang waktu seperti hari ini, kemarin, beberapa hari, minggu, bulan, atau tahun.
+## Base URL
+- **AWB Seller**: `https://backendmarket-production.up.railway.app/seller/V1/awbseller`
+- **Order Seller**: `https://backendmarket-production.up.railway.app/seller/V1/order`
+- **Order Buyer**: `https://backendmarket-production.up.railway.app/order`
 
-## Autentikasi
-- **Cookie**: Endpoint ini memerlukan autentikasi melalui cookie `seller_info` atau `user_info` yang berisi informasi seller (termasuk `seller_id`). Jika tidak ada cookie, Anda dapat menyertakan `seller_id` sebagai query parameter.
-- **Format Cookie**: JSON string, contoh: `{"id": "seller123", "nama": "Toko ABC"}`.
+## Rute API
 
-## Endpoint 1: Statistik Order Harian (`/history-order-by-day`)
-
-### Deskripsi
-Mengambil statistik penjualan harian untuk seller dalam rentang waktu tertentu. Data yang dikembalikan mencakup jumlah pesanan, pelanggan baru, total penjualan, serta data kumulatif per hari.
-
-### Method dan URL
-**GET** `/history-order-by-day`
-
-### Query Parameters
-| Parameter | Tipe   | Deskripsi                                                                 |
-|-----------|--------|---------------------------------------------------------------------------|
-| `seller_id` | String | ID seller (opsional, jika tidak ada cookie `seller_info` atau `user_info`). |
-| `start`   | String | Tanggal mulai dalam format `YYYY-MM-DD` (opsional).                        |
-| `end`     | String | Tanggal akhir dalam format `YYYY-MM-DD` (opsional).                        |
-| `range`   | String | Rentang waktu, contoh: `today`, `yesterday`, `7days`, `2weeks`, `1month`, `1year`. |
-| `days`    | String | Jumlah hari ke belakang, contoh: `3` untuk 3 hari terakhir.               |
-
-**Catatan**:
-- Jika `start` dan `end` disediakan, parameter ini akan diutamakan.
-- Jika `range` atau `days` disediakan, rentang waktu akan dihitung berdasarkan nilai tersebut.
-- Jika tidak ada parameter waktu, defaultnya adalah 7 hari terakhir (termasuk hari ini).
-
-### Contoh Permintaan
-1. **Hari Ini**:
-   ```
-   GET https://backendmarket-production.up.railway.app/seller/V1/statsSeller/history-order-by-day?range=today
-   ```
-2. **Kemarin**:
-   ```
-   GET https://backendmarket-production.up.railway.app/seller/V1/statsSeller/history-order-by-day?range=yesterday
-
-4. **Rentang Kustom Per Hari ( 2 hari / Seterusnya )**:
-   ```
-   GET https://backendmarket-production.up.railway.app/seller/V1/statsSeller/history-order-by-day?range=3days
-   ```
-3. **Rentang 1 Minggu /Seterusnya (2 Minggu Atau Lebih)**:
-   ```
-   GET https://backendmarket-production.up.railway.app/seller/V1/statsSeller/history-order-by-day?range=1weeks
-   ```
-
-5. **Rentang 1 Bulan Terakhir /Seterusnya**:
-   ```
-   GET https://backendmarket-production.up.railway.app/seller/V1/statsSeller/history-order-by-day?range=1month
-   ```
-6. **1 Tahun Terakhir**:
-   ```
-   GET https://backendmarket-production.up.railway.app/seller/V1/statsSeller/history-order-by-day?range=1year
-   ```
-
-### Contoh Respon
-```json
-{
-  "message": "✅ Statistik berhasil diambil.",
-  "seller_id": "seller123",
-  "range": {
-    "start": "2025-08-25",
-    "end": "2025-08-31"
-  },
-  "summary": {
-    "total_days": 7,
-    "total_orders": 150,
-    "total_new_customers": 30,
-    "total_sales": 7500000.00
-  },
-  "per_day": [
-    {
-      "date": "2025-08-25",
-      "orders_count": 20,
-      "new_customers_count": 5,
-      "total_sales": 1000000.00,
-      "cumulative_sales": 1000000.00,
-      "cumulative_orders": 20
-    },
-    ...
-  ]
-}
-```
-
-### Status Kode
-- **200**: Berhasil mengambil data statistik.
-- **400**: Format tanggal tidak valid atau parameter salah.
-- **401**: Seller tidak terautentikasi atau `seller_id` tidak ditemukan.
-- **500**: Kesalahan server atau gagal mengambil data dari database.
-
----
-
-## Endpoint 2: Daftar Order Harian (`/order/daily`)
-
-### Deskripsi
-Mengambil daftar order harian untuk seller pada hari ini (berdasarkan zona waktu Asia/Jakarta). Data yang dikembalikan mencakup detail order seperti ID, status, waktu pembuatan, informasi pembeli, dan item pesanan. Endpoint ini menggunakan cache untuk meningkatkan performa.
-
-### Method dan URL
-**GET** `/order/daily`
-
-### Query Parameters
-Tidak ada query parameter tambahan. Endpoint ini hanya mengambil data untuk hari ini berdasarkan zona waktu Asia/Jakarta.
-
-### Contoh Permintaan
-```
-GET https://backendmarket-production.up.railway.app/seller/V1/statsSeller/order/daily
-```
-
-### Contoh Respon
-```json
-{
-  "message": "✅ Daftar order harian seller berhasil diambil.",
-  "orders": [
-    {
-      "id": "order123",
-      "status": "pending",
-      "created_at": "2025-08-31T10:00:00.000+07:00",
-      "buyer_info": {
-        "username": "buyer123"
-      },
-      "order_items": [
-        {
-          "order_item_id": "item456",
-          "product_id": "prod789",
-          "product_name": "Produk A",
-          "product_image_url": "https://example.com/image.jpg",
-          "quantity": 2,
-          "price_per_item": 50000,
-          "discount_percentage": 10,
-          "variant": null
-        }
-      ]
-    }
-  ],
-  "range": {
-    "startOfDay": "2025-08-31T00:00:00.000+07:00",
-    "endOfDay": "2025-08-31T23:59:59.999+07:00"
+### 1. Generate AWB / Label Seller (Seller)
+- **Endpoint**: `POST /seller/generate-awb`
+- **Base URL**: `https://backendmarket-production.up.railway.app/seller/V1/awbseller`
+- **Deskripsi**: Menghasilkan label pengiriman (AWB) dalam format PDF untuk pesanan tertentu milik seller. Label mencakup informasi penerima, pengirim, detail produk, dan kode QR untuk verifikasi.
+- **Autentikasi**: Memerlukan cookie `seller_info` dengan ID seller yang valid.
+- **Body Request**:
+  ```json
+  {
+    "orderIds": ["order_id_1", "order_id_2"]
   }
-}
-```
+  ```
+- **Respons**:
+  - Jika hanya satu pesanan, mengembalikan file PDF langsung dengan header:
+    - `Content-Type: application/pdf`
+    - `Content-Disposition: inline; filename="shipping-label-<order_id>.pdf"`
+  - Jika beberapa pesanan, mengembalikan halaman HTML untuk pratinjau PDF dengan opsi download dan print.
+  - **Error**:
+    - `401`: Seller belum login.
+    - `400`: `orderIds` tidak valid.
+    - `404`: Pesanan tidak ditemukan atau bukan milik seller.
+    - `500`: Kesalahan server, seperti gagal memperbarui status atau mengambil data.
 
-### Status Kode
-- **200**: Berhasil mengambil daftar order (dari cache atau database).
-- **401**: Seller tidak terautentikasi (cookie `seller_info` tidak ditemukan).
-- **500**: Kesalahan server atau gagal mengambil data dari database.
+### 2. Daftar Order Dibatalkan (Seller)
+- **Endpoint**: `GET /seller/cancelled`
+- **Base URL**: `https://backendmarket-production.up.railway.app/seller/V1/order`
+- **Deskripsi**: Mengambil daftar pesanan dengan status "dibatalkan" milik seller, termasuk detail item, jumlah total, dan informasi alamat pembeli serta penjual.
+- **Autentikasi**: Memerlukan cookie `seller_info` dengan ID seller yang valid.
+- **Respons**:
+  ```json
+  {
+    "message": "✅ Daftar order dibatalkan seller berhasil diambil.",
+    "orders": [
+      {
+        "id": "order_id",
+        "created_at": "timestamp",
+        "total_price": number,
+        "delivery_fee": number,
+        "status": "dibatalkan",
+        "pickup_method": "diantar/diambil",
+        "confirm_deadline": "timestamp",
+        "buyer_address": object,
+        "seller_address": object,
+        "order_items": [
+          {
+            "order_item_id": "item_id",
+            "orderItemId": "item_id",
+            "product_id": "product_id",
+            "product_name": "string",
+            "product_image_url": "string",
+            "quantity": number,
+            "price_per_item": number,
+            "discount_percentage": number,
+            "variant": object | null
+          }
+        ],
+        "total_quantity": number,
+        "buyer_info": object,
+        "buyer_full_address": "string",
+        "seller_info": object,
+        "seller_full_address": "string"
+      }
+    ]
+  }
+  ```
+- **Cache**: Menggunakan cache dengan kunci `orders:seller:cancelled:<seller_id>` untuk mempercepat respons.
+- **Error**:
+  - `401`: Seller belum login.
+  - `500`: Kesalahan server, seperti gagal mengambil data dari Supabase.
 
----
+### 3. Daftar Order Diterima Oleh Pembeli (Seller)
+- **Endpoint**: `GET /seller/completed`
+- **Base URL**: `https://backendmarket-production.up.railway.app/seller/V1/order`
+- **Deskripsi**: Mengambil daftar pesanan dengan status "diterima oleh pembeli" milik seller, termasuk detail item, jumlah total, dan informasi alamat pembeli serta penjual.
+- **Autentikasi**: Memerlukan cookie `seller_info` dengan ID seller yang valid.
+- **Respons**: Sama seperti endpoint `/seller/cancelled`, tetapi untuk status "diterima oleh pembeli".
+- **Cache**: Menggunakan cache dengan kunci `orders:seller:completed:<seller_id>`.
+- **Error**:
+  - `401`: Seller belum login.
+  - `500`: Kesalahan server, seperti gagal mengambil data dari Supabase.
 
-## Catatan Tambahan
-- **Zona Waktu**: Semua tanggal dan waktu menggunakan zona waktu **Asia/Jakarta**.
-- **Cache**: Endpoint `/order/daily` menggunakan cache untuk mempercepat respons. Cache dihasilkan berdasarkan `seller_id` dan tanggal hari ini.
-- **Format Tanggal**: Gunakan format `YYYY-MM-DD` untuk parameter `start` dan `end` pada endpoint `/history-order-by-day`.
-- **Kesalahan Parsing**: Jika data seperti `buyer_address` atau `product_image_url` tidak dapat di-parse sebagai JSON, API akan menangani kasus tersebut dengan aman dan memberikan nilai fallback.
+### 4. Daftar Order Dibatalkan Oleh Seller / Sistem (Buyer)
+- **Endpoint**: `GET /canceled`
+- **Base URL**: `https://backendmarket-production.up.railway.app/order`
+- **Deskripsi**: Mengambil daftar pesanan dengan status "dibatalkan" milik pembeli, termasuk detail item, jumlah total, informasi alamat, dan status rating.
+- **Autentikasi**: Memerlukan cookie `user_info` dengan ID pengguna yang valid.
+- **Respons**: Sama seperti endpoint `/seller/cancelled`, tetapi untuk pesanan pembeli dengan tambahan field `is_rated`.
+- **Cache**: Menggunakan cache dengan kunci `orders:canceled:<user_id>`.
+- **Error**:
+  - `401`: Pengguna belum login.
+  - `500`: Kesalahan server, seperti gagal mengambil data atau parsing alamat.
+
+### 5. Daftar Order Diterima (Buyer)
+- **Endpoint**: `GET /received`
+- **Base URL**: `https://backendmarket-production.up.railway.app/order`
+- **Deskripsi**: Mengambil daftar pesanan dengan status "diterima oleh pembeli" milik pembeli, termasuk detail item, jumlah total, informasi alamat, dan status rating.
+- **Autentikasi**: Memerlukan cookie `user_info` dengan ID pengguna yang valid.
+- **Respons**: Sama seperti endpoint `/canceled`, tetapi untuk status "diterima oleh pembeli".
+- **Cache**: Menggunakan cache dengan kunci `orders:received:<user_id>`.
+- **Error**:
+  - `401`: Pengguna belum login.
+  - `500`: Kesalahan server, seperti gagal mengambil data atau parsing alamat.
+
+## Catatan
+- **Autentikasi**: Semua endpoint memerlukan cookie autentikasi (`seller_info` untuk seller, `user_info` untuk buyer).
+- **Cache**: Digunakan untuk mengoptimalkan performa dengan menyimpan hasil query ke memori.
+- **Format Alamat**: Alamat pembeli dan penjual di-parse dari JSON untuk menghasilkan `full_address` dalam format string.
+- **PDF AWB**: Menggunakan `pdfkit` untuk menghasilkan label pengiriman dengan desain yang mencakup header, detail produk, kode QR, dan elemen dekoratif.
+- **Error Handling**: Semua endpoint memiliki penanganan kesalahan dengan pesan dalam bahasa Indonesia dan kode status HTTP yang sesuai.
 
 ## Dependensi
-- **Express**: Framework untuk menangani routing HTTP.
-- **Supabase**: Digunakan untuk mengakses database.
-- **Luxon**: Untuk pengelolaan tanggal dan waktu.
-- **Node-Cache**: Untuk caching data order harian.
+- `express`: Framework untuk routing API.
+- `supabase`: Koneksi ke database Supabase untuk query data.
+- `luxon`: Penanganan tanggal dan waktu.
+- `qrcode`: Pembuatan kode QR untuk verifikasi AWB.
+- `pdfkit`: Pembuatan dokumen PDF untuk label pengiriman.
+- `axios`: Pengambilan logo dari URL.
+- `orderCache`: Sistem caching untuk hasil query.
