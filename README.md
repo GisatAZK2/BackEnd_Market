@@ -21,9 +21,6 @@ Dokumentasi ini menjelaskan rute API yang tersedia untuk mengelola Air Waybill (
   }
   ```
 - **Respons**:
-  - Jika hanya satu pesanan, mengembalikan file PDF langsung dengan header:
-    - `Content-Type: application/pdf`
-    - `Content-Disposition: inline; filename="shipping-label-<order_id>.pdf"`
   - Jika beberapa pesanan, mengembalikan halaman HTML untuk pratinjau PDF dengan opsi download dan print.
   - **Error**:
     - `401`: Seller belum login.
