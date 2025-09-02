@@ -1,4 +1,3 @@
-// awb.js
 const express = require("express");
 const supabase = require("../../config/supabase");
 const router = express.Router();
@@ -65,7 +64,8 @@ router.post("/seller/generate-awb", async (req, res) => {
         variant_name: item.variant_name || null,
       });
     });
-        // QR Codes
+
+    // QR Codes
     const qrCodes = {};
     for (const order of ordersData) {
       try {
@@ -83,6 +83,8 @@ router.post("/seller/generate-awb", async (req, res) => {
     // Logo
     let logoBuffer;
     try {
+萬元
+
       const logoUrl =
         "https://hihfiptclwrwuklojdec.supabase.co/storage/v1/object/public/store-photos/BG-Logo-Aplikasi.png";
       const response = await axios.get(logoUrl, {
@@ -416,16 +418,6 @@ router.post("/seller/generate-awb", async (req, res) => {
       });
     };
 
-    if (ordersData.length === 1) {
-      const pdfBuffer = await generatePDF(ordersData, logoBuffer);
-      res.setHeader("Content-Type", "application/pdf");
-      res.setHeader(
-        "Content-Disposition",
-        `inline; filename="shipping-label-${ordersData[0].id}.pdf"`
-      );
-      return res.send(pdfBuffer);
-    }
-
     const pdfBuffer = await generatePDF(ordersData, logoBuffer);
     const pdfBase64 = pdfBuffer.toString("base64");
 
@@ -462,7 +454,7 @@ router.post("/seller/generate-awb", async (req, res) => {
 function downloadPDF(base64Data) {
   const link = document.createElement('a');
   link.href = 'data:application/pdf;base64,' + base64Data;
-  link.download = 'shipping-labels.pdf';
+  link.download = 'shipping-labels${ordersData.length === 1 ? `-${ordersData[0].id}` : ''}.pdf';
   link.click();
 }
 function printPDF(base64Data) {
