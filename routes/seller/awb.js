@@ -1,3 +1,4 @@
+// awb.js
 const express = require("express");
 const supabase = require("../../config/supabase");
 const router = express.Router();
@@ -5,6 +6,7 @@ const { DateTime } = require("luxon");
 const QRCode = require('qrcode');
 const PDFDocument = require('pdfkit');
 const axios = require('axios');
+const sendOrderNotification = require("../../utils/email");
 
 router.post("/seller/generate-awb", async (req, res) => {
   try {
@@ -32,6 +34,17 @@ router.post("/seller/generate-awb", async (req, res) => {
       return res.status(404).json({ message: "❌ Order tidak ditemukan atau tidak milik seller ini." });
     }
 
+    // Update order status to "sedang di kemas"
+    const { error: updateError } = await supabase
+      .from("orders")
+      .update({ status: "sedang di kemas" })
+      .in("id", orderIds)
+      .eq("seller_id", sellerInfo.id);
+
+    if (updateError) {
+      return res.status(500).json({ message: "❌ Gagal memperbarui status order.", error: updateError.message });
+    }
+
     // Fetch items for all orders
     const [orderItemsRes, detailItemsRes] = await Promise.all([
       supabase.from("order_items").select("*").in("order_id", orderIds),
@@ -52,8 +65,7 @@ router.post("/seller/generate-awb", async (req, res) => {
         variant_name: item.variant_name || null,
       });
     });
-    
-    // QR Codes
+        // QR Codes
     const qrCodes = {};
     for (const order of ordersData) {
       try {
@@ -105,8 +117,11 @@ router.post("/seller/generate-awb", async (req, res) => {
 
       const sellerFullAddress = [
         sellerAddress?.store_address,
+        sellerAddress?.kelurahan,
+        sellerAddress?.kecamatan,
         sellerAddress?.kota_kabupaten,
         sellerAddress?.provinsi,
+        sellerAddress?.kode_pos,
       ]
         .filter(Boolean)
         .join(", ");
@@ -117,32 +132,51 @@ router.post("/seller/generate-awb", async (req, res) => {
         quantity: item.quantity,
       }));
 
+      // Calculate hAddr for product section border
+      const hAddr = order.pickup_method.toLowerCase() === "diantar"
+        ? doc.heightOfString(buyerFullAddress, { width: 105 })
+        : doc.heightOfString(sellerFullAddress, { width: 105 });
+
+      // Background pattern
+      doc.save();
+      doc.opacity(0.03);
+      for (let i = 0; i < 10; i++) {
+        doc.rect(18 + i * 25, 18, 20, 360).fillColor('#1e40af').fill();
+      }
+      doc.restore();
+
       // Border
       doc.lineWidth(1).rect(18, 18, 216, 360).strokeColor("#d1d5db").stroke();
 
-      // Header
+      // Header with improved design
+      doc.rect(18, 18, 216, 32).fillColor('#fbbf24').fill();
+      
       if (logoBuffer) {
-        doc.image(logoBuffer, 20, 20, { width: 30, height: 30 });
+        doc.image(logoBuffer, 20, 20, { width: 25, height: 25 });
       }
+      
       doc
         .fontSize(14)
         .font("Helvetica-Bold")
         .fillColor("#1e40af")
-        .text("SHIPPING LABEL", 55, 25);
+        .text("SHIPPING LABEL", 55, 22);
+      
       doc
         .fontSize(8)
         .font("Helvetica")
-        .fillColor("#6b7280")
-        .text(`ID: ${order.id}`, 55, 42);
-      doc.roundedRect(180, 25, 40, 15, 4).fillColor("#dbeafe").fill();
+        .fillColor("#1e40af")
+        .text(`ID: ${order.id}`, 55, 38);
+      
+      doc.roundedRect(180, 22, 40, 15, 4).fillColor("#1e40af").fill();
       doc
         .fontSize(8)
         .font("Helvetica-Bold")
-        .fillColor("#1e40af")
-        .text(order.pickup_method.toUpperCase(), 180, 30, {
+        .fillColor("#ffffff")
+        .text(order.pickup_method.toUpperCase(), 180, 27, {
           align: "center",
           width: 40,
         });
+      
       doc
         .moveTo(20, 50)
         .lineTo(232, 50)
@@ -150,132 +184,218 @@ router.post("/seller/generate-awb", async (req, res) => {
         .strokeColor("#d1d5db")
         .stroke();
 
-      // Receiver
-      doc
-        .fontSize(8)
-        .font("Helvetica-Bold")
-        .fillColor("#1d4ed8")
-        .text("Penerima", 20, 60);
+      // Receiver or Pickup Instruction
+      if (order.pickup_method.toLowerCase() === "diantar") {
+        doc
+          .fontSize(8)
+          .font("Helvetica-Bold")
+          .fillColor("#1d4ed8")
+          .text("Penerima", 20, 60);
 
-      let yAddr = 75;
-      doc
-        .fontSize(10)
-        .font("Helvetica-Bold")
-        .fillColor("#000")
-        .text(order.buyer?.nama_penerima || order.buyer?.username, 25, yAddr, {
-          width: 95,
-        });
-      yAddr += 10;
+        let yAddr = 75;
+        doc
+          .fontSize(10)
+          .font("Helvetica-Bold")
+          .fillColor("#000")
+          .text(order.buyer?.nama_penerima || order.buyer?.username, 25, yAddr, {
+            width: 95,
+          });
+        yAddr += 10;
 
-      const hAddr = doc.heightOfString(buyerFullAddress, { width: 105 });
-      doc
-        .fontSize(7)
-        .font("Helvetica")
-        .text(buyerFullAddress, 25, yAddr, { width: 105 });
-      yAddr += hAddr;
-      doc
-        .fontSize(7)
-        .text(`Telp: ${order.buyer?.no_telepon || "-"}`, 25, yAddr, {
-          width: 105,
-        });
+        doc
+          .fontSize(7)
+          .font("Helvetica")
+          .text(buyerFullAddress, 25, yAddr, { width: 105 });
+        yAddr += hAddr;
+        doc
+          .fontSize(7)
+          .text(`Telp: ${order.buyer?.no_telepon || "-"}`, 25, yAddr, {
+            width: 105,
+          });
 
-      const receiverBottom = yAddr + 5;
+        var receiverBottom = yAddr + 5;
+      } else {
+        // For "diambil", show pickup instruction with full seller address
+        doc
+          .fontSize(8)
+          .font("Helvetica-Bold")
+          .fillColor("#1d4ed8")
+          .text("Instruksi Pengambilan", 20, 60);
+        
+        doc
+          .fontSize(10)
+          .font("Helvetica-Bold")
+          .fillColor("#000")
+          .text("Ambil di Toko", 25, 75, { width: 95 });
+        
+        doc
+          .fontSize(7)
+          .font("Helvetica")
+          .text(sellerFullAddress, 25, 90, { width: 105 });
+        
+        var receiverBottom = 90 + hAddr + 5;
+      }
 
-      // Sender
-      doc
-        .fontSize(8)
-        .font("Helvetica-Bold")
-        .fillColor("#1d4ed8")
-        .text("Pengirim", 140, 60);
+      // Sender information
+      if (order.pickup_method.toLowerCase() === "diantar") {
+        // Regular sender info for delivery
+        doc
+          .fontSize(8)
+          .font("Helvetica-Bold")
+          .fillColor("#1d4ed8")
+          .text("Pengirim", 140, 60);
 
-      let ySend = 75;
-      doc
-        .fontSize(10)
-        .font("Helvetica-Bold")
-        .fillColor("#000")
-        .text(sellerInfo.store_name || "Toko Anda", 145, ySend, { width: 85 });
-      ySend += 12;
+        let ySend = 75;
+        doc
+          .fontSize(10)
+          .font("Helvetica-Bold")
+          .fillColor("#000")
+          .text(sellerInfo.store_name || "Toko Anda", 145, ySend, { width: 85 });
+        ySend += 12;
 
-      const hSend = doc.heightOfString(sellerFullAddress, { width: 85 });
-      doc
-        .fontSize(7)
-        .font("Helvetica")
-        .text(sellerFullAddress, 145, ySend, { width: 85 });
+        const hSend = doc.heightOfString(sellerFullAddress, { width: 85 });
+        doc
+          .fontSize(7)
+          .font("Helvetica")
+          .text(sellerFullAddress, 145, ySend, { width: 85 });
 
-      const senderBottom = ySend + hSend + 5;
+        var senderBottom = ySend + hSend + 5;
+      } else {
+        // For "diambil", show buyer info instead of sender
+        doc
+          .fontSize(8)
+          .font("Helvetica-Bold")
+          .fillColor("#1d4ed8")
+          .text("Penerima", 140, 60);
+
+        let ySend = 75;
+        doc
+          .fontSize(10)
+          .font("Helvetica-Bold")
+          .fillColor("#000")
+          .text(order.buyer?.nama_penerima || order.buyer?.username, 145, ySend, { width: 85 });
+        ySend += 12;
+
+        doc
+          .fontSize(7)
+          .font("Helvetica")
+          .text(`Telp: ${order.buyer?.no_telepon || "-"}`, 145, ySend, { width: 85 });
+        ySend += 10;
+        
+        doc
+          .fontSize(7)
+          .font("Helvetica")
+          .text(`Kota: ${order.buyer?.kota_kabupaten || "-"}`, 145, ySend, { width: 85 });
+
+        var senderBottom = ySend + 10;
+      }
 
       // Dynamic Y start for product
       let yStart = Math.max(receiverBottom, senderBottom) + 5;
 
-      // Product
+      // Product section with improved design
+      doc.roundedRect(18, yStart - 5, 216, 20, 4).fillColor("#fbbf24").fill();
       doc
-        .fontSize(8)
+        .fontSize(9)
         .font("Helvetica-Bold")
-        .fillColor("#1d4ed8")
-        .text("Detail Produk", 20, yStart);
-      yStart += 10;
-      doc.roundedRect(20, yStart, 205, hAddr + 20, 4).strokeColor("#d1d5db").stroke(); // Adjusted border height to fit address
-      let y = yStart + 5;
-      itemsList.forEach((item) => {
+        .fillColor("#1e40af")
+        .text("DETAIL PRODUK", 25, yStart);
+      
+      yStart += 15;
+      
+      // Product items with alternating background
+      let y = yStart;
+      itemsList.forEach((item, index) => {
+        // Alternate background color for items
+        if (index % 2 === 0) {
+          doc.rect(20, y, 205, 20).fillColor("#f3f4f6").fill();
+        }
+        
         doc
-          .fontSize(10)
+          .fontSize(9)
           .font("Helvetica-Bold")
           .fillColor("#000")
-          .text(item.product_name, 25, y, { width: 150 });
+          .text(item.product_name, 25, y + 5, { width: 150 });
+        
         if (item.variant_name) {
           doc
-            .fontSize(8)
+            .fontSize(7)
             .font("Helvetica")
             .fillColor("#6b7280")
-            .text(item.variant_name, 25, y + 10, { width: 150 });
+            .text(item.variant_name, 25, y + 15, { width: 150 });
         }
+        
+        doc
+          .fontSize(9)
+          .font("Helvetica-Bold")
+          .fillColor("#000")
+          .text(`x ${item.quantity}`, 175, y + 5, { align: "right", width: 45 });
+        
+        y += item.variant_name ? 25 : 20;
+      });
+
+      // Calculate product section height
+      const productSectionHeight = y - yStart;
+      
+      // Prices section - only show for delivery
+      if (order.pickup_method.toLowerCase() === "diantar") {
+        doc.roundedRect(20, y + 10, 95, 30, 4).fillColor("#dbeafe").fill();
+        doc.fontSize(8).fillColor("#1d4ed8").text("Total Harga", 25, y + 15);
         doc
           .fontSize(10)
           .font("Helvetica-Bold")
-          .fillColor("#000")
-          .text(`x ${item.quantity}`, 175, y, { align: "right", width: 45 });
-        y += item.variant_name ? 25 : 15;
-      });
+          .fillColor("#1e40af")
+          .text(`Rp ${order.total_price.toLocaleString()}`, 25, y + 25);
+        
+        doc.roundedRect(130, y + 10, 95, 30, 4).fillColor("#dbeafe").fill();
+        doc.fontSize(8).fillColor("#1d4ed8").text("Ongkir", 135, y + 15);
+        doc
+          .fontSize(10)
+          .font("Helvetica-Bold")
+          .fillColor("#1e40af")
+          .text(
+            `Rp ${order.shipping_cost?.toLocaleString() || "10,000"}`,
+            135,
+            y + 25
+          );
+      } else {
+        // For pickup, add a note instead of prices
+        doc.roundedRect(20, y + 10, 205, 20, 4).fillColor("#fef3c7").fill();
+        doc.fontSize(8).fillColor("#92400e").text("Pembayaran dilakukan di toko", 25, y + 15);
+      }
 
-      // Prices
-      doc.roundedRect(20, 270, 95, 30, 4).fillColor("#dbeafe").fill();
-      doc.fontSize(8).fillColor("#1d4ed8").text("Total Harga", 25, 275);
-      doc
-        .fontSize(10)
-        .font("Helvetica-Bold")
-        .fillColor("#1e40af")
-        .text(`Rp ${order.total_price.toLocaleString()}`, 25, 285);
-      doc.roundedRect(130, 270, 95, 30, 4).fillColor("#dbeafe").fill();
-      doc.fontSize(8).fillColor("#1d4ed8").text("Ongkir", 135, 275);
-      doc
-        .fontSize(10)
-        .font("Helvetica-Bold")
-        .fillColor("#1e40af")
-        .text(
-          `Rp ${order.shipping_cost?.toLocaleString() || "10,000"}`,
-          135,
-          285
-        );
-
-      // Footer
+      // Footer with improved design
       doc
         .moveTo(20, 310)
         .lineTo(232, 310)
-        .dash(5, { space: 5 })
         .lineWidth(1)
         .strokeColor("#93c5fd")
         .stroke();
+      
+      doc.rect(18, 310, 216, 68).fillColor("#f1f5f9").fill();
+      
       doc
         .fontSize(8)
         .fillColor("#6b7280")
-        .text(new Date(order.created_at).toLocaleDateString("id-ID"), 20, 315);
+        .text(`Dicetak: ${new Date().toLocaleDateString("id-ID")} ${new Date().toLocaleTimeString("id-ID")}`, 20, 320);
+      
+      doc
+        .fontSize(8)
+        .fillColor("#6b7280")
+        .text(`ID Order: ${order.id}`, 20, 330);
+      
       if (qrCodes[order.id]) {
-        doc.image(qrCodes[order.id], 178, 315, { width: 50, height: 50 });
+        doc.image(qrCodes[order.id], 178, 315, { width: 40, height: 40 });
         doc
-          .fontSize(8)
+          .fontSize(7)
           .fillColor("#6b7280")
-          .text("Scan QR", 178, 370, { align: "center", width: 50 });
+          .text("Scan QR untuk verifikasi", 178, 360, { align: "center", width: 50 });
       }
+      
+      // Add decorative elements
+      doc.circle(40, 340, 3).fillColor("#3b82f6").fill();
+      doc.circle(50, 340, 3).fillColor("#10b981").fill();
+      doc.circle(60, 340, 3).fillColor("#f59e0b").fill();
     };
 
     const generatePDF = (orders, logoBuffer) => {

@@ -28,6 +28,210 @@ function safeParseImageUrl(data) {
   }
 }
 
+// ======================
+// GET orders dibatalkan
+// ======================
+router.get("/canceled", async (req, res) => {
+  try {
+    const userInfo = req.cookies?.user_info ? JSON.parse(req.cookies.user_info) : null;
+    if (!userInfo?.id) return res.status(401).json({ message: "❌ Harus login untuk melihat daftar order batal." });
+
+    const cacheKey = `orders:canceled:${userInfo.id}`;
+    let cachedOrders = orderCache.get(cacheKey);
+
+    if (cachedOrders) {
+      const updatedOrders = await attachRatings(cachedOrders, userInfo.id);
+      return res.status(200).json({ message: "✅ Daftar order dibatalkan berhasil diambil.", orders: updatedOrders });
+    }
+
+    const { data: ordersData, error: orderError } = await supabase
+      .from("orders")
+      .select("id, created_at, total_price, delivery_fee, status, pickup_method, confirm_deadline, buyer_address, seller_address")
+      .eq("user_id", userInfo.id)
+      .eq("status", "dibatalkan")
+      .order("created_at", { ascending: false });
+
+    if (orderError) return res.status(500).json({ message: "❌ Gagal mengambil data order batal.", error: orderError });
+    if (!ordersData.length) return res.status(200).json({ message: "✅ Tidak ada order dibatalkan.", orders: [] });
+
+    const orderIds = ordersData.map(o => o.id);
+    const [orderItemsRes, detailItemsRes] = await Promise.all([
+      supabase.from("order_items").select("id, order_id, product_id, variant_id, quantity").in("order_id", orderIds),
+      supabase.from("order_details_items").select("*").in("order_id", orderIds)
+    ]);
+
+    const orderItems = orderItemsRes.data || [];
+    const detailItems = detailItemsRes.data || [];
+
+    const orderItemMap = {};
+    orderItems.forEach(oi => {
+      const key = `${oi.order_id}-${oi.product_id}-${oi.variant_id ?? "null"}`;
+      orderItemMap[key] = { id: oi.id, quantity: oi.quantity ?? 0 };
+    });
+
+    const qtyByOrder = {};
+    orderItems.forEach(item => {
+      qtyByOrder[item.order_id] = (qtyByOrder[item.order_id] || 0) + (item.quantity ?? 0);
+    });
+
+    const itemsByOrder = {};
+    detailItems.forEach(item => {
+      const key = `${item.order_id}-${item.product_id}-${item.variant_id ?? "null"}`;
+      const entry = orderItemMap[key] || { id: null, quantity: 0 };
+
+      itemsByOrder[item.order_id] = itemsByOrder[item.order_id] || [];
+      itemsByOrder[item.order_id].push({
+        orderItemId: entry.id,
+        product_id: item.product_id,
+        product_name: item.product_name,
+        product_image_url: safeParseImageUrl(item.product_image_url),
+        quantity: entry.quantity,
+        price_per_item: item.variant_final_price ?? item.final_price ?? item.product_price,
+        discount_percentage: item.variant_discount_percentage ?? item.discount_percentage ?? 0,
+        variant: item.variant_id
+          ? {
+              id: item.variant_id,
+              variant_name: item.variant_name,
+              variant_image_url: item.variant_image_url,
+              variant_price: item.variant_price,
+              variant_final_price: item.variant_final_price,
+              variant_discount_percentage: item.variant_discount_percentage,
+            }
+          : null,
+        ratings: []
+      });
+    });
+
+    let orders = ordersData.map(order => {
+      const buyerInfo = parseAddress(order.buyer_address, true);
+      const sellerInfo = parseAddress(order.seller_address, false);
+
+      return {
+        ...order,
+        order_items: itemsByOrder[order.id] || [],
+        total_quantity: qtyByOrder[order.id] || 0,
+        buyer_info: buyerInfo.info,
+        buyer_full_address: buyerInfo.fullAddress,
+        seller_info: sellerInfo.info,
+        seller_full_address: sellerInfo.fullAddress,
+        is_rated: false
+      };
+    });
+
+    orderCache.set(cacheKey, orders);
+
+    orders = await attachRatings(orders, userInfo.id);
+
+    return res.status(200).json({ message: "✅ Daftar order dibatalkan berhasil diambil.", orders });
+  } catch (err) {
+    console.error("❌ Server error (canceled):", err);
+    return res.status(500).json({ message: "❌ Terjadi kesalahan server", error: err.message });
+  }
+});
+
+// ======================
+// GET orders diterima oleh pembeli
+// ======================
+router.get("/received", async (req, res) => {
+  try {
+    const userInfo = req.cookies?.user_info ? JSON.parse(req.cookies.user_info) : null;
+    if (!userInfo?.id) return res.status(401).json({ message: "❌ Harus login untuk melihat daftar order diterima." });
+
+    const cacheKey = `orders:received:${userInfo.id}`;
+    let cachedOrders = orderCache.get(cacheKey);
+
+    if (cachedOrders) {
+      const updatedOrders = await attachRatings(cachedOrders, userInfo.id);
+      return res.status(200).json({ message: "✅ Daftar order diterima berhasil diambil.", orders: updatedOrders });
+    }
+
+    const { data: ordersData, error: orderError } = await supabase
+      .from("orders")
+      .select("id, created_at, total_price, delivery_fee, status, pickup_method, confirm_deadline, buyer_address, seller_address")
+      .eq("user_id", userInfo.id)
+      .eq("status", "diterima oleh pembeli")
+      .order("created_at", { ascending: false });
+
+    if (orderError) return res.status(500).json({ message: "❌ Gagal mengambil data order diterima.", error: orderError });
+    if (!ordersData.length) return res.status(200).json({ message: "✅ Tidak ada order diterima.", orders: [] });
+
+    const orderIds = ordersData.map(o => o.id);
+    const [orderItemsRes, detailItemsRes] = await Promise.all([
+      supabase.from("order_items").select("id, order_id, product_id, variant_id, quantity").in("order_id", orderIds),
+      supabase.from("order_details_items").select("*").in("order_id", orderIds)
+    ]);
+
+    const orderItems = orderItemsRes.data || [];
+    const detailItems = detailItemsRes.data || [];
+
+    const orderItemMap = {};
+    orderItems.forEach(oi => {
+      const key = `${oi.order_id}-${oi.product_id}-${oi.variant_id ?? "null"}`;
+      orderItemMap[key] = { id: oi.id, quantity: oi.quantity ?? 0 };
+    });
+
+    const qtyByOrder = {};
+    orderItems.forEach(item => {
+      qtyByOrder[item.order_id] = (qtyByOrder[item.order_id] || 0) + (item.quantity ?? 0);
+    });
+
+    const itemsByOrder = {};
+    detailItems.forEach(item => {
+      const key = `${item.order_id}-${item.product_id}-${item.variant_id ?? "null"}`;
+      const entry = orderItemMap[key] || { id: null, quantity: 0 };
+
+      itemsByOrder[item.order_id] = itemsByOrder[item.order_id] || [];
+      itemsByOrder[item.order_id].push({
+        orderItemId: entry.id,
+        product_id: item.product_id,
+        product_name: item.product_name,
+        product_image_url: safeParseImageUrl(item.product_image_url),
+        quantity: entry.quantity,
+        price_per_item: item.variant_final_price ?? item.final_price ?? item.product_price,
+        discount_percentage: item.variant_discount_percentage ?? item.discount_percentage ?? 0,
+        variant: item.variant_id
+          ? {
+              id: item.variant_id,
+              variant_name: item.variant_name,
+              variant_image_url: item.variant_image_url,
+              variant_price: item.variant_price,
+              variant_final_price: item.variant_final_price,
+              variant_discount_percentage: item.variant_discount_percentage,
+            }
+          : null,
+        ratings: []
+      });
+    });
+
+    let orders = ordersData.map(order => {
+      const buyerInfo = parseAddress(order.buyer_address, true);
+      const sellerInfo = parseAddress(order.seller_address, false);
+
+      return {
+        ...order,
+        order_items: itemsByOrder[order.id] || [],
+        total_quantity: qtyByOrder[order.id] || 0,
+        buyer_info: buyerInfo.info,
+        buyer_full_address: buyerInfo.fullAddress,
+        seller_info: sellerInfo.info,
+        seller_full_address: sellerInfo.fullAddress,
+        is_rated: false
+      };
+    });
+
+    orderCache.set(cacheKey, orders);
+
+    orders = await attachRatings(orders, userInfo.id);
+
+    return res.status(200).json({ message: "✅ Daftar order diterima berhasil diambil.", orders });
+  } catch (err) {
+    console.error("❌ Server error (received):", err);
+    return res.status(500).json({ message: "❌ Terjadi kesalahan server", error: err.message });
+  }
+});
+
+
+
 router.post("/cart/checkout", detectspam, verifyCaptcha, async (req, res) => {
   const startTime = Date.now();
 
@@ -559,6 +763,7 @@ router.get("/all", async (req, res) => {
       .from("orders")
       .select("id, created_at, total_price, delivery_fee, status, pickup_method, confirm_deadline, buyer_address, seller_address")
       .eq("user_id", userInfo.id)
+       .not("status", "in", "(dibatalkan)")
       .order("created_at", { ascending: false });
 
     if (orderError) return res.status(500).json({ message: "❌ Gagal mengambil data order.", error: orderError });
@@ -645,7 +850,6 @@ router.get("/all", async (req, res) => {
     return res.status(500).json({ message: "❌ Terjadi kesalahan server", error: err.message });
   }
 });
-
 // ======================
 // GET order by ID
 // ======================
@@ -791,5 +995,8 @@ function parseAddress(address, isBuyer = true) {
     return { info: null, fullAddress: null };
   }
 }
+
+
+
 
 module.exports = router;

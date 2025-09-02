@@ -1,3 +1,4 @@
+// email.js
 const nodemailer = require("nodemailer");
 const QRCode = require("qrcode");
 
@@ -19,6 +20,7 @@ async function sendOrderNotification({
   new_status,
   seller_address = {},
   cancel_reason = null,
+  pdfBuffer = null,
 }) {
   const isDiantar = pickup_method?.toLowerCase() === "diantar";
   const qrCodeBuffer = await QRCode.toBuffer(order_id);
@@ -37,7 +39,7 @@ async function sendOrderNotification({
       titleSeller = `📢 Pesanan Baru Masuk (#${order_id})`;
       break;
     case "sedang di kemas":
-      buyerMessage = isDiantar ? "Pesanan Anda sedang dikemas dan akan segera dikirim." : "Pesanan Anda sedang dikemas dan akan siap diambil.";
+      buyerMessage = isDiantar ? "Pesanan Anda sedang dikemas dan akan segera dikirim." : "Pesanan Anda sedang dikemas dan akan siap diambil. Lampiran label pengiriman tersedia.";
       sellerMessage = "Segera kemas pesanan pembeli.";
       titleBuyer = `📦 Pesanan Sedang Dikemas (#${order_id})`;
       titleSeller = `📦 Segera Kemas Pesanan (#${order_id})`;
@@ -61,12 +63,11 @@ async function sendOrderNotification({
       titleSeller = `🎉 Pesanan Selesai (#${order_id})`;
       break;
     case "dibatalkan":
-  buyerMessage = `Pesanan Anda dibatalkan.${cancel_reason ? " Alasan: " + cancel_reason : ""}`;
-  sellerMessage = `Pesanan dibatalkan.${cancel_reason ? " Alasan: " + cancel_reason : ""}`;
-  titleBuyer = `❌ Pesanan Dibatalkan (#${order_id})`;
-  titleSeller = `❌ Pesanan Dibatalkan (#${order_id})`;
-  break;
-
+      buyerMessage = `Pesanan Anda dibatalkan.${cancel_reason ? " Alasan: " + cancel_reason : ""}`;
+      sellerMessage = `Pesanan dibatalkan.${cancel_reason ? " Alasan: " + cancel_reason : ""}`;
+      titleBuyer = `❌ Pesanan Dibatalkan (#${order_id})`;
+      titleSeller = `❌ Pesanan Dibatalkan (#${order_id})`;
+      break;
   }
 
   // === Template Email ===
@@ -95,6 +96,7 @@ async function sendOrderNotification({
            Kec. ${seller_address.kecamatan || "-"}, 
            ${seller_address.kabupaten || "-"}, 
            Prov. ${seller_address.provinsi || "-"}
+           ${seller_address.kode_pos ? `, ${seller_address.kode_pos}` : ""}
         </p>
         <p><b>Versi Lengkap + Koordinat:</b><br/>
            ${seller_address.store_address || "-"}<br/>
@@ -121,6 +123,9 @@ async function sendOrderNotification({
             <p>${cancel_reason}</p>
             ` : ""}
           ${addressSection}
+          ${(new_status === "sedang di kemas" || new_status === "diterima") && !isDiantar ? `
+            <p>Lampiran: Label pengiriman telah dilampirkan dalam email ini.</p>
+          ` : ""}
           <div style="text-align:center; margin-top:20px;">
             <p>Scan QR Code untuk detail pesanan</p>
             <img src="cid:qrcode@produk-terdekat" alt="QR Code" width="150" height="150" />
@@ -132,6 +137,18 @@ async function sendOrderNotification({
   };
 
   const tasks = [];
+  const attachments = [
+    { filename: "qrcode.png", content: qrCodeBuffer, cid: "qrcode@produk-terdekat" },
+  ];
+
+  // Add PDF attachment for "diambil" orders with status "sedang di kemas" or "diterima"
+  if ((new_status === "sedang di kemas" || new_status === "diterima") && !isDiantar && pdfBuffer) {
+    attachments.push({
+      filename: `shipping-label-${order_id}.pdf`,
+      content: pdfBuffer,
+      contentType: "application/pdf",
+    });
+  }
 
   if (buyer_email) {
     tasks.push(
@@ -140,7 +157,7 @@ async function sendOrderNotification({
         to: buyer_email,
         subject: `[Produk Terdekat] ${titleBuyer}`,
         html: htmlEmailTemplate(titleBuyer, buyerMessage, true),
-        attachments: [{ filename: "qrcode.png", content: qrCodeBuffer, cid: "qrcode@produk-terdekat" }],
+        attachments,
       })
     );
   }
@@ -152,7 +169,7 @@ async function sendOrderNotification({
         to: seller_email,
         subject: `[Produk Terdekat] ${titleSeller} - dari ${buyer_username}`,
         html: htmlEmailTemplate(titleSeller, sellerMessage, false),
-        attachments: [{ filename: "qrcode.png", content: qrCodeBuffer, cid: "qrcode@produk-terdekat" }],
+        attachments,
       })
     );
   }
