@@ -23,131 +23,107 @@ const storage = multer.memoryStorage();
 const upload = multer({ storage });
 
 // ======================== REGISTER ========================
-router.post(
-  "/register",
-  upload.single("avatar"),
-  async (req, res) => {
-    const { email, password, username } = req.body;
-    console.log("Body register:", req.body);
+router.post("/register", upload.single("avatar"), async (req, res) => {
+  const { email, password, username } = req.body;
+  console.log("Body register:", req.body);
 
-    try {
-      // === Cek user sudah ada atau belum ===
-      const { data: existingUser } = await supabase
-        .from("users")
-        .select("*")
-        .eq("email", email)
-        .single();
+  try {
+    // === Cek user sudah ada atau belum (select id saja biar ringan) ===
+    const { data: existingUser, error: findErr } = await supabase
+      .from("users")
+      .select("id")
+      .eq("email", email)
+      .maybeSingle();
 
-      if (existingUser) {
-        return res.status(400).json({
-          error: "Email sudah digunakan. Silakan gunakan email lain.",
-        });
-      }
-
-      // === Buat username final ===
-      const finalUsername =
-        username && username.trim() !== ""
-          ? username.trim()
-          : email.split("@")[0];
-
-      const hashed = await bcrypt.hash(password, 10);
-      const otp = Math.floor(100000 + Math.random() * 900000).toString();
-      const expiresAt = new Date(Date.now() + 5 * 60 * 1000).toISOString();
-
-      // === Avatar Handling ===
-      let avatarPath;
-      if (req.file) {
-        // --- Kalau user upload avatar ---
-        const filename = `avatar_${Date.now()}.webp`;
-
-        // Konversi ke WebP dalam buffer
-        const buffer = await sharp(req.file.buffer)
-          .webp({ quality: 80 })
-          .toBuffer();
-
-        // Upload ke Supabase Storage
-        const { error: uploadErr } = await supabase.storage
-          .from("avatars")
-          .upload(filename, buffer, {
-            contentType: "image/webp",
-            upsert: true,
-          });
-
-        if (uploadErr) {
-          console.error("Upload error:", uploadErr);
-          return res
-            .status(500)
-            .json({ error: "Gagal upload avatar ke storage." });
-        }
-
-        // Ambil public URL
-        const { data: publicUrl } = supabase.storage
-          .from("avatars")
-          .getPublicUrl(filename);
-
-        avatarPath = publicUrl.publicUrl;
-      } else {
-        // --- Kalau user TIDAK upload avatar ---
-        const defaultImagePath = path.join(__dirname, "./assets/user.png");
-        const filename = `avatar_default_${Date.now()}.webp`;
-
-        // Konversi default.png ke WebP buffer
-        const buffer = await sharp(defaultImagePath)
-          .webp({ quality: 80 })
-          .toBuffer();
-
-        // Upload ke Supabase Storage
-        const { error: uploadErr } = await supabase.storage
-          .from("avatars")
-          .upload(filename, buffer, {
-            contentType: "image/webp",
-            upsert: true,
-          });
-
-        if (uploadErr) {
-          console.error("Upload default avatar error:", uploadErr);
-          return res
-            .status(500)
-            .json({ error: "Gagal upload default avatar ke storage." });
-        }
-
-        // Ambil public URL
-        const { data: publicUrl } = supabase.storage
-          .from("avatars")
-          .getPublicUrl(filename);
-
-        avatarPath = publicUrl.publicUrl;
-      }
-
-      // === Simpan ke database ===
-      const { error: insertErr } = await supabase.from("users").insert([
-        {
-          email,
-          username: finalUsername,
-          password: hashed,
-          otp_code: otp,
-          otp_expires_at: expiresAt,
-          verified: false,
-          avatar: avatarPath,
-        },
-      ]);
-
-      if (insertErr) {
-        console.error("Supabase insert error:", insertErr);
-        return res
-          .status(500)
-          .json({ error: "Gagal membuat user di database." });
-      }
-
-      await generateOtp(email, otp);
-      res.status(201).json({ message: "User dibuat. OTP dikirim ke email." });
-    } catch (err) {
-      console.error("Error saat register:", err);
-      res.status(500).json({ error: "Terjadi kesalahan pada server." });
+    if (findErr) {
+      console.error("Supabase error:", findErr);
+      return res.status(500).json({ error: "Gagal cek email user." });
     }
-  },
-);
 
+    if (existingUser) {
+      return res.status(400).json({
+        error: "Email sudah digunakan. Silakan gunakan email lain.",
+      });
+    }
+
+    // === Buat username final ===
+    const finalUsername =
+      username && username.trim() !== ""
+        ? username.trim()
+        : email.split("@")[0];
+
+    // Hash password
+    const hashed = await bcrypt.hash(password, 10);
+
+    // Generate OTP
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    const expiresAt = new Date(Date.now() + 5 * 60 * 1000).toISOString();
+
+    // === Avatar Handling ===
+    let avatarPath;
+
+    if (req.file) {
+      // --- Kalau user upload avatar ---
+      const filename = `avatar_${Date.now()}.webp`;
+
+      // Konversi ke WebP
+      const buffer = await sharp(req.file.buffer)
+        .webp({ quality: 80 })
+        .toBuffer();
+
+      const { error: uploadErr } = await supabase.storage
+        .from("avatars")
+        .upload(filename, buffer, {
+          contentType: "image/webp",
+          upsert: true,
+        });
+
+      if (uploadErr) {
+        console.error("Upload error:", uploadErr);
+        return res.status(500).json({ error: "Gagal upload avatar ke storage." });
+      }
+
+      const { data: publicUrl } = supabase.storage
+        .from("avatars")
+        .getPublicUrl(filename);
+
+      avatarPath = publicUrl.publicUrl;
+    } else {
+      // --- Kalau user TIDAK upload avatar ---
+      // gunakan URL statis dari .env (sudah diupload 1x di Supabase)
+      avatarPath = process.env.DEFAULT_AVATAR_URL;
+    }
+
+    // === Simpan user ke database ===
+    const { error: insertErr } = await supabase.from("users").insert([
+      {
+        email,
+        username: finalUsername,
+        password: hashed,
+        otp_code: otp,
+        otp_expires_at: expiresAt,
+        verified: false,
+        avatar: avatarPath,
+      },
+    ]);
+
+    if (insertErr) {
+      console.error("Supabase insert error:", insertErr);
+      return res.status(500).json({ error: "Gagal membuat user di database." });
+    }
+
+    // === Kirim OTP secara async, jangan blok response ===
+    generateOtp(email, otp).catch((err) =>
+      console.error("Gagal kirim OTP:", err)
+    );
+
+    // === Response cepat ke client ===
+    res.status(201).json({ message: "User dibuat. OTP dikirim ke email." });
+  } catch (err) {
+    console.error("Error saat register:", err);
+    res.status(500).json({ error: "Terjadi kesalahan pada server." });
+  }
+});
 // ======================== VERIFIKASI OTP ========================
 router.post("/verify-otp", async (req, res) => {
   const { email, otp, mode = "email" } = req.body;
