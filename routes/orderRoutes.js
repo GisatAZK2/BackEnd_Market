@@ -434,6 +434,7 @@ router.post("/cart/checkout", detectspam, verifyCaptcha, async (req, res) => {
             variant_discount_percentage: i.variantDiscountPercentage,
             variant_image_url: i.variant?.variant_image_url || null,
           }));
+          await supabase.from("order_item_details").insert(snapshotItems);
           await supabase.from("order_details_items").insert(snapshotItems);
 
           if (userInfo) {

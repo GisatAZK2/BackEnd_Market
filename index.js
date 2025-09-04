@@ -9,7 +9,6 @@ require("dotenv").config();
 
 // === Middleware & Utils ===
 const requireApiKey = require("./middleware/requireApiKey");
-const rateLimiter = require("./middleware/ratelimiter");
 const startCronJobs = require("./utils/restoreStock");
 require("./utils/cron");
 require("./utils/autocancelorder.js");
@@ -114,14 +113,6 @@ app.use((req, res, next) => {
     return next();
   }
   return requireApiKey(req, res, next);
-});
-
-// === Rate Limiter Middleware (Skip /forum-pendaftaran) ===
-app.use((req, res, next) => {
-  if (req.path.startsWith("/forum-pendaftaran")) {
-    return next();
-  }
-  return rateLimiter(req, res, next);
 });
 
 // === Cache Middleware ===
