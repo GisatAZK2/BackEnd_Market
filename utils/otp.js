@@ -1,14 +1,18 @@
 const nodemailer = require('nodemailer');
 
-const FROM_EMAIL = 'gisatazk2@gmail.com';
-const EMAIL_PASSWORD = 'kpld krrk ratp hbyl'; // app password gmail
+const FROM_EMAIL = process.env.FROM_EMAIL;
+const EMAIL_PASSWORD = process.env.EMAIL_PASSWORD;
 
 const transporter = nodemailer.createTransport({
-  service: 'gmail',
+  host: "smtp.gmail.com",
+  port: 465,
+  secure: true,
   auth: {
     user: FROM_EMAIL,
     pass: EMAIL_PASSWORD,
   },
+  logger: true,
+  debug: true,
 });
 
 async function generateOtp(email, code) {
