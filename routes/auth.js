@@ -25,9 +25,7 @@ const upload = multer({ storage });
 // ======================== REGISTER ========================
 router.post(
   "/register",
-  detectSpam,
   upload.single("avatar"),
-  verifyCaptcha,
   async (req, res) => {
     const { email, password, username } = req.body;
     console.log("Body register:", req.body);
@@ -309,7 +307,7 @@ router.post("/login", detectSpam, verifyCaptcha, async (req, res) => {
 });
 
 // ======================== LUPA PASSWORD ========================
-router.post("/forgot-password", detectSpam, verifyCaptcha, async (req, res) => {
+router.post("/forgot-password", async (req, res) => {
   const { email, resetLink } = req.body;
 
   try {
@@ -459,8 +457,6 @@ async function getWilayahName(url, id) {
 router.put(
   "/user/:id",
   upload.single("avatar"),
-  detectSpam,
-  verifyCaptcha,
   async (req, res) => {
     // Pastikan user sudah login dan ID cocok (kalau perlu validasi session/cookie di sini)
 

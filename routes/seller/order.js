@@ -574,17 +574,16 @@ router.get("/seller/:orderId", async (req, res) => {
 });
 
 
-
-// ==================== UPDATE STATUS ORDER ====================
 router.put("/orders/:id/status", async (req, res) => {
-  const PDFDocument = require('pdfkit');
-  const QRCode = require('qrcode');
-  const axios = require('axios');
-
   try {
-    const sellerInfo = req.cookies?.seller_info
-      ? JSON.parse(req.cookies.seller_info)
-      : null;
+    // Parse seller info safely
+    let sellerInfo;
+    try {
+      sellerInfo = req.cookies?.seller_info ? JSON.parse(req.cookies.seller_info) : null;
+      console.log("Seller Info:", sellerInfo); // Debug
+    } catch (err) {
+      return res.status(401).json({ message: "❌ Invalid seller info in cookies." });
+    }
 
     if (!sellerInfo?.id) {
       return res.status(401).json({ message: "❌ Harus login sebagai seller." });
@@ -595,7 +594,7 @@ router.put("/orders/:id/status", async (req, res) => {
 
     // ===== Helpers =====
     const fetchOrder = async () => {
-      return await supabase
+      const { data, error } = await supabase
         .from("orders")
         .select(
           `
@@ -611,30 +610,36 @@ router.put("/orders/:id/status", async (req, res) => {
         .eq("id", orderId)
         .eq("seller_id", sellerInfo.id)
         .single();
+      if (error || !data) throw new Error("Order not found");
+      return data;
     };
 
     const fetchOrderItems = async () => {
-      return await supabase
+      const { data, error } = await supabase
         .from("order_items")
         .select("id, quantity, price_per_item, product_id, variant_id")
         .eq("order_id", orderId);
+      if (error) throw new Error("Failed to fetch order items");
+      return data || [];
     };
 
     const fetchProducts = async (productIds) => {
       if (productIds.length === 0) return [];
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from("products")
         .select("id, product_name, product_image_url")
         .in("id", productIds);
+      if (error) throw new Error("Failed to fetch products");
       return data || [];
     };
 
     const fetchVariants = async (variantIds) => {
       if (variantIds.length === 0) return [];
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from("product_variants")
         .select("id, variant_name, variant_image_url")
         .in("id", variantIds);
+      if (error) throw new Error("Failed to fetch variants");
       return data || [];
     };
 
@@ -689,12 +694,17 @@ router.put("/orders/:id/status", async (req, res) => {
       return statusFlow[current]?.includes(next);
     };
 
+    const safeParseImageUrl = (url) => {
+      // Fallback for undefined safeParseImageUrl
+      return url || null; // Add actual implementation if available
+    };
+
     const buildProductDetails = (items, products, variants) =>
       items.map((item) => {
         const product = products.find((p) => p.id === item.product_id);
         const variant = variants.find((v) => v.id === item.variant_id);
         return {
-          product_name: product?.product_name,
+          product_name: product?.product_name || "Unknown Product",
           variant_name: variant?.variant_name || null,
           quantity: item.quantity,
           total_price: item.price_per_item * item.quantity,
@@ -703,7 +713,7 @@ router.put("/orders/:id/status", async (req, res) => {
         };
       });
 
-    // ===== Generate PDF Function (for diambil on sedang di kemas) =====
+    // ===== Generate PDF Function =====
     const generatePDF = async (order) => {
       const qrData = JSON.stringify({
         orderId: order.id,
@@ -717,12 +727,21 @@ router.put("/orders/:id/status", async (req, res) => {
         const logoUrl = "https://hihfiptclwrwuklojdec.supabase.co/storage/v1/object/public/store-photos/BG-Logo-Aplikasi.png";
         const response = await axios.get(logoUrl, { responseType: "arraybuffer" });
         logoBuffer = Buffer.from(response.data);
-      } catch {
+      } catch (err) {
+        console.error("Failed to fetch logo:", err.message);
         logoBuffer = null;
       }
 
-      const buyerAddress = typeof order.buyer_address === "string" ? JSON.parse(order.buyer_address) : order.buyer_address;
-      const sellerAddress = typeof order.seller_address === "string" ? JSON.parse(order.seller_address) : order.seller_address;
+      // Parse addresses safely
+      let buyerAddress, sellerAddress;
+      try {
+        buyerAddress = typeof order.buyer_address === "string" ? JSON.parse(order.buyer_address) : order.buyer_address;
+        sellerAddress = typeof order.seller_address === "string" ? JSON.parse(order.seller_address) : order.seller_address;
+      } catch (err) {
+        console.error("Failed to parse addresses:", err.message);
+        buyerAddress = {};
+        sellerAddress = {};
+      }
 
       const buyerFullAddress = [
         buyerAddress?.alamat_lengkap,
@@ -737,9 +756,8 @@ router.put("/orders/:id/status", async (req, res) => {
         sellerAddress?.store_address,
         sellerAddress?.kelurahan,
         sellerAddress?.kecamatan,
-        sellerAddress?.kota_kabupaten,
+        sellerAddress?.kabupaten,
         sellerAddress?.provinsi,
-        sellerAddress?.kode_pos,
       ].filter(Boolean).join(", ");
 
       // Fetch items for PDF
@@ -754,7 +772,7 @@ router.put("/orders/:id/status", async (req, res) => {
       const itemsList = detailItems.map(item => {
         const oi = orderItems.find(oi => oi.product_id === item.product_id && oi.variant_id === item.variant_id);
         return {
-          product_name: item.product_name,
+          product_name: item.product_name || "Unknown Product",
           variant_name: item.variant_name || null,
           quantity: oi?.quantity || 0,
         };
@@ -784,7 +802,7 @@ router.put("/orders/:id/status", async (req, res) => {
         doc.fontSize(10).font("Helvetica-Bold").fillColor("#000").text("Ambil di Toko", 25, 75, { width: 95 });
         doc.fontSize(7).font("Helvetica").text(sellerFullAddress, 25, 90, { width: 105 });
         const hAddr = doc.heightOfString(sellerFullAddress, { width: 105 });
-        var receiverBottom = 90 + hAddr + 5;
+        const receiverBottom = 90 + hAddr + 5;
 
         // Pengirim
         doc.fontSize(8).font("Helvetica-Bold").fillColor("#1d4ed8").text("Pengirim", 140, 60);
@@ -833,15 +851,10 @@ router.put("/orders/:id/status", async (req, res) => {
     };
 
     // ===== Main Flow =====
-    const { data: order, error: fetchError } = await fetchOrder();
-    if (fetchError || !order) {
-      return res.status(404).json({ message: "❌ Order tidak ditemukan." });
-    }
-
-    const { data: orderItems, error: itemsError } = await fetchOrderItems();
-    if (itemsError) {
-      return res.status(500).json({ message: "❌ Gagal ambil order items." });
-    }
+    const order = await fetchOrder();
+    console.log("Order Data:", order); // Debug
+    const orderItems = await fetchOrderItems();
+    console.log("Order Items:", orderItems); // Debug
 
     const productIds = [...new Set(orderItems.map((i) => i.product_id))];
     const variantIds = orderItems.map((i) => i.variant_id).filter(Boolean);
@@ -856,6 +869,7 @@ router.put("/orders/:id/status", async (req, res) => {
       const result = determineNewStatus(order, action, barcodeId);
       newStatus = result.status;
       updatePayload = result.payload;
+      console.log("New Status:", newStatus, "Update Payload:", updatePayload); // Debug
     } catch (err) {
       return res.status(400).json({ message: err.message });
     }
@@ -895,7 +909,7 @@ router.put("/orders/:id/status", async (req, res) => {
       .select()
       .single();
 
-    if (updateError) {
+    if (updateError || !updatedOrder) {
       return res.status(500).json({ message: "❌ Gagal update order." });
     }
 
@@ -909,13 +923,13 @@ router.put("/orders/:id/status", async (req, res) => {
 
     const productDetails = buildProductDetails(orderItems, products, variants);
 
-    // Generate PDF if pickup_method "diambil" and new_status "sedang di kemas" or "diterima"
+    // Generate PDF if needed
     let pdfBuffer = null;
     if ((newStatus === "sedang di kemas" || newStatus === "diterima") && order.pickup_method === "diambil") {
       pdfBuffer = await generatePDF(updatedOrder);
     }
 
-    // ⚡ Kirim email / notifikasi di background, tanpa blocking response
+    // Send notification in background
     sendOrderNotification({
       order_id: orderId,
       products: productDetails,
@@ -929,12 +943,13 @@ router.put("/orders/:id/status", async (req, res) => {
       pdfBuffer,
     }).catch((err) => console.error("❌ Gagal kirim notifikasi:", err));
 
-    // ✅ Response cepat
+    // Response
     return res.status(200).json({
       message: `✅ Status order diubah ke '${newStatus}'`,
       order: updatedOrder,
     });
   } catch (err) {
+    console.error("Server Error:", err.message); // Debug
     return res.status(500).json({
       message: "❌ Terjadi kesalahan server.",
       error: err.message,

@@ -398,7 +398,6 @@ router.get("/allproduct", async (req, res) => {
     });
   }
 });
-
 // Produk dengan urutan diskon terbesar
 router.get("/sorted", async (req, res) => {
   try {
