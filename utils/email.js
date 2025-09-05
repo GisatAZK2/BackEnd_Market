@@ -1,8 +1,14 @@
-const { Resend } = require("resend");
+// email.js
+const nodemailer = require("nodemailer");
 const QRCode = require("qrcode");
 
-const resend = new Resend(process.env.RESEND_API_KEY);
-const FROM_EMAIL = process.env.FROM_EMAIL || "Produk Terdekat <noreply@yourdomain.com>";
+const FROM_EMAIL = "gisatazk2@gmail.com";
+const EMAIL_PASSWORD = "kpld krrk ratp hbyl";
+
+const transporter = nodemailer.createTransport({
+  service: "gmail",
+  auth: { user: FROM_EMAIL, pass: EMAIL_PASSWORD },
+});
 
 async function sendOrderNotification({
   order_id,
@@ -17,7 +23,7 @@ async function sendOrderNotification({
   pdfBuffer = null,
 }) {
   const isDiantar = pickup_method?.toLowerCase() === "diantar";
-  const qrCodeDataURL = await QRCode.toDataURL(order_id); // ✅ inline base64
+  const qrCodeBuffer = await QRCode.toBuffer(order_id);
 
   // === Pesan berdasarkan status ===
   let buyerMessage = "";
@@ -27,17 +33,13 @@ async function sendOrderNotification({
 
   switch (new_status) {
     case "pending":
-      buyerMessage = isDiantar
-        ? "Pesanan Anda menunggu konfirmasi seller."
-        : "Pesanan Anda menunggu konfirmasi seller sebelum bisa diambil.";
+      buyerMessage = isDiantar ? "Pesanan Anda menunggu konfirmasi seller." : "Pesanan Anda menunggu konfirmasi seller sebelum bisa diambil.";
       sellerMessage = "Ada pesanan baru! Segera konfirmasi.";
       titleBuyer = `🎉 Pesanan Baru (#${order_id})`;
       titleSeller = `📢 Pesanan Baru Masuk (#${order_id})`;
       break;
     case "sedang di kemas":
-      buyerMessage = isDiantar
-        ? "Pesanan Anda sedang dikemas dan akan segera dikirim."
-        : "Pesanan Anda sedang dikemas dan akan siap diambil. Lampiran label pengiriman tersedia.";
+      buyerMessage = isDiantar ? "Pesanan Anda sedang dikemas dan akan segera dikirim." : "Pesanan Anda sedang dikemas dan akan siap diambil. Lampiran label pengiriman tersedia.";
       sellerMessage = "Segera kemas pesanan pembeli.";
       titleBuyer = `📦 Pesanan Sedang Dikemas (#${order_id})`;
       titleSeller = `📦 Segera Kemas Pesanan (#${order_id})`;
@@ -70,9 +72,7 @@ async function sendOrderNotification({
 
   // === Template Email ===
   const htmlEmailTemplate = (title, message, isBuyer) => {
-    const productListHTML = products
-      .map(
-        (p) => `
+    const productListHTML = products.map((p) => `
       <div style="margin-bottom: 20px; padding: 15px; background: #f9f9f9; border-radius: 8px;">
         <div style="font-size: 16px; font-weight: 600; margin-bottom: 5px;">
           ${p.product_name} ${p.variant_name ? `<span style="color: #666;">- ${p.variant_name}</span>` : ""}
@@ -81,21 +81,14 @@ async function sendOrderNotification({
         <div style="font-weight: 600; color: ${isBuyer ? "#4CAF50" : "#2196F3"};">
           Rp${p.total_price.toLocaleString("id-ID")}
         </div>
-        ${
-          p.product_image_url
-            ? `<div style="margin-top: 10px;">
+        ${p.product_image_url ? `<div style="margin-top: 10px;">
             <img src="${p.product_image_url}" alt="${p.product_name}" style="max-width: 150px; border-radius: 6px; border: 1px solid #eee;">
-          </div>`
-            : ""
-        }
+          </div>` : ""}
       </div>
-    `
-      )
-      .join("");
+    `).join("");
 
-    const addressSection =
-      !isDiantar && seller_address
-        ? `
+    const addressSection = !isDiantar && seller_address
+      ? `
         <h3>📍 Alamat Toko</h3>
         <p><b>Versi Terpisah:</b><br/>
            ${seller_address.store_address || "-"}, 
@@ -110,7 +103,7 @@ async function sendOrderNotification({
            (Lat: ${seller_address.latitude || "-"}, Lng: ${seller_address.longitude || "-"})
         </p>
       `
-        : "";
+      : "";
 
     return `
       <!DOCTYPE html>
@@ -125,23 +118,17 @@ async function sendOrderNotification({
           ${!isBuyer ? `<p>Pembeli: <b>${buyer_username}</b></p>` : ""}
           <p>ID Pesanan: <b>${order_id}</b></p>
           <p>Metode Pengambilan: <b>${isDiantar ? "Diantar" : "Diambil di Toko"}</b></p>
-          ${
-            new_status === "dibatalkan" && cancel_reason
-              ? `
+          ${new_status === "dibatalkan" && cancel_reason ? `
             <h3>❌ Alasan Pembatalan</h3>
             <p>${cancel_reason}</p>
-            `
-              : ""
-          }
+            ` : ""}
           ${addressSection}
-          ${
-            (new_status === "sedang di kemas" || new_status === "diterima") && !isDiantar
-              ? `<p>Lampiran: Label pengiriman telah dilampirkan dalam email ini.</p>`
-              : ""
-          }
+          ${(new_status === "sedang di kemas" || new_status === "diterima") && !isDiantar ? `
+            <p>Lampiran: Label pengiriman telah dilampirkan dalam email ini.</p>
+          ` : ""}
           <div style="text-align:center; margin-top:20px;">
             <p>Scan QR Code untuk detail pesanan</p>
-            <img src="${qrCodeDataURL}" alt="QR Code" width="150" height="150" />
+            <img src="cid:qrcode@produk-terdekat" alt="QR Code" width="150" height="150" />
           </div>
         </div>
       </body>
@@ -149,37 +136,40 @@ async function sendOrderNotification({
     `;
   };
 
-  // === Kirim email pembeli & seller ===
   const tasks = [];
+  const attachments = [
+    { filename: "qrcode.png", content: qrCodeBuffer, cid: "qrcode@produk-terdekat" },
+  ];
+
+  // Add PDF attachment for "diambil" orders with status "sedang di kemas" or "diterima"
+  if ((new_status === "sedang di kemas" || new_status === "diterima") && !isDiantar && pdfBuffer) {
+    attachments.push({
+      filename: `shipping-label-${order_id}.pdf`,
+      content: pdfBuffer,
+      contentType: "application/pdf",
+    });
+  }
 
   if (buyer_email) {
     tasks.push(
-      resend.emails.send({
-        from: FROM_EMAIL,
+      transporter.sendMail({
+        from: `Produk Terdekat <${FROM_EMAIL}>`,
         to: buyer_email,
         subject: `[Produk Terdekat] ${titleBuyer}`,
         html: htmlEmailTemplate(titleBuyer, buyerMessage, true),
-        attachments:
-          pdfBuffer && (new_status === "sedang di kemas" || new_status === "diterima") && !isDiantar
-            ? [
-                {
-                  filename: `shipping-label-${order_id}.pdf`,
-                  content: pdfBuffer.toString("base64"),
-                  encoding: "base64",
-                },
-              ]
-            : [],
+        attachments,
       })
     );
   }
 
   if (seller_email) {
     tasks.push(
-      resend.emails.send({
-        from: FROM_EMAIL,
+      transporter.sendMail({
+        from: `Produk Terdekat <${FROM_EMAIL}>`,
         to: seller_email,
         subject: `[Produk Terdekat] ${titleSeller} - dari ${buyer_username}`,
         html: htmlEmailTemplate(titleSeller, sellerMessage, false),
+        attachments,
       })
     );
   }
