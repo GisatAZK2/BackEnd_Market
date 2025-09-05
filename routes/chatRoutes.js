@@ -6,43 +6,47 @@ const cookieParser = require("cookie-parser");
 module.exports = (app, server) => {
   const GO_CHAT_SERVICE = process.env.GO_CHAT_SERVICE || "http://localhost:8080";
 
-  // === CORS untuk REST API (chat) ===
-  app.use(
-    cors({
-      origin: (origin, callback) => {
-        if (!origin) return callback(null, true);
+ app.use(
+  cors({
+    origin: (origin, callback) => {
+      console.log("Request Origin:", origin);
+      console.log("Allowed Origins:", process.env.CORS_ORIGIN);
+      if (!origin) return callback(null, true);
 
-        const allowedOrigins = process.env.CORS_ORIGIN
-          ? process.env.CORS_ORIGIN.split(",").map((o) => o.trim())
-          : [];
+      const allowedOrigins = process.env.CORS_ORIGIN
+        ? process.env.CORS_ORIGIN.split(",").map((o) => o.trim())
+        : [];
 
-        if (
-          process.env.NODE_ENV !== "production" &&
-          origin.includes("localhost")
-        ) {
-          return callback(null, true);
-        }
+      console.log("Parsed Allowed Origins:", allowedOrigins);
 
-        if (allowedOrigins.includes(origin)) {
-          return callback(null, true);
-        }
+      if (
+        process.env.NODE_ENV !== "production" &&
+        origin.includes("localhost")
+      ) {
+        console.log("Allowing localhost in non-production");
+        return callback(null, true);
+      }
 
-        return callback(new Error("Not allowed by CORS (chat)"));
-      },
-      credentials: true,
-      allowedHeaders: [
-        "Content-Type",
-        "Authorization",
-        "X-Requested-With",
-        "Accept",
-        "Origin",
-        "x-api-key",
-        "ngrok-skip-browser-warning",
-      ],
-      methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    })
-  );
+      if (allowedOrigins.includes(origin)) {
+        console.log("Origin allowed:", origin);
+        return callback(null, true);
+      }
 
+      return callback(new Error("Not allowed by CORS (chat)"));
+    },
+    credentials: true,
+    allowedHeaders: [
+      "Content-Type",
+      "Authorization",
+      "X-Requested-With",
+      "Accept",
+      "Origin",
+      "x-api-key",
+      "ngrok-skip-browser-warning"
+    ],
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+  })
+);
   app.use(cookieParser());
 
   // === Proxy REST ke Go service ===

@@ -149,101 +149,141 @@ router.post(
   },
 );
 
-// ======================== VERIFY OTP ========================
 router.post("/verify-otp", async (req, res) => {
-  const { email, otp, mode = "email" } = req.body;
-
   try {
-    // === Cek user ===
-    const { data: user, error: userErr } = await supabase
-      .from("users")
-      .select("*")
-      .eq("email", email)
-      .single();
+    let { email, otp, mode = "email", googleId } = req.body;
 
-    if (userErr || !user) {
+    // Jika email berupa object (nested), ekstrak fieldnya
+    if (typeof email === "object" && email !== null) {
+      const nested = email;
+      email = nested.email || email;
+      otp = nested.otp || otp;
+      mode = nested.mode || mode;
+      googleId = nested.googleId || googleId;
+    }
+
+    if (mode === "google" && !googleId) {
+      console.log("GoogleId kosong, fallback ke email+otp");
+      mode = "email";
+    }
+
+    if (mode === "email") {
+      if (!email || !otp) {
+        return res.status(400).json({
+          success: false,
+          message: "Email dan OTP diperlukan.",
+        });
+      }
+    }
+
+    // === Query user ===
+    let userQuery = supabase.from("users").select("*");
+    if (mode === "google") {
+      userQuery = userQuery.eq("google_id", googleId);
+    } else {
+      userQuery = userQuery.eq("email", email);
+    }
+
+    const { data: user, error: userErr } = await userQuery.maybeSingle();
+    if (userErr) {
+      return res
+        .status(500)
+        .json({ success: false, message: "Gagal memeriksa pengguna." });
+    }
+    if (!user) {
       return res
         .status(404)
         .json({ success: false, message: "User tidak ditemukan." });
     }
 
-    const now = new Date().toISOString();
-    if (user.otp_code !== otp || user.otp_expires_at <= now) {
-      return res
-        .status(400)
-        .json({ success: false, message: "OTP salah atau kadaluarsa." });
+    // === Validasi OTP (hanya email mode) ===
+    if (mode !== "google") {
+      const now = new Date().toISOString();
+      if (user.otp_code !== otp || user.otp_expires_at <= now) {
+        return res
+          .status(400)
+          .json({ success: false, message: "OTP salah atau kadaluarsa." });
+      }
     }
 
     // === Update verified ===
-    const { error: updateErr } = await supabase
+    await supabase
       .from("users")
       .update({
         verified: true,
         otp_code: null,
         otp_expires_at: null,
       })
-      .eq("email", email);
+      .eq(mode === "google" ? "google_id" : "email", mode === "google" ? googleId : email);
 
-    if (updateErr) throw updateErr;
-
-    // === Hanya Google yang login otomatis ===
+    // === Generate JWT untuk Google Mode ===
+    let token = null;
     if (mode === "google") {
-      const token = jwt.sign({ id: user.id }, process.env.JWT_SECRET, {
+      token = jwt.sign({ id: user.id }, process.env.JWT_SECRET, {
         expiresIn: "7d",
       });
+    }
 
-      // === Cek apakah sudah seller ===
-      const { data: seller } = await supabase
-        .from("sellers")
-        .select("*")
-        .eq("email", user.email)
-        .single();
+    // === Cek seller berdasarkan email ===
+    const { data: seller, error: sellerErr } = await supabase
+      .from("sellers")
+      .select("*")
+      .eq("email", user.email)
+      .maybeSingle();
 
-      if (!seller) {
-        return res.json({
-          success: true,
-          step: "register_seller",
-          message: "OTP valid. Akun diaktifkan. Harap daftar sebagai seller.",
-        });
-      }
+    if (sellerErr) {
+      return res
+        .status(500)
+        .json({ success: false, message: "Gagal memeriksa status seller." });
+    }
 
-      // Set cookie seller_info
-      res.cookie(
-        "seller_info",
-        JSON.stringify({
-          id: seller.id,
-          email: seller.email,
-          store_name: seller.store_name,
-        }),
-        {
-          httpOnly: true,
-          secure: process.env.NODE_ENV === "production",
-          sameSite: "None",
-          maxAge: 7 * 24 * 60 * 60 * 1000,
-        },
-      );
-
+    // === Jika belum jadi seller ===
+    if (!seller) {
       return res.json({
         success: true,
-        step: "redirect_dashboard",
-        message: "OTP valid. Akun diaktifkan & login otomatis.",
+        step: "register_seller",
+        message: "Akun diaktifkan. Harap daftar sebagai seller.",
         token,
         id: user.id,
       });
     }
 
+    // === Kalau seller ada ===
+    res.cookie(
+      "seller_info",
+      JSON.stringify({
+        id: seller.id,
+        email: seller.email,
+        store_name: seller.store_name,
+      }),
+      {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === "production",
+        sameSite: "None",
+        maxAge: 7 * 24 * 60 * 60 * 1000,
+      }
+    );
+
     return res.json({
       success: true,
-      step: "login_manual",
-      message: "OTP valid. Akun diaktifkan. Silakan login manual.",
+      step: mode === "google" ? "redirect_dashboard" : "login_manual",
+      message:
+        mode === "google"
+          ? "Akun diaktifkan & login otomatis."
+          : "OTP valid. Akun diaktifkan. Silakan login manual.",
+      token,
+      id: user.id,
+      seller_id: seller.id, // <<<<<< ini dikembalikan biar FE bisa simpan
     });
   } catch (err) {
-    console.error("OTP Error:", err);
+    console.error("OTP Error:", err.message);
     return res
       .status(500)
       .json({ success: false, message: "Terjadi kesalahan pada server." });
   }
 });
+
+
 
 // ======================== LOGIN SELLER ========================
 router.post("/login", detectSpam, verifyCaptcha, async (req, res) => {

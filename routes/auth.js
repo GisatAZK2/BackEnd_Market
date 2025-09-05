@@ -577,28 +577,41 @@ router.delete("/user/:id", async (req, res) => {
 
 router.post("/login/google", async (req, res) => {
   const { id_token } = req.body;
-  if (!id_token) return res.status(400).json({ error: "ID token Google tidak ditemukan." });
+  console.log("[Google Login] ID token diterima:", id_token);
+
+  if (!id_token) {
+    console.log("[Google Login] ID token tidak ditemukan.");
+    return res.status(400).json({ error: "ID token Google tidak ditemukan." });
+  }
 
   try {
     // 1. Verify token langsung ke Google
+    console.log("[Google Login] Verifikasi ID token ke Google...");
     const ticket = await client.verifyIdToken({
       idToken: id_token,
       audience: process.env.GOOGLE_CLIENT_ID,
     });
 
     const payload = ticket.getPayload();
+    console.log("[Google Login] Payload dari Google:", payload);
+
     const email = payload.email;
     const googleAvatar = payload.picture || null;
 
     // 2. Cek user di Supabase
+    console.log(`[Google Login] Mencari user di Supabase dengan email: ${email}`);
     let { data: user, error } = await supabase
       .from("users")
       .select("*")
       .eq("email", email)
       .single();
 
+    if (error) console.log("[Google Login] Error saat cek user:", error);
+    else console.log("[Google Login] User ditemukan:", user);
+
     // 3. User baru → buat user + OTP
     if (!user) {
+      console.log("[Google Login] User baru, buat user + OTP...");
       const username = email.split("@")[0];
       const otp = Math.floor(100000 + Math.random() * 900000).toString();
       const expiresAt = new Date(Date.now() + 5 * 60 * 1000).toISOString();
@@ -613,9 +626,14 @@ router.post("/login/google", async (req, res) => {
         avatar: googleAvatar,
       }]).select().single();
 
-      if (insertErr) return res.status(500).json({ error: "Gagal menyimpan user." });
+      if (insertErr) {
+        console.log("[Google Login] Gagal menyimpan user:", insertErr);
+        return res.status(500).json({ error: "Gagal menyimpan user." });
+      }
 
+      console.log("[Google Login] User baru berhasil dibuat:", newUser);
       await generateOtp(email, otp);
+      console.log("[Google Login] OTP dikirim ke email:", email);
       return res.status(201).json({
         success: true,
         step: "verify_otp",
@@ -627,6 +645,7 @@ router.post("/login/google", async (req, res) => {
 
     // 4. User belum verified → OTP ulang
     if (!user.verified) {
+      console.log("[Google Login] User belum verified, kirim ulang OTP...");
       const otp = Math.floor(100000 + Math.random() * 900000).toString();
       const expiresAt = new Date(Date.now() + 5 * 60 * 1000).toISOString();
 
@@ -635,9 +654,13 @@ router.post("/login/google", async (req, res) => {
         .update({ otp_code: otp, otp_expires_at: expiresAt })
         .eq("email", email);
 
-      if (updateErr) return res.status(500).json({ error: "Gagal memperbarui OTP." });
+      if (updateErr) {
+        console.log("[Google Login] Gagal memperbarui OTP:", updateErr);
+        return res.status(500).json({ error: "Gagal memperbarui OTP." });
+      }
 
       await generateOtp(email, otp);
+      console.log("[Google Login] OTP dikirim ulang ke email:", email);
       return res.json({
         success: true,
         step: "verify_otp",
@@ -648,6 +671,7 @@ router.post("/login/google", async (req, res) => {
     }
 
     // 5. User verified → buat JWT + set cookie
+    console.log("[Google Login] User sudah verified, buat JWT...");
     const token = jwt.sign({ id: user.id }, process.env.JWT_SECRET, { expiresIn: "7d" });
 
     const cookieOptions = {
@@ -668,6 +692,7 @@ router.post("/login/google", async (req, res) => {
       cookieOptions
     );
 
+    console.log("[Google Login] Login sukses, cookie dan token sudah dibuat untuk user:", user.id);
     return res.json({
       message: "Login Google sukses.",
       token,
@@ -676,12 +701,12 @@ router.post("/login/google", async (req, res) => {
       username: user.username,
       avatar: user.avatar || googleAvatar,
     });
+
   } catch (err) {
-    console.error("Google login error:", err);
+    console.error("[Google Login] Kesalahan server:", err);
     return res.status(500).json({ error: "Kesalahan server." });
   }
 });
-
 
 
 
