@@ -4,13 +4,13 @@ FROM node:20-alpine
 # Set working directory
 WORKDIR /usr/src/app
 
-# Copy package.json & package-lock.json
+# Copy package.json & package-lock.json ke container
 COPY package*.json ./
 
 # Install dependencies (production mode)
 RUN npm install --omit=dev
 
-# Copy semua file ke dalam container
+# Copy semua file project ke container
 COPY . .
 
 # Set environment (default production)
