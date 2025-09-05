@@ -1,4 +1,4 @@
-# Gunakan Node.js versi LTS
+# Gunakan Node.js versi LTS (alpine untuk lebih ringan)
 FROM node:20-alpine
 
 # Set working directory
@@ -19,8 +19,13 @@ ENV NODE_ENV=production
 # Expose port
 EXPOSE 3000
 
-# Gunakan user non-root demi security
+# Buat group & user non-root
 RUN addgroup -S appgroup && adduser -S appuser -G appgroup
+
+# Buat folder uploads & kasih izin ke appuser
+RUN mkdir -p /usr/src/app/uploads && chown -R appuser:appgroup /usr/src/app
+
+# Switch ke user non-root
 USER appuser
 
 # Jalankan aplikasi
