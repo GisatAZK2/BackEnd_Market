@@ -37,6 +37,7 @@ module.exports = (app, server) => {
         "Accept",
         "Origin",
         "x-api-key",
+        "ngrok-skip-browser-warning",
       ],
       methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     })
