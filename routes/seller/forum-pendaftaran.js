@@ -5,6 +5,7 @@ const fetch = require("node-fetch");
 const { v4: uuidv4 } = require("uuid");
 const supabase = require("../../config/supabase");
 const { generateOtp } = require("../../utils/otp");
+const axios = require("axios");
 const sharp = require("sharp");
 
 const router = express.Router();
@@ -272,8 +273,14 @@ router.post("/seller", upload.single("storeImage"), async (req, res) => {
       password = "(password tetap sama)";
     }
 
-    // Kirim OTP
-    await generateOtp(email, otpCode);
+
+    // 🚀 Kirim OTP lewat SMTP microservice
+    await axios.post(`${SEND_URL}/send-email`, {
+              type: "otp",
+              email,
+              code: otpCode,
+            });
+    
 
     return res.status(201).json({
       message: "✅ Seller berhasil didaftarkan & OTP dikirim ke email",
