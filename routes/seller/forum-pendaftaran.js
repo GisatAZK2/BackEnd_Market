@@ -4,7 +4,6 @@ const multer = require("multer");
 const fetch = require("node-fetch");
 const { v4: uuidv4 } = require("uuid");
 const supabase = require("../../config/supabase");
-const { generateOtp } = require("../../utils/otp");
 const axios = require("axios");
 const sharp = require("sharp");
 
@@ -12,11 +11,15 @@ const router = express.Router();
 
 // === Helper Ambil Nama Wilayah ===
 async function getWilayahName(url, id) {
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`Gagal fetch wilayah: ${res.status}`);
-  const data = await res.json();
-  const found = data.find((item) => String(item.id) === String(id));
-  return found ? found.name : null;
+  try {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`Gagal fetch wilayah: ${res.status}`);
+    const data = await res.json();
+    const found = data.find((item) => String(item.id) === String(id));
+    return found ? found.name : null;
+  } catch (error) {
+    throw new Error(`Error fetching wilayah: ${error.message}`);
+  }
 }
 
 // === Helper Generate Username ===
@@ -28,8 +31,7 @@ function generateUsername(email) {
 
 // === Helper Generate Password (10 karakter random) ===
 function generatePassword(length = 10) {
-  const chars =
-    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
   let pwd = "";
   for (let i = 0; i < length; i++) {
     pwd += chars.charAt(Math.floor(Math.random() * chars.length));
@@ -226,9 +228,10 @@ router.post("/seller", upload.single("storeImage"), async (req, res) => {
       });
 
     if (avatarUploadError) {
-      return res
-        .status(500)
-        .json({ message: "❌ Gagal upload default avatar", error: avatarUploadError.message });
+      return res.status(500).json({
+        message: "❌ Gagal upload default avatar",
+        error: avatarUploadError.message,
+      });
     }
 
     const { data: avatarUrlData } = supabase.storage
@@ -275,14 +278,26 @@ router.post("/seller", upload.single("storeImage"), async (req, res) => {
       password = "(password tetap sama)";
     }
 
+    // Kirim OTP lewat SMTP microservice
+    try {
+      const otpResponse = await axios.post(`${SEND_URL}/send-email`, {
+        type: "otp",
+        email,
+        code: otpCode,
+      });
 
-    // 🚀 Kirim OTP lewat SMTP microservice
-    await axios.post(`${SEND_URL}/send-email`, {
-              type: "otp",
-              email,
-              code: otpCode,
-            });
-    
+      if (otpResponse.status !== 200) {
+        return res.status(500).json({
+          message: "❌ Seller tersimpan tapi gagal mengirim OTP",
+          error: "Failed to send OTP via microservice",
+        });
+      }
+    } catch (otpError) {
+      return res.status(500).json({
+        message: "❌ Seller tersimpan tapi gagal mengirim OTP",
+        error: `OTP microservice error: ${otpError.message}`,
+      });
+    }
 
     return res.status(201).json({
       message: "✅ Seller berhasil didaftarkan & OTP dikirim ke email",
