@@ -6,6 +6,7 @@ const { v4: uuidv4 } = require("uuid");
 const supabase = require("../../config/supabase");
 const axios = require("axios");
 const sharp = require("sharp");
+const jwt = require("jsonwebtoken");
 
 const router = express.Router();
 
@@ -249,6 +250,7 @@ router.post("/seller", upload.single("storeImage"), async (req, res) => {
           otp_code: otpCode,
           otp_expires_at: new Date(Date.now() + 5 * 60 * 1000).toISOString(),
           avatar: avatarUrl,
+          verified: false, // Default to false for new users
         },
       ]);
 
@@ -299,7 +301,19 @@ router.post("/seller", upload.single("storeImage"), async (req, res) => {
       });
     }
 
-    return res.status(201).json({
+    // Generate JWT token
+    const token = jwt.sign({ id: existingUser ? existingUser.id : newSeller.id }, process.env.JWT_SECRET, {
+      expiresIn: "7d",
+    });
+
+    // Check verification status and set seller_info cookie if verified
+    const { data: userForCookie } = await supabase
+      .from("users")
+      .select("id, verified")
+      .eq("email", email)
+      .single();
+
+    let responseData = {
       message: "✅ Seller berhasil didaftarkan & OTP dikirim ke email",
       storeImageUrl,
       seller: newSeller,
@@ -309,7 +323,32 @@ router.post("/seller", upload.single("storeImage"), async (req, res) => {
         password: `password sementara ${password}`,
         avatar: avatarUrl,
       },
-    });
+      token,
+    };
+
+    if (userForCookie && userForCookie.verified) {
+      res.cookie(
+        "seller_info",
+        JSON.stringify({
+          id: newSeller.id,
+          email: newSeller.email,
+          store_name: newSeller.store_name,
+        }),
+        {
+          httpOnly: true,
+          secure: process.env.NODE_ENV === "production",
+          sameSite: "None",
+          maxAge: 7 * 24 * 60 * 60 * 1000,
+        }
+      );
+      responseData.seller_info = {
+        id: newSeller.id,
+        email: newSeller.email,
+        store_name: newSeller.store_name,
+      };
+    }
+
+    return res.status(201).json(responseData);
   } catch (error) {
     return res.status(500).json({
       message: "❌ Gagal proses pendaftaran",
