@@ -1,12 +1,15 @@
 const express = require("express");
 const router = express.Router();
 const supabase = require("../config/supabase");
-const sendOrderNotification = require("../utils/email");
+const axios = require("axios");
 const detectspam = require("../middleware/detectSpam");
 const verifyCaptcha = require("../middleware/verifyCaptcha");
 const {
   attachVariantsStockDiscountWithRealDiscount,
 } = require("../utils/applyDiscountAndVariants");
+
+const SEND_URL = process.env.SEND_SERVICE_URL;
+
 const { DateTime } = require("luxon");
 
 
@@ -230,23 +233,29 @@ router.get("/received", async (req, res) => {
   }
 });
 
-
-
 router.post("/cart/checkout", detectspam, verifyCaptcha, async (req, res) => {
   const startTime = Date.now();
+  console.log("===== 🛒 [CHECKOUT ROUTE DIPANGGIL] =====");
+  console.log("📥 Body request:", req.body);
+  console.log("🍪 Cookies:", req.cookies);
 
   try {
-    const { itemsToCheckout, pickupMethod } = req.body;
+    const { itemsToCheckout, pickupMethod, address } = req.body; // Added address from request body
     const userInfo = req.cookies?.user_info ? JSON.parse(req.cookies.user_info) : null;
 
-    if (!itemsToCheckout?.length)
+    console.log("👤 User info:", userInfo);
+
+    if (!itemsToCheckout?.length) {
+      console.log("⚠️ Tidak ada item untuk di-checkout.");
       return res.status(400).json({ message: "⚠️ Tidak ada item untuk di-checkout." });
+    }
 
     // ==========================
     // 🔹 Ambil buyer info
     // ==========================
     let buyerAddress = null;
     if (userInfo?.id) {
+      console.log("🔍 Ambil data user dari Supabase:", userInfo.id);
       const { data: userData, error: userError } = await supabase
         .from("users")
         .select(`
@@ -264,7 +273,9 @@ router.post("/cart/checkout", detectspam, verifyCaptcha, async (req, res) => {
         .eq("id", userInfo.id)
         .single();
 
+      console.log("📦 Data user:", userData);
       if (userError) {
+        console.error("❌ Gagal ambil data user:", userError.message);
         return res.status(500).json({
           message: "❌ Gagal memeriksa data buyer.",
           error: userError.message,
@@ -274,9 +285,9 @@ router.post("/cart/checkout", detectspam, verifyCaptcha, async (req, res) => {
       const adaDiantar = itemsToCheckout.some(
         (item) => (item.pickupMethod || pickupMethod)?.toLowerCase() === "diantar"
       );
+      console.log("🚚 Ada item diantar?", adaDiantar);
 
       if (adaDiantar) {
-        // ✅ kalau ada item "diantar", alamat wajib lengkap
         const isAlamatLengkap =
           userData &&
           Object.values({
@@ -290,39 +301,147 @@ router.post("/cart/checkout", detectspam, verifyCaptcha, async (req, res) => {
             no_telepon: userData.no_telepon,
           }).every(Boolean);
 
-        if (!isAlamatLengkap) {
+        console.log("🏠 Alamat lengkap?", isAlamatLengkap);
+
+        if (!isAlamatLengkap && address) {
+          // Update user address if provided in the request
+          console.log("🔄 Updating user address...");
+          const {
+            nama_penerima,
+            no_telepon,
+            alamat_lengkap,
+            kode_pos,
+            provinsi_id,
+            kota_id,
+            kecamatan_id,
+            kelurahan_id,
+          } = address;
+
+          // Validate required address fields
+          if (
+            !nama_penerima ||
+            !no_telepon ||
+            !alamat_lengkap ||
+            !kode_pos ||
+            !provinsi_id ||
+            !kota_id ||
+            !kecamatan_id ||
+            !kelurahan_id
+          ) {
+            console.log("⚠️ Address data incomplete:", address);
+            return res.status(400).json({
+              message: "⚠️ Lengkapi semua field alamat pengiriman.",
+              needUpdateAddress: true,
+            });
+          }
+
+          // Fetch region names based on IDs (assuming you have access to region tables in Supabase)
+          const [provinsiData, kotaData, kecamatanData, kelurahanData] = await Promise.all([
+            supabase.from("provinces").select("name").eq("id", provinsi_id).single(),
+            supabase.from("regencies").select("name").eq("id", kota_id).single(),
+            supabase.from("districts").select("name").eq("id", kecamatan_id).single(),
+            supabase.from("villages").select("name").eq("id", kelurahan_id).single(),
+          ]);
+
+          if (
+            provinsiData.error ||
+            kotaData.error ||
+            kecamatanData.error ||
+            kelurahanData.error
+          ) {
+            console.error("❌ Gagal mengambil data wilayah:", {
+              provinsiError: provinsiData.error,
+              kotaError: kotaData.error,
+              kecamatanError: kecamatanData.error,
+              kelurahanError: kelurahanData.error,
+            });
+            return res.status(500).json({
+              message: "❌ Gagal memvalidasi data wilayah.",
+              error: "Invalid region data",
+            });
+          }
+
+          // Update user address in the users table
+          const { error: updateError } = await supabase
+            .from("users")
+            .update({
+              nama_penerima,
+              no_telepon,
+              alamat_lengkap,
+              kode_pos,
+              provinsi: provinsiData.data.name,
+              kota_kabupaten: kotaData.data.name,
+              kecamatan: kecamatanData.data.name,
+              kelurahan: kelurahanData.data.name,
+            })
+            .eq("id", userInfo.id);
+
+          if (updateError) {
+            console.error("❌ Gagal update alamat user:", updateError.message);
+            return res.status(500).json({
+              message: "❌ Gagal memperbarui alamat.",
+              error: updateError.message,
+            });
+          }
+
+          console.log("✅ Alamat user berhasil diupdate.");
+          // Set buyerAddress with updated data
+          buyerAddress = {
+            nama_penerima,
+            no_telepon,
+            alamat_lengkap,
+            kode_pos,
+            provinsi: provinsiData.data.name,
+            kota_kabupaten: kotaData.data.name,
+            kecamatan: kecamatanData.data.name,
+            kelurahan: kelurahanData.data.name,
+            email: userData.email,
+            username: userData.username,
+          };
+        } else if (!isAlamatLengkap) {
           return res.status(400).json({
             message: "⚠️ Lengkapi alamat pengiriman terlebih dahulu.",
             needUpdateAddress: true,
           });
+        } else {
+          buyerAddress = userData;
         }
+      } else {
+        buyerAddress = userData;
       }
-
-      // 🔹 Simpan buyer info untuk semua pickup_method
-      buyerAddress = userData;
     }
 
     // ==========================
     // 🔹 Ambil produk + varian
     // ==========================
     const productIds = [...new Set(itemsToCheckout.map((i) => i.productId))];
+    console.log("🛍 Product IDs:", productIds);
+
     const cacheKeyProducts = `products:${productIds.sort().join(",")}`;
     let products = cache.get(cacheKeyProducts);
 
     if (!products) {
+      console.log("📡 Fetch produk + varian dari Supabase...");
       const [productRowsRes, variantRowsRes] = await Promise.all([
         supabase.from("products").select("*").in("id", productIds),
         supabase.from("product_variants").select("*").in("product_id", productIds),
       ]);
 
-      if (!productRowsRes.data?.length)
+      console.log("📦 Produk:", productRowsRes.data);
+      console.log("📦 Variants:", variantRowsRes.data);
+
+      if (!productRowsRes.data?.length) {
+        console.error("❌ Gagal ambil produk:", productRowsRes.error);
         return res
           .status(500)
           .json({ message: "❌ Gagal mengambil data produk.", error: productRowsRes.error });
-      if (variantRowsRes.error)
+      }
+      if (variantRowsRes.error) {
+        console.error("❌ Gagal ambil varian:", variantRowsRes.error);
         return res
           .status(500)
           .json({ message: "❌ Gagal mengambil varian.", error: variantRowsRes.error });
+      }
 
       products = productRowsRes.data.map((p) => ({
         ...p,
@@ -331,9 +450,12 @@ router.post("/cart/checkout", detectspam, verifyCaptcha, async (req, res) => {
 
       products = await attachVariantsStockDiscountWithRealDiscount(products);
       cache.set(cacheKeyProducts, products);
+    } else {
+      console.log("✅ Produk dari cache");
     }
 
     const productMap = Object.fromEntries(products.map((p) => [p.id, p]));
+    console.log("🗺 Product Map:", productMap);
 
     // ==========================
     // 🔹 Group order per seller
@@ -358,26 +480,35 @@ router.post("/cart/checkout", detectspam, verifyCaptcha, async (req, res) => {
       });
     });
 
+    console.log("📦 Order Groups:", orderGroups);
+
     // ==========================
     // 🔹 Ambil seller data
     // ==========================
     const sellerIds = [...new Set(Object.values(orderGroups).map((g) => g.seller_id))];
+    console.log("🏪 Seller IDs:", sellerIds);
+
     const cacheKeySellers = `sellers:${sellerIds.sort().join(",")}`;
     let sellerData = cache.get(cacheKeySellers);
 
     if (!sellerData) {
+      console.log("📡 Fetch seller data dari Supabase...");
       const { data } = await supabase
         .from("sellers")
         .select("id, store_name, email, delivery_fee")
         .in("id", sellerIds);
       sellerData = data || [];
       cache.set(cacheKeySellers, sellerData);
+    } else {
+      console.log("✅ Seller data dari cache");
     }
     const sellerMap = Object.fromEntries(sellerData.map((s) => [s.id, s]));
+    console.log("🗺 Seller Map:", sellerMap);
 
     // ==========================
     // 🔹 Insert orders paralel
     // ==========================
+    console.log("📝 Membuat order...");
     const createdOrders = await Promise.all(
       Object.values(orderGroups).map(async (group) => {
         const { seller_id, pickup_method, items } = group;
@@ -390,6 +521,12 @@ router.post("/cart/checkout", detectspam, verifyCaptcha, async (req, res) => {
           .plus({ minutes: 30 })
           .toISO();
 
+        console.log(`🛒 Insert order untuk seller ${seller_id}:`, {
+          totalPrice,
+          pickup_method,
+          deliveryFee,
+        });
+
         const { data: order, error: orderError } = await supabase
           .from("orders")
           .insert([
@@ -401,12 +538,17 @@ router.post("/cart/checkout", detectspam, verifyCaptcha, async (req, res) => {
               total_price: totalPrice,
               confirm_deadline: confirmDeadline,
               delivery_fee: deliveryFee,
-              buyer_address: buyerAddress || null, // 🔹 selalu ada
+              buyer_address: buyerAddress || null,
             },
           ])
           .select()
           .single();
-        if (orderError) return null;
+        if (orderError) {
+          console.error("❌ Gagal insert order:", orderError.message);
+          return null;
+        }
+
+        console.log("✅ Order dibuat:", order);
 
         const orderItems = items.map((i) => ({
           order_id: order.id,
@@ -415,6 +557,8 @@ router.post("/cart/checkout", detectspam, verifyCaptcha, async (req, res) => {
           quantity: i.qty,
           price_per_item: i.finalPrice,
         }));
+        console.log("📦 Order Items:", orderItems);
+
         await supabase.from("order_items").insert(orderItems);
 
         // Snapshot & email background
@@ -434,26 +578,30 @@ router.post("/cart/checkout", detectspam, verifyCaptcha, async (req, res) => {
             variant_discount_percentage: i.variantDiscountPercentage,
             variant_image_url: i.variant?.variant_image_url || null,
           }));
+          console.log("📸 Snapshot Items:", snapshotItems);
+
           await supabase.from("order_item_details").insert(snapshotItems);
           await supabase.from("order_details_items").insert(snapshotItems);
 
           if (userInfo) {
-            await sendOrderNotification({
-              order_id: order.id,
-              products: items.map((i) => ({
-                product_name: i.product.product_name,
-                variant_name: i.variant?.variant_name || null,
-                quantity: i.qty,
-                total_price: i.finalPrice * i.qty,
-                product_image_url:
-                  i.variant?.variant_image_url || safeParseImageUrl(i.product.product_image_url),
-              })),
-              buyer_email: userInfo.email,
-              seller_email: sellerMap[seller_id]?.email,
-              buyer_username: userInfo.username,
-              pickup_method,
-              new_status: "pending",
-            });
+            console.log("📧 Kirim notifikasi email ke buyer & seller");
+            // ganti dengan request ke server SMTP
+              await axios.post(`${SEND_URL}/send-email-order`, {
+                order_id: order.id,
+                products: items.map((i) => ({
+                  product_name: i.product.product_name,
+                  variant_name: i.variant?.variant_name || null,
+                  quantity: i.qty,
+                  total_price: i.finalPrice * i.qty,
+                  product_image_url:
+                    i.variant?.variant_image_url || safeParseImageUrl(i.product.product_image_url),
+                })),
+                buyer_email: userInfo.email,
+                seller_email: sellerMap[seller_id]?.email,
+                buyer_username: userInfo.username,
+                pickup_method,
+                new_status: "pending",
+              });   
           }
         })();
 
@@ -465,11 +613,14 @@ router.post("/cart/checkout", detectspam, verifyCaptcha, async (req, res) => {
     // 🔹 Hapus item dari cart
     // ==========================
     if (userInfo?.id) {
+      console.log("🗑 Hapus item dari cart...");
       const { data: cart } = await supabase
         .from("carts")
         .select("items")
         .eq("user_id", userInfo.id)
         .maybeSingle();
+      console.log("🛒 Cart sebelum hapus:", cart);
+
       if (cart?.items?.length) {
         const remainingItems = cart.items.filter(
           (cartItem) =>
@@ -479,6 +630,7 @@ router.post("/cart/checkout", detectspam, verifyCaptcha, async (req, res) => {
                 (checkoutItem.variantId || null) === (cartItem.variantId || null)
             )
         );
+        console.log("🛒 Cart setelah hapus:", remainingItems);
         await supabase.from("carts").update({ items: remainingItems }).eq("user_id", userInfo.id);
       }
     }
@@ -487,11 +639,12 @@ router.post("/cart/checkout", detectspam, verifyCaptcha, async (req, res) => {
     // 🔹 Response
     // ==========================
     const endTime = Date.now();
+    const finalOrders = createdOrders.filter(Boolean).map((o) => o.order);
+    console.log("✅ Semua order berhasil dibuat:", finalOrders);
+
     return res.status(200).json({
-      message: `✅ Berhasil checkout ${
-        createdOrders.filter(Boolean).length
-      } order. (⏱ ${(endTime - startTime) / 1000}s)`,
-      orders: createdOrders.filter(Boolean).map((o) => o.order),
+      message: `✅ Berhasil checkout ${finalOrders.length} order. (⏱ ${(endTime - startTime) / 1000}s)`,
+      orders: finalOrders,
     });
   } catch (err) {
     console.error("❌ Server error:", err);

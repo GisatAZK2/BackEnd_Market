@@ -8,19 +8,18 @@ const multer = require("multer");
 const sharp = require("sharp");
 const path = require("path");
 const fs = require("fs");
-const { createClient } = require("@supabase/supabase-js");
-const { generateOtp, sendPasswordResetEmail } = require("../../utils/otp");
+const axios = require("axios");
 const detectSpam = require("../../middleware/detectSpam");
 const verifyCaptcha = require("../../middleware/verifyCaptcha");
 const fetch = require("node-fetch");
 
 const router = express.Router();
-const supabaseAdmin = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY,
-);
 const storage = multer.memoryStorage();
 const upload = multer({ storage });
+
+
+const SEND_URL = process.env.SEND_SERVICE_URL;
+
 
 router.post(
   "/register",
@@ -119,29 +118,35 @@ router.post(
 
         avatarPath = publicUrl.publicUrl;
       }
-
       // === Simpan ke database ===
-      const { error: insertErr } = await supabase.from("users").insert([
-        {
+        const { error: insertErr } = await supabase.from("users").insert([
+          {
+            email,
+            username: finalUsername,
+            password: hashed,
+            otp_code: otp,
+            otp_expires_at: expiresAt,
+            verified: false,
+            avatar: avatarPath,
+          },
+        ]);
+
+        if (insertErr) {
+          console.error("Supabase insert error:", insertErr);
+          return res
+            .status(500)
+            .json({ error: "Gagal membuat user di database." });
+        }
+
+        // 🚀 Kirim OTP lewat SMTP microservice
+        await axios.post(`${SEND_URL}/send-email`, {
+          type: "otp",
           email,
-          username: finalUsername,
-          password: hashed,
-          otp_code: otp,
-          otp_expires_at: expiresAt,
-          verified: false,
-          avatar: avatarPath,
-        },
-      ]);
+          code: otp,
+        });
 
-      if (insertErr) {
-        console.error("Supabase insert error:", insertErr);
-        return res
-          .status(500)
-          .json({ error: "Gagal membuat user di database." });
-      }
+        res.status(201).json({ message: "User dibuat. OTP dikirim ke email." });
 
-      await generateOtp(email, otp);
-      res.status(201).json({ message: "User dibuat. OTP dikirim ke email." });
     } catch (err) {
       console.error("Error saat register:", err);
       res.status(500).json({ error: "Terjadi kesalahan pada server." });
@@ -485,8 +490,12 @@ router.post("/forgot-password", detectSpam, verifyCaptcha, async (req, res) => {
       resetLink ||
       `https://sellercihuy.sytes.net/forgot-password?email=${encodeURIComponent(email)}`;
 
-    // Kirim email reset
-    await sendPasswordResetEmail(email, link);
+    // 🚀 Kirim email reset lewat SMTP microservice
+await axios.post(`${SEND_URL}/send-email`, {
+  type: "reset",
+  email,
+  resetLink: link,
+});
 
     res.json({ message: "Link reset password dikirim ke email." });
   } catch (err) {
@@ -752,8 +761,13 @@ router.post("/login/google", async (req, res) => {
         console.error(insertErr);
         return res.status(500).json({ error: "Gagal menyimpan user." });
       }
+            // 🚀 Kirim OTP lewat SMTP microservice
+      await axios.post(`${SEND_URL}/send-email`, {
+        type: "otp",
+        email,
+        code: otp,
+      });
 
-      await generateOtp(email, otp);
       return res.status(201).json({
         success: true,
         step: "verify_otp",
@@ -761,6 +775,7 @@ router.post("/login/google", async (req, res) => {
         email,
         avatar: googleAvatar,
       });
+
     }
 
     // 4. User ada tapi belum verified → OTP ulang
@@ -774,15 +789,21 @@ router.post("/login/google", async (req, res) => {
         .eq("email", email);
 
       if (updateErr) return res.status(500).json({ error: "Gagal memperbarui OTP." });
+// 🚀 Kirim ulang OTP lewat SMTP microservice
+await axios.post(`${SEND_URL}/send-email`, {
+  type: "otp",
+  email,
+  code: otp,
+});
 
-      await generateOtp(email, otp);
-      return res.json({
-        success: true,
-        step: "verify_otp",
-        message: "OTP dikirim ulang. Silakan verifikasi.",
-        email,
-        avatar: user.avatar || googleAvatar,
-      });
+return res.json({
+  success: true,
+  step: "verify_otp",
+  message: "OTP dikirim ulang. Silakan verifikasi.",
+  email,
+  avatar: user.avatar || googleAvatar,
+});
+
     }
 
     // 5. User verified → cek seller

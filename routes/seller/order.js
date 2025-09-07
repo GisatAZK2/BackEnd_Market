@@ -1,13 +1,16 @@
 // order.js
 const express = require("express");
 const supabase = require("../../config/supabase");
-const sendOrderNotification = require("../../utils/email");
+const axios = require("axios");
 const router = express.Router();
-const awdcustomer = require("./awb");
 
 const {
   attachVariantsStockDiscountWithRealDiscount
 } = require("../../utils/applyDiscountAndVariants");
+
+
+const SEND_URL = process.env.SEND_SERVICE_URL;
+
 
 const NodeCache = require("node-cache");
 const orderCache = new NodeCache({ stdTTL: 30, checkperiod: 60 });
@@ -929,19 +932,22 @@ router.put("/orders/:id/status", async (req, res) => {
       pdfBuffer = await generatePDF(updatedOrder);
     }
 
-    // Send notification in background
-    sendOrderNotification({
-      order_id: orderId,
-      products: productDetails,
-      buyer_email: order.buyer?.email,
-      seller_email: order.seller.email,
-      buyer_username: order.buyer?.username,
-      pickup_method: order.pickup_method,
-      new_status: newStatus,
-      seller_address: updatePayload.seller_address,
-      cancel_reason: updatePayload.cancel_reason || null,
-      pdfBuffer,
-    }).catch((err) => console.error("❌ Gagal kirim notifikasi:", err));
+            // 🚀 Kirim notifikasi order lewat SMTP microservice (jalan di background)
+        axios.post(`${SEND_URL}/send-email-order`, {
+          order_id: orderId,
+          products: productDetails,
+          buyer_email: order.buyer?.email,
+          seller_email: order.seller.email,
+          buyer_username: order.buyer?.username,
+          pickup_method: order.pickup_method,
+          new_status: newStatus,
+          seller_address: updatePayload.seller_address,
+          cancel_reason: updatePayload.cancel_reason || null,
+          pdfBuffer,
+        })
+        .catch((err) => {
+          console.error("❌ Gagal kirim notifikasi:", err.message);
+        });
 
     // Response
     return res.status(200).json({

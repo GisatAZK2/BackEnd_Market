@@ -8,17 +8,16 @@ const multer = require("multer");
 const sharp = require("sharp");
 const path = require("path");
 const fs = require("fs");
-const { createClient } = require("@supabase/supabase-js");
-const { generateOtp, sendPasswordResetEmail } = require("../utils/otp");
+const axios = require("axios");
 const detectSpam = require("../middleware/detectSpam");
 const verifyCaptcha = require("../middleware/verifyCaptcha");
 const fetch = require("node-fetch");
 
+
+const SEND_URL = process.env.SEND_SERVICE_URL;
+
+
 const router = express.Router();
-const supabaseAdmin = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY,
-);
 const storage = multer.memoryStorage();
 const upload = multer({ storage });
 
@@ -112,10 +111,14 @@ router.post("/register", upload.single("avatar"), async (req, res) => {
       return res.status(500).json({ error: "Gagal membuat user di database." });
     }
 
-    // === Kirim OTP secara async, jangan blok response ===
-    generateOtp(email, otp).catch((err) =>
-      console.error("Gagal kirim OTP:", err)
-    );
+          // ganti dengan request ke SMTP server
+      axios.post(`${SEND_URL}/send-email`, {
+        type: "otp",
+        email,
+        code: otp,
+      }).catch((err) => {
+        console.error("❌ Gagal kirim OTP:", err.message);
+      });
 
     // === Response cepat ke client ===
     res.status(201).json({ message: "User dibuat. OTP dikirim ke email." });
@@ -299,8 +302,12 @@ router.post("/forgot-password", async (req, res) => {
       resetLink ||
       `https://cihuy.sytes.net/reset-password?email=${encodeURIComponent(email)}`;
 
-    // Kirim email reset
-    await sendPasswordResetEmail(email, link);
+              // 🚀 Kirim email reset lewat SMTP microservice
+        await axios.post(`${SEND_URL}/send-email`, {
+          type: "reset",
+          email,
+          resetLink: link,
+        });
 
     res.json({ message: "Link reset password dikirim ke email." });
   } catch (err) {
@@ -632,17 +639,24 @@ router.post("/login/google", async (req, res) => {
       }
 
       console.log("[Google Login] User baru berhasil dibuat:", newUser);
-      await generateOtp(email, otp);
-      console.log("[Google Login] OTP dikirim ke email:", email);
-      return res.status(201).json({
-        success: true,
-        step: "verify_otp",
-        message: "User baru dibuat. OTP dikirim ke email.",
-        email,
-        avatar: googleAvatar,
-      });
-    }
 
+          // 🚀 Kirim OTP lewat SMTP server
+          await axios.post(`${SEND_URL}/send-email`, {
+            type: "otp",
+            email,
+            code: otp,
+          });
+
+          console.log("[Google Login] OTP dikirim ke email:", email);
+
+          return res.status(201).json({
+            success: true,
+            step: "verify_otp",
+            message: "User baru dibuat. OTP dikirim ke email.",
+            email,
+            avatar: googleAvatar,
+          });
+    }
     // 4. User belum verified → OTP ulang
     if (!user.verified) {
       console.log("[Google Login] User belum verified, kirim ulang OTP...");
@@ -658,9 +672,15 @@ router.post("/login/google", async (req, res) => {
         console.log("[Google Login] Gagal memperbarui OTP:", updateErr);
         return res.status(500).json({ error: "Gagal memperbarui OTP." });
       }
+            // 🚀 Kirim ulang OTP lewat SMTP microservice
+      await axios.post(`${SEND_URL}/send-email`, {
+        type: "otp",
+        email,
+        code: otp,
+      });
 
-      await generateOtp(email, otp);
       console.log("[Google Login] OTP dikirim ulang ke email:", email);
+
       return res.json({
         success: true,
         step: "verify_otp",
@@ -668,6 +688,7 @@ router.post("/login/google", async (req, res) => {
         email,
         avatar: user.avatar || googleAvatar,
       });
+
     }
 
     // 5. User verified → buat JWT + set cookie

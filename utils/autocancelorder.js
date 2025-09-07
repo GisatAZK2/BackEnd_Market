@@ -1,8 +1,9 @@
 // file: jobs/autoCancelOrders.js
 const cron = require("node-cron");
 const supabase = require("../config/supabase");
-const sendOrderNotification = require("../utils/email"); 
+const axios = require("axios");
 
+const SEND_URL = process.env.SEND_SERVICE_URL;
 
 const buildProductDetails = (items, products, variants) =>
   items.map((item) => {
@@ -72,23 +73,24 @@ const autoCancelOrders = async (orders, reason) => {
         products,
         variants
       );
+              // 🚀 Kirim email ke SMTP microservice (non-blocking, tidak pakai await)
+        axios.post(`${SEND_URL}/send-email-order`, {
+          order_id: order.id,
+          products: productDetails,
+          buyer_email: order.buyer?.email,
+          seller_email: order.seller?.email,
+          buyer_username: order.buyer?.username,
+          pickup_method: order.pickup_method,
+          new_status: "dibatalkan",
+          cancel_reason: reason,
+        })
+        .catch((err) => {
+          console.error(
+            `❌ Gagal kirim notifikasi auto-cancel order ${order.id}:`,
+            err.message
+          );
+        });
 
-      // 🚀 Kirim email di background (tidak pakai await)
-      sendOrderNotification({
-        order_id: order.id,
-        products: productDetails,
-        buyer_email: order.buyer?.email,
-        seller_email: order.seller?.email,
-        buyer_username: order.buyer?.username,
-        pickup_method: order.pickup_method,
-        new_status: "dibatalkan",
-        cancel_reason: reason,
-      }).catch((err) => {
-        console.error(
-          `❌ Gagal kirim notifikasi auto-cancel order ${order.id}:`,
-          err
-        );
-      });
     } catch (notifyErr) {
       console.error(
         `❌ Error saat siapkan notifikasi order ${order.id}:`,
