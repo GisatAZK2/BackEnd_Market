@@ -49,6 +49,8 @@ const upload = multer({
   },
 });
 
+const SEND_URL = process.env.SEND_SERVICE_URL;
+
 // POST /forum-pendaftaran/seller
 router.post("/seller", upload.single("storeImage"), async (req, res) => {
   try {
