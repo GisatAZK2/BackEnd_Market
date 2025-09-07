@@ -450,6 +450,97 @@ router.get("/sorted", async (req, res) => {
   }
 });
 
+router.get("/trending", async (req, res) => {
+  try {
+    // 1. Ambil semua kategori
+    const { data: categories, error: catErr } = await supabase
+      .from("categories")
+      .select("id, name");
+
+    if (catErr) throw catErr;
+    if (!categories || categories.length === 0) {
+      return res.status(404).json({ message: "❌ Tidak ada kategori tersedia" });
+    }
+
+    // 2. Ambil semua produk dengan rating
+    const { data: products, error: prodErr } = await supabase
+      .from("products")
+      .select(`
+        *,
+        ratings!left (
+          rating
+        )
+      `);
+
+    if (prodErr) throw prodErr;
+    if (!products || products.length === 0) {
+      return res.status(404).json({ message: "❌ Tidak ada produk tersedia" });
+    }
+
+    // 3. Hitung avg rating & total rating
+    const productsWithExtras = products.map((p) => {
+      let avgRating = null;
+      if (p.ratings && p.ratings.length > 0) {
+        const sum = p.ratings.reduce((acc, r) => acc + r.rating, 0);
+        avgRating = sum / p.ratings.length;
+      }
+      return {
+        ...p,
+        avg_rating: avgRating ? Number(avgRating.toFixed(2)) : null,
+        total_ratings: p.ratings ? p.ratings.length : 0,
+      };
+    });
+
+    // 4. Pilih kategori trending (misalnya random)
+    const randomCategory =
+      categories[Math.floor(Math.random() * categories.length)];
+
+    // Bagi produk berdasarkan kategori
+    const fromCategory = productsWithExtras.filter(
+      (p) => p.category_id === randomCategory.id
+    );
+    const otherProducts = productsWithExtras.filter(
+      (p) => p.category_id !== randomCategory.id
+    );
+
+    // 5. Hitung jumlah produk trending 60% / 40%
+    const totalTrending = Math.min(20, productsWithExtras.length); // ambil max 20 produk trending
+    const catCount = Math.ceil(totalTrending * 0.6);
+    const otherCount = totalTrending - catCount;
+
+    // Ambil sample random dari masing-masing kelompok
+    const pickRandom = (arr, count) =>
+      arr.sort(() => 0.5 - Math.random()).slice(0, count);
+
+    const selectedFromCategory = pickRandom(fromCategory, catCount);
+    const selectedFromOthers = pickRandom(otherProducts, otherCount);
+
+    let trendingProducts = [...selectedFromCategory, ...selectedFromOthers];
+
+    // 6. Attach varian + stok + diskon
+    trendingProducts = await attachVariantsStockDiscountWithRealDiscount(
+      trendingProducts
+    );
+
+    // 7. Acak lagi biar lebih fresh
+    trendingProducts.sort(() => 0.5 - Math.random());
+
+    return res.status(200).json({
+      message: `🔥 Trending produk dari kategori "${randomCategory.name}" (60%) + kategori lain (40%)`,
+      total: trendingProducts.length,
+      main_category: randomCategory.name,
+      products: trendingProducts,
+    });
+  } catch (error) {
+    console.error("❌ Error trending:", error);
+    return res.status(500).json({
+      message: "❌ Gagal mengambil trending produk",
+      error: error.message,
+    });
+  }
+});
+
+
 // === Ambil produk berdasarkan kategori ===
 // Produk berdasarkan kategori
 router.get("/by-category/:category_id", async (req, res) => {
