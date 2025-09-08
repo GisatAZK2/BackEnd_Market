@@ -5,6 +5,7 @@ const { v4: uuidv4 } = require("uuid");
 const sharp = require("sharp");
 const supabase = require("../config/supabase");
 const generateKeywords = require("../utils/keywordGenerator");
+const seedrandom = require("seedrandom");
 const {
   applyDiscount,
   getActiveDiscountForProduct,
@@ -450,6 +451,8 @@ router.get("/sorted", async (req, res) => {
   }
 });
 
+
+
 router.get("/trending", async (req, res) => {
   try {
     // 1. Ambil semua kategori
@@ -491,11 +494,18 @@ router.get("/trending", async (req, res) => {
       };
     });
 
-    // 4. Pilih kategori trending (misalnya random)
-    const randomCategory =
-      categories[Math.floor(Math.random() * categories.length)];
+    // 4. Seed random pakai tanggal hari ini
+    const today = new Date().toISOString().slice(0, 10); // contoh: "2025-09-08"
+    const rng = seedrandom(today);
 
-    // Bagi produk berdasarkan kategori
+    const pickRandom = (arr, count) => {
+      const shuffled = [...arr].sort(() => rng() - 0.5);
+      return shuffled.slice(0, count);
+    };
+
+    // 5. Pilih kategori trending
+    const randomCategory = categories[Math.floor(rng() * categories.length)];
+
     const fromCategory = productsWithExtras.filter(
       (p) => p.category_id === randomCategory.id
     );
@@ -503,30 +513,27 @@ router.get("/trending", async (req, res) => {
       (p) => p.category_id !== randomCategory.id
     );
 
-    // 5. Hitung jumlah produk trending 60% / 40%
-    const totalTrending = Math.min(20, productsWithExtras.length); // ambil max 20 produk trending
+    // 6. Hitung jumlah produk trending 60% / 40%
+    const totalTrending = Math.min(20, productsWithExtras.length); // max 20
     const catCount = Math.ceil(totalTrending * 0.6);
     const otherCount = totalTrending - catCount;
-
-    // Ambil sample random dari masing-masing kelompok
-    const pickRandom = (arr, count) =>
-      arr.sort(() => 0.5 - Math.random()).slice(0, count);
 
     const selectedFromCategory = pickRandom(fromCategory, catCount);
     const selectedFromOthers = pickRandom(otherProducts, otherCount);
 
     let trendingProducts = [...selectedFromCategory, ...selectedFromOthers];
 
-    // 6. Attach varian + stok + diskon
+    // 7. Attach varian + stok + diskon
     trendingProducts = await attachVariantsStockDiscountWithRealDiscount(
       trendingProducts
     );
 
-    // 7. Acak lagi biar lebih fresh
-    trendingProducts.sort(() => 0.5 - Math.random());
+    // 8. Acak lagi pakai seed supaya stabil sepanjang hari
+    trendingProducts.sort(() => rng() - 0.5);
 
     return res.status(200).json({
       message: `🔥 Trending produk dari kategori "${randomCategory.name}" (60%) + kategori lain (40%)`,
+      date: today,
       total: trendingProducts.length,
       main_category: randomCategory.name,
       products: trendingProducts,
