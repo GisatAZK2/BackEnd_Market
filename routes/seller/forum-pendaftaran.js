@@ -7,7 +7,6 @@ const supabase = require("../../config/supabase");
 const { generateOtp } = require("../../utils/otp");
 const axios = require("axios");
 const sharp = require("sharp");
-const bcrypt = require("bcrypt"); // Added for password hashing
 
 const router = express.Router();
 
@@ -25,6 +24,17 @@ function generateUsername(email) {
   const base = email.split("@")[0];
   const rand = Math.floor(100 + Math.random() * 900); // 3 digit random
   return `${base}_${rand}`;
+}
+
+// === Helper Generate Password (10 karakter random) ===
+function generatePassword(length = 10) {
+  const chars =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+  let pwd = "";
+  for (let i = 0; i < length; i++) {
+    pwd += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return pwd;
 }
 
 // Multer setup
@@ -59,7 +69,6 @@ router.post("/seller", upload.single("storeImage"), async (req, res) => {
       longitude,
       is_delivery_available,
       delivery_fee,
-      password, // Added password from form
     } = req.body;
 
     // === Validasi field wajib dasar ===
@@ -77,45 +86,24 @@ router.post("/seller", upload.single("storeImage"), async (req, res) => {
       !latitude ||
       !longitude ||
       typeof is_delivery_available === "undefined" ||
-      !req.file ||
-      !password
+      !req.file
     ) {
       return res.status(400).json({
-        message: "❌ Semua field wajib diisi termasuk gambar, koordinat, dan kata sandi",
-      });
-    }
-
-    // Validate email format
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-      return res.status(400).json({ message: "❌ Email tidak valid" });
-    }
-
-    // Validate phone format
-    if (!/^\d{10,13}$/.test(phone)) {
-      return res.status(400).json({ message: "❌ Nomor telepon harus 10-13 digit" });
-    }
-
-    // Validate password strength
-    if (
-      password.length < 8 ||
-      !/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$/.test(password)
-    ) {
-      return res.status(400).json({
-        message: "❌ Kata sandi harus minimal 8 karakter, mengandung huruf besar, huruf kecil, angka, dan karakter khusus",
+        message: "❌ Semua field wajib diisi termasuk gambar dan koordinat",
       });
     }
 
     const isDelivery = String(is_delivery_available).toLowerCase() === "true";
 
-    if (isDelivery && (delivery_fee === undefined || delivery_fee === "" || isNaN(parseFloat(delivery_fee)) || parseFloat(delivery_fee) < 0)) {
+    if (isDelivery && (delivery_fee === undefined || delivery_fee === "")) {
       return res.status(400).json({
-        message: "❌ Biaya pengiriman harus berupa angka non-negatif jika pengiriman tersedia",
+        message: "❌ delivery_fee wajib diisi jika pengiriman tersedia",
       });
     }
 
     const lat = parseFloat(latitude);
     const lng = parseFloat(longitude);
-    if (isNaN(lat) || isNaN(lng) || lat < -90 || lat > 90 || lng < -180 || lng > 180) {
+    if (isNaN(lat) || isNaN(lng)) {
       return res.status(400).json({ message: "❌ Koordinat tidak valid" });
     }
 
@@ -141,17 +129,6 @@ router.post("/seller", upload.single("storeImage"), async (req, res) => {
       return res.status(400).json({ message: "❌ Data wilayah tidak valid" });
     }
 
-    // Cek duplikat storeName di tabel sellers
-    const { data: existingStore } = await supabase
-      .from("sellers")
-      .select("store_name")
-      .eq("store_name", storeName)
-      .single();
-
-    if (existingStore) {
-      return res.status(409).json({ message: "❌ Nama toko sudah digunakan, silakan pilih nama lain" });
-    }
-
     // Cek email di sellers
     const { data: existingSeller } = await supabase
       .from("sellers")
@@ -160,7 +137,9 @@ router.post("/seller", upload.single("storeImage"), async (req, res) => {
       .single();
 
     if (existingSeller) {
-      return res.status(409).json({ message: "❌ Email sudah terdaftar sebagai seller" });
+      return res
+        .status(409)
+        .json({ message: "❌ Email sudah terdaftar sebagai seller" });
     }
 
     // Upload store image
@@ -228,8 +207,8 @@ router.post("/seller", upload.single("storeImage"), async (req, res) => {
       .single();
 
     let username = generateUsername(email);
-    let otpCode = generateOtp(); // Use provided generateOtp function
-    const hashedPassword = await bcrypt.hash(password, 10); // Hash the provided password
+    let password = generatePassword(10);
+    let otpCode = Math.floor(100000 + Math.random() * 900000); // 6 digit
 
     // Upload default avatar
     const defaultImagePath = path.join(__dirname, "../assets/user.png");
@@ -247,10 +226,9 @@ router.post("/seller", upload.single("storeImage"), async (req, res) => {
       });
 
     if (avatarUploadError) {
-      return res.status(500).json({
-        message: "❌ Gagal upload default avatar",
-        error: avatarUploadError.message,
-      });
+      return res
+        .status(500)
+        .json({ message: "❌ Gagal upload default avatar", error: avatarUploadError.message });
     }
 
     const { data: avatarUrlData } = supabase.storage
@@ -264,7 +242,7 @@ router.post("/seller", upload.single("storeImage"), async (req, res) => {
         {
           email,
           username,
-          password: hashedPassword,
+          password,
           otp_code: otpCode,
           otp_expires_at: new Date(Date.now() + 5 * 60 * 1000).toISOString(),
           avatar: avatarUrl,
@@ -278,31 +256,33 @@ router.post("/seller", upload.single("storeImage"), async (req, res) => {
         });
       }
     } else {
-      // Update user yang sudah ada dengan password baru dan OTP
-      const { error: userUpdateError } = await supabase
+      // Update OTP user yang sudah ada
+      const { error: otpUpdateError } = await supabase
         .from("users")
         .update({
-          password: hashedPassword,
           otp_code: otpCode,
           otp_expires_at: new Date(Date.now() + 5 * 60 * 1000).toISOString(),
         })
         .eq("email", email);
 
-      if (userUpdateError) {
+      if (otpUpdateError) {
         return res.status(500).json({
-          message: "❌ Seller tersimpan tapi gagal update user/OTP",
-          error: userUpdateError.message,
+          message: "❌ Seller tersimpan tapi gagal update OTP user",
+          error: otpUpdateError.message,
         });
       }
       username = existingUser.username;
+      password = "(password tetap sama)";
     }
 
-    // Kirim OTP lewat SMTP microservice
+
+    // 🚀 Kirim OTP lewat SMTP microservice
     await axios.post(`${SEND_URL}/send-email`, {
-      type: "otp",
-      email,
-      code: otpCode,
-    });
+              type: "otp",
+              email,
+              code: otpCode,
+            });
+    
 
     return res.status(201).json({
       message: "✅ Seller berhasil didaftarkan & OTP dikirim ke email",
@@ -311,6 +291,7 @@ router.post("/seller", upload.single("storeImage"), async (req, res) => {
       user: {
         email,
         username,
+        password: `password sementara ${password}`,
         avatar: avatarUrl,
       },
     });
