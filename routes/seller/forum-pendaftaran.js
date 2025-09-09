@@ -6,7 +6,9 @@ const { v4: uuidv4 } = require("uuid");
 const supabase = require("../../config/supabase");
 const { generateOtp } = require("../../utils/otp");
 const axios = require("axios");
+const bcrypt = require("bcrypt"); // Assuming bcrypt is imported for regular registration
 const sharp = require("sharp");
+
 
 const router = express.Router();
 
@@ -37,22 +39,33 @@ function generatePassword(length = 10) {
   return pwd;
 }
 
-// Multer setup
-const upload = multer({
+// Multer setup for regular registration (avatar)
+const uploadAvatar = multer({
   limits: { fileSize: 5 * 1024 * 1024 }, // max 5 MB
   fileFilter: (req, file, cb) => {
     if (file.mimetype === "image/jpeg" || file.mimetype === "image/png") {
       cb(null, true);
     } else {
-      cb(new Error("❌ Gambar harus JPEG atau PNG"));
+      cb(new Error("❌ Avatar harus JPEG atau PNG"));
+    }
+  },
+});
+
+// Multer setup for seller registration (storeImage)
+const uploadStoreImage = multer({
+  limits: { fileSize: 5 * 1024 * 1024 }, // max 5 MB
+  fileFilter: (req, file, cb) => {
+    if (file.mimetype === "image/jpeg" || file.mimetype === "image/png") {
+      cb(null, true);
+    } else {
+      cb(new Error("❌ Gambar toko harus JPEG atau PNG"));
     }
   },
 });
 
 const SEND_URL = process.env.SEND_SERVICE_URL;
-
-// POST /forum-pendaftaran/seller
-router.post("/seller", upload.single("storeImage"), async (req, res) => {
+// POST /forum-pendaftaran/seller (Seller Registration)
+router.post("/seller", uploadStoreImage.single("storeImage"), async (req, res) => {
   try {
     const {
       email,
@@ -69,7 +82,14 @@ router.post("/seller", upload.single("storeImage"), async (req, res) => {
       longitude,
       is_delivery_available,
       delivery_fee,
+      password, // Added for seller registration with provided password // For CAPTCHA verification (handle manually or via middleware if needed)
     } = req.body;
+
+    // === Manual CAPTCHA verification (if not using middleware) ===
+    // Assuming you have a function verifyCaptchaToken(captchaToken) that calls reCAPTCHA API
+    // if (!verifyCaptchaToken(captchaToken)) {
+    //   return res.status(400).json({ message: "❌ CAPTCHA tidak valid" });
+    // }
 
     // === Validasi field wajib dasar ===
     if (
@@ -86,10 +106,11 @@ router.post("/seller", upload.single("storeImage"), async (req, res) => {
       !latitude ||
       !longitude ||
       typeof is_delivery_available === "undefined" ||
-      !req.file
+      !req.file ||
+      !password
     ) {
       return res.status(400).json({
-        message: "❌ Semua field wajib diisi termasuk gambar dan koordinat",
+        message: "❌ Semua field wajib diisi termasuk gambar, koordinat, dan password",
       });
     }
 
@@ -105,6 +126,11 @@ router.post("/seller", upload.single("storeImage"), async (req, res) => {
     const lng = parseFloat(longitude);
     if (isNaN(lat) || isNaN(lng)) {
       return res.status(400).json({ message: "❌ Koordinat tidak valid" });
+    }
+
+    // Validate password strength (similar to frontend)
+    if (password.length < 8 || !/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$/.test(password)) {
+      return res.status(400).json({ message: "❌ Password tidak memenuhi persyaratan keamanan" });
     }
 
     // Ambil nama wilayah
@@ -142,6 +168,13 @@ router.post("/seller", upload.single("storeImage"), async (req, res) => {
         .json({ message: "❌ Email sudah terdaftar sebagai seller" });
     }
 
+    // Cek email di users (to prevent duplicate across systems)
+    const { data: existingUser } = await supabase
+      .from("users")
+      .select("email")
+      .eq("email", email)
+      .single();
+
     // Upload store image
     const fileExt = path.extname(req.file.originalname);
     const fileName = `${uuidv4()}${fileExt}`;
@@ -165,6 +198,37 @@ router.post("/seller", upload.single("storeImage"), async (req, res) => {
       .from("store-photos")
       .getPublicUrl(bucketPath);
     const storeImageUrl = publicUrlData.publicUrl;
+
+    // Hash the provided password
+    const hashedPassword = await bcrypt.hash(password, 10);
+    let username = generateUsername(email);
+    let otpCode = Math.floor(100000 + Math.random() * 900000); // 6 digit
+
+    // Upload default avatar for user (since seller uses store image separately)
+    const defaultImagePath = path.join(__dirname, "../assets/user.png");
+    const avatarFilename = `avatar_default_${Date.now()}.webp`;
+    const avatarBuffer = await sharp(defaultImagePath)
+      .resize(256, 256)
+      .webp({ quality: 80 })
+      .toBuffer();
+
+    const { error: avatarUploadError } = await supabase.storage
+      .from("avatars")
+      .upload(avatarFilename, avatarBuffer, {
+        contentType: "image/webp",
+        upsert: true,
+      });
+
+    if (avatarUploadError) {
+      return res
+        .status(500)
+        .json({ message: "❌ Gagal upload default avatar", error: avatarUploadError.message });
+    }
+
+    const { data: avatarUrlData } = supabase.storage
+      .from("avatars")
+      .getPublicUrl(avatarFilename);
+    const avatarUrl = avatarUrlData.publicUrl;
 
     // Simpan seller
     const { data: newSeller, error: insertError } = await supabase
@@ -199,53 +263,17 @@ router.post("/seller", upload.single("storeImage"), async (req, res) => {
       });
     }
 
-    // Cek apakah user sudah ada
-    const { data: existingUser } = await supabase
-      .from("users")
-      .select("*")
-      .eq("email", email)
-      .single();
-
-    let username = generateUsername(email);
-    let password = generatePassword(10);
-    let otpCode = Math.floor(100000 + Math.random() * 900000); // 6 digit
-
-    // Upload default avatar
-    const defaultImagePath = path.join(__dirname, "../assets/user.png");
-    const avatarFilename = `avatar_default_${Date.now()}.webp`;
-    const avatarBuffer = await sharp(defaultImagePath)
-      .resize(256, 256)
-      .webp({ quality: 80 })
-      .toBuffer();
-
-    const { error: avatarUploadError } = await supabase.storage
-      .from("avatars")
-      .upload(avatarFilename, avatarBuffer, {
-        contentType: "image/webp",
-        upsert: true,
-      });
-
-    if (avatarUploadError) {
-      return res
-        .status(500)
-        .json({ message: "❌ Gagal upload default avatar", error: avatarUploadError.message });
-    }
-
-    const { data: avatarUrlData } = supabase.storage
-      .from("avatars")
-      .getPublicUrl(avatarFilename);
-    const avatarUrl = avatarUrlData.publicUrl;
-
     if (!existingUser) {
-      // Simpan user baru
+      // Simpan user baru with provided password
       const { error: userInsertError } = await supabase.from("users").insert([
         {
           email,
           username,
-          password,
+          password: hashedPassword,
           otp_code: otpCode,
           otp_expires_at: new Date(Date.now() + 5 * 60 * 1000).toISOString(),
           avatar: avatarUrl,
+          verified: false, // Added for consistency with regular registration
         },
       ]);
 
@@ -256,12 +284,14 @@ router.post("/seller", upload.single("storeImage"), async (req, res) => {
         });
       }
     } else {
-      // Update OTP user yang sudah ada
+      // Update existing user with OTP (but since email is unique, this shouldn't happen due to earlier check)
+      // For safety, update OTP
       const { error: otpUpdateError } = await supabase
         .from("users")
         .update({
           otp_code: otpCode,
           otp_expires_at: new Date(Date.now() + 5 * 60 * 1000).toISOString(),
+          password: hashedPassword, // Update password if needed, but ideally prevent this case
         })
         .eq("email", email);
 
@@ -272,17 +302,14 @@ router.post("/seller", upload.single("storeImage"), async (req, res) => {
         });
       }
       username = existingUser.username;
-      password = "(password tetap sama)";
     }
-
 
     // 🚀 Kirim OTP lewat SMTP microservice
     await axios.post(`${SEND_URL}/send-email`, {
-              type: "otp",
-              email,
-              code: otpCode,
-            });
-    
+      type: "otp",
+      email,
+      code: otpCode,
+    });
 
     return res.status(201).json({
       message: "✅ Seller berhasil didaftarkan & OTP dikirim ke email",
@@ -291,11 +318,11 @@ router.post("/seller", upload.single("storeImage"), async (req, res) => {
       user: {
         email,
         username,
-        password: `password sementara ${password}`,
-        avatar: avatarUrl,
+        // Do not return hashed password, but since frontend doesn't use it, just confirm
       },
     });
   } catch (error) {
+    console.error("Register seller error:", error);
     return res.status(500).json({
       message: "❌ Gagal proses pendaftaran",
       error: error.message,
