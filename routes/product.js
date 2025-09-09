@@ -39,6 +39,9 @@ async function convertToWebp(buffer) {
   return sharp(buffer).webp({ quality: 80 }).toBuffer();
 }
 
+
+let uniqueKeywords = [];
+
 // === Upload Produk Baru ===
 router.post("/upload", uploadForCreate, async (req, res) => {
   const {
@@ -451,8 +454,6 @@ router.get("/sorted", async (req, res) => {
   }
 });
 
-
-
 router.get("/trending", async (req, res) => {
   try {
     // 1. Ambil semua kategori
@@ -465,7 +466,39 @@ router.get("/trending", async (req, res) => {
       return res.status(404).json({ message: "❌ Tidak ada kategori tersedia" });
     }
 
-    // 2. Ambil semua produk dengan rating
+    // 2. Parse riwayat search dari cookie (personalization)
+    let userSearchHistory = [];
+    let mainCategoryFromHistory = null;
+    const searchHistoryCookie = req.cookies?.user_search_history; // Dari cookie-parser
+    if (searchHistoryCookie) {
+      try {
+        userSearchHistory = JSON.parse(decodeURIComponent(searchHistoryCookie)); // Decode jika encoded
+        userSearchHistory = Array.isArray(userSearchHistory) ? userSearchHistory : [];
+        
+        // Sanitasi: Ambil kata kunci unik, lowercase, non-empty
+        const uniqueKeywords = [...new Set(
+          userSearchHistory.flatMap(query => query.toLowerCase().split(/\s+/)).filter(k => k.length > 1)
+        )].slice(0, 5); // Max 5 keywords unik
+
+        // Cari kategori yang match dengan keywords (gunakan ilike untuk partial match)
+        if (uniqueKeywords.length > 0) {
+          const { data: matchingCategories } = await supabase
+            .from("categories")
+            .select("id, name")
+            .or(uniqueKeywords.map(k => `name.ilike.%${k}%`).join(',')); // Dynamic OR condition
+
+          if (matchingCategories && matchingCategories.length > 0) {
+            // Pilih satu random dari match (atau yang paling relevan, misal first)
+            mainCategoryFromHistory = matchingCategories[Math.floor(Math.random() * matchingCategories.length)];
+          }
+        }
+      } catch (parseErr) {
+        console.warn("⚠️ Gagal parse search history cookie:", parseErr);
+        userSearchHistory = [];
+      }
+    }
+
+    // 3. Ambil semua produk dengan rating
     const { data: products, error: prodErr } = await supabase
       .from("products")
       .select(`
@@ -480,7 +513,7 @@ router.get("/trending", async (req, res) => {
       return res.status(404).json({ message: "❌ Tidak ada produk tersedia" });
     }
 
-    // 3. Hitung avg rating & total rating
+    // 4. Hitung avg rating & total rating
     const productsWithExtras = products.map((p) => {
       let avgRating = null;
       if (p.ratings && p.ratings.length > 0) {
@@ -494,8 +527,8 @@ router.get("/trending", async (req, res) => {
       };
     });
 
-    // 4. Seed random pakai tanggal hari ini
-    const today = new Date().toISOString().slice(0, 10); // contoh: "2025-09-08"
+    // 5. Seed random pakai tanggal hari ini (untuk fallback)
+    const today = new Date().toISOString().slice(0, 10);
     const rng = seedrandom(today);
 
     const pickRandom = (arr, count) => {
@@ -503,8 +536,11 @@ router.get("/trending", async (req, res) => {
       return shuffled.slice(0, count);
     };
 
-    // 5. Pilih kategori trending
-    const randomCategory = categories[Math.floor(rng() * categories.length)];
+    // 6. Tentukan main category: Prioritas dari history, fallback random
+    let randomCategory = mainCategoryFromHistory;
+    if (!randomCategory) {
+      randomCategory = categories[Math.floor(rng() * categories.length)];
+    }
 
     const fromCategory = productsWithExtras.filter(
       (p) => p.category_id === randomCategory.id
@@ -513,8 +549,8 @@ router.get("/trending", async (req, res) => {
       (p) => p.category_id !== randomCategory.id
     );
 
-    // 6. Hitung jumlah produk trending 60% / 40%
-    const totalTrending = Math.min(20, productsWithExtras.length); // max 20
+    // 7. Hitung jumlah produk trending 60% / 40%
+    const totalTrending = Math.min(20, productsWithExtras.length);
     const catCount = Math.ceil(totalTrending * 0.6);
     const otherCount = totalTrending - catCount;
 
@@ -523,19 +559,24 @@ router.get("/trending", async (req, res) => {
 
     let trendingProducts = [...selectedFromCategory, ...selectedFromOthers];
 
-    // 7. Attach varian + stok + diskon
+    // 8. Attach varian + stok + diskon
     trendingProducts = await attachVariantsStockDiscountWithRealDiscount(
       trendingProducts
     );
 
-    // 8. Acak lagi pakai seed supaya stabil sepanjang hari
+    // 9. Acak lagi pakai seed supaya stabil sepanjang hari
     trendingProducts.sort(() => rng() - 0.5);
 
+    // Response: Tambah info personalization
     return res.status(200).json({
-      message: `🔥 Trending produk dari kategori "${randomCategory.name}" (60%) + kategori lain (40%)`,
+      message: mainCategoryFromHistory 
+        ? `🔥 Trending personal berdasarkan riwayat search Anda di kategori "${randomCategory.name}" (60%) + kategori lain (40%)`
+        : `🔥 Trending produk dari kategori "${randomCategory.name}" (60%) + kategori lain (40%)`,
       date: today,
       total: trendingProducts.length,
       main_category: randomCategory.name,
+      personalized: !!mainCategoryFromHistory, // Flag apakah personal
+      search_keywords_used: uniqueKeywords || [], // Optional: Tampilkan keywords yang dipakai
       products: trendingProducts,
     });
   } catch (error) {
@@ -546,7 +587,6 @@ router.get("/trending", async (req, res) => {
     });
   }
 });
-
 
 // === Ambil produk berdasarkan kategori ===
 // Produk berdasarkan kategori

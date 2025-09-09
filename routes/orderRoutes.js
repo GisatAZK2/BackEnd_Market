@@ -240,7 +240,7 @@ router.post("/cart/checkout", detectspam, verifyCaptcha, async (req, res) => {
   console.log("🍪 Cookies:", req.cookies);
 
   try {
-    const { itemsToCheckout, pickupMethod, address } = req.body; // Added address from request body
+    const { itemsToCheckout, pickupMethod, address } = req.body;
     const userInfo = req.cookies?.user_info ? JSON.parse(req.cookies.user_info) : null;
 
     console.log("👤 User info:", userInfo);
@@ -282,8 +282,14 @@ router.post("/cart/checkout", detectspam, verifyCaptcha, async (req, res) => {
         });
       }
 
+      // Cek apakah ada item yang memerlukan delivery
       const adaDiantar = itemsToCheckout.some(
-        (item) => (item.pickupMethod || pickupMethod)?.toLowerCase() === "diantar"
+        (item) => {
+          const method = pickupMethod 
+            ? pickupMethod.toLowerCase()
+            : (item.pickupMethod || "diambil").toLowerCase();
+          return method === "diantar";
+        }
       );
       console.log("🚚 Ada item diantar?", adaDiantar);
 
@@ -335,7 +341,7 @@ router.post("/cart/checkout", detectspam, verifyCaptcha, async (req, res) => {
             });
           }
 
-          // Fetch region names based on IDs (assuming you have access to region tables in Supabase)
+          // Fetch region names based on IDs
           const [provinsiData, kotaData, kecamatanData, kelurahanData] = await Promise.all([
             supabase.from("provinces").select("name").eq("id", provinsi_id).single(),
             supabase.from("regencies").select("name").eq("id", kota_id).single(),
@@ -458,34 +464,9 @@ router.post("/cart/checkout", detectspam, verifyCaptcha, async (req, res) => {
     console.log("🗺 Product Map:", productMap);
 
     // ==========================
-    // 🔹 Group order per seller
+    // 🔹 Ambil seller data dulu untuk cek delivery availability
     // ==========================
-    const orderGroups = {};
-    itemsToCheckout.forEach((item) => {
-      const product = productMap[item.productId];
-      if (!product) return;
-      const variant = product.variants?.find((v) => v.id === item.variantId);
-      const finalPrice = variant?.final_price ?? product.finalPrice;
-      const method = (item.pickupMethod || pickupMethod || "diantar").toLowerCase();
-      const groupKey = `${product.seller_id}-${method}`;
-      if (!orderGroups[groupKey])
-        orderGroups[groupKey] = { seller_id: product.seller_id, pickup_method: method, items: [] };
-      orderGroups[groupKey].items.push({
-        ...item,
-        product,
-        variant,
-        finalPrice,
-        discountPercentage: product.discount_percentage ?? 0,
-        variantDiscountPercentage: variant?.applied_discount ?? 0,
-      });
-    });
-
-    console.log("📦 Order Groups:", orderGroups);
-
-    // ==========================
-    // 🔹 Ambil seller data
-    // ==========================
-    const sellerIds = [...new Set(Object.values(orderGroups).map((g) => g.seller_id))];
+    const sellerIds = [...new Set(products.map((p) => p.seller_id))];
     console.log("🏪 Seller IDs:", sellerIds);
 
     const cacheKeySellers = `sellers:${sellerIds.sort().join(",")}`;
@@ -495,7 +476,7 @@ router.post("/cart/checkout", detectspam, verifyCaptcha, async (req, res) => {
       console.log("📡 Fetch seller data dari Supabase...");
       const { data } = await supabase
         .from("sellers")
-        .select("id, store_name, email, delivery_fee")
+        .select("id, store_name, email, delivery_fee, is_delivery_available")
         .in("id", sellerIds);
       sellerData = data || [];
       cache.set(cacheKeySellers, sellerData);
@@ -506,15 +487,72 @@ router.post("/cart/checkout", detectspam, verifyCaptcha, async (req, res) => {
     console.log("🗺 Seller Map:", sellerMap);
 
     // ==========================
+    // 🔹 Group order per seller dan hitung delivery stats
+    // ==========================
+    const orderGroups = {};
+    let pickupOnlyItemsCount = 0;
+    let totalItemsCount = 0;
+
+    itemsToCheckout.forEach((item) => {
+      const product = productMap[item.productId];
+      if (!product) return;
+      
+      const seller = sellerMap[product.seller_id];
+      if (!seller) return;
+
+      const variant = product.variants?.find((v) => v.id === item.variantId);
+      const finalPrice = variant?.final_price ?? product.finalPrice;
+      
+      // Tentukan method
+      const method = pickupMethod 
+        ? pickupMethod.toLowerCase()
+        : (item.pickupMethod || "diambil").toLowerCase();
+      
+      if (method === "pengambilan") method = "diambil";
+      
+      const groupKey = `${product.seller_id}-${method}`;
+      
+      if (!orderGroups[groupKey]) {
+        orderGroups[groupKey] = { 
+          seller_id: product.seller_id, 
+          pickup_method: method, 
+          items: [],
+          delivery_available: seller.is_delivery_available || false
+        };
+      }
+      
+      orderGroups[groupKey].items.push({
+        ...item,
+        product,
+        variant,
+        finalPrice,
+        discountPercentage: product.discount_percentage ?? 0,
+        variantDiscountPercentage: variant?.applied_discount ?? 0,
+      });
+
+      // Hitung stats
+      const itemQty = item.qty || 1;
+      totalItemsCount += itemQty;
+      
+      if (method === "diantar" && !seller.is_delivery_available) {
+        pickupOnlyItemsCount += itemQty;
+      }
+    });
+
+    console.log("📦 Order Groups:", orderGroups);
+    console.log("📊 Delivery Stats:", { totalItemsCount, pickupOnlyItemsCount });
+
+    // ==========================
     // 🔹 Insert orders paralel
     // ==========================
     console.log("📝 Membuat order...");
     const createdOrders = await Promise.all(
       Object.values(orderGroups).map(async (group) => {
-        const { seller_id, pickup_method, items } = group;
+        const { seller_id, pickup_method, items, delivery_available } = group;
         const baseTotal = items.reduce((sum, i) => sum + i.finalPrice * i.qty, 0);
-        const deliveryFee =
-          pickup_method === "diantar" ? sellerMap[seller_id]?.delivery_fee || 0 : 0;
+        const deliveryFee = pickup_method === "diantar" && delivery_available 
+          ? sellerMap[seller_id]?.delivery_fee || 0 
+          : 0;
         const totalPrice = baseTotal + deliveryFee;
         const confirmDeadline = DateTime.now()
           .setZone("Asia/Jakarta")
@@ -525,6 +563,7 @@ router.post("/cart/checkout", detectspam, verifyCaptcha, async (req, res) => {
           totalPrice,
           pickup_method,
           deliveryFee,
+          delivery_available,
         });
 
         const { data: order, error: orderError } = await supabase
@@ -543,6 +582,7 @@ router.post("/cart/checkout", detectspam, verifyCaptcha, async (req, res) => {
           ])
           .select()
           .single();
+          
         if (orderError) {
           console.error("❌ Gagal insert order:", orderError.message);
           return null;
@@ -586,22 +626,25 @@ router.post("/cart/checkout", detectspam, verifyCaptcha, async (req, res) => {
           if (userInfo) {
             console.log("📧 Kirim notifikasi email ke buyer & seller");
             // ganti dengan request ke server SMTP
-              await axios.post(`${SEND_URL}/send-email-order`, {
-                order_id: order.id,
-                products: items.map((i) => ({
-                  product_name: i.product.product_name,
-                  variant_name: i.variant?.variant_name || null,
-                  quantity: i.qty,
-                  total_price: i.finalPrice * i.qty,
-                  product_image_url:
-                    i.variant?.variant_image_url || safeParseImageUrl(i.product.product_image_url),
-                })),
-                buyer_email: userInfo.email,
-                seller_email: sellerMap[seller_id]?.email,
-                buyer_username: userInfo.username,
-                pickup_method,
-                new_status: "pending",
-              });   
+            await axios.post(`${SEND_URL}/send-email-order`, {
+              order_id: order.id,
+              products: items.map((i) => ({
+                product_name: i.product.product_name,
+                variant_name: i.variant?.variant_name || null,
+                quantity: i.qty,
+                total_price: i.finalPrice * i.qty,
+                product_image_url:
+                  i.variant?.variant_image_url || safeParseImageUrl(i.product.product_image_url),
+              })),
+              buyer_email: userInfo.email,
+              seller_email: sellerMap[seller_id]?.email,
+              buyer_username: userInfo.username,
+              pickup_method,
+              new_status: "pending",
+              pickup_only_note: !delivery_available && pickup_method === "diantar" 
+                ? "Item ini hanya bisa diambil sendiri ke toko" 
+                : null,
+            });   
           }
         })();
 
@@ -642,9 +685,18 @@ router.post("/cart/checkout", detectspam, verifyCaptcha, async (req, res) => {
     const finalOrders = createdOrders.filter(Boolean).map((o) => o.order);
     console.log("✅ Semua order berhasil dibuat:", finalOrders);
 
+    const successMessage = pickupOnlyItemsCount > 0 
+      ? `✅ Berhasil checkout ${finalOrders.length} order. ⚠️ ${pickupOnlyItemsCount} item tidak bisa diantar, tapi bisa diambil sendiri ke toko. (⏱ ${(endTime - startTime) / 1000}s)`
+      : `✅ Berhasil checkout ${finalOrders.length} order. Semua item siap diproses! (⏱ ${(endTime - startTime) / 1000}s)`;
+
     return res.status(200).json({
-      message: `✅ Berhasil checkout ${finalOrders.length} order. (⏱ ${(endTime - startTime) / 1000}s)`,
+      message: successMessage,
       orders: finalOrders,
+      delivery_stats: {
+        total_items: totalItemsCount,
+        pickup_only_items: pickupOnlyItemsCount,
+        delivery_available_items: totalItemsCount - pickupOnlyItemsCount,
+      },
     });
   } catch (err) {
     console.error("❌ Server error:", err);
@@ -653,11 +705,7 @@ router.post("/cart/checkout", detectspam, verifyCaptcha, async (req, res) => {
 });
 
 
-// === DELIVERY FEE ===
 router.post("/cart/delivery-fee", async (req, res) => {
-
-  // Bisa Ditambahkan Payment Gateway
-
   try {
     const { itemsToCheckout, pickupMethod } = req.body;
 
@@ -704,7 +752,7 @@ router.post("/cart/delivery-fee", async (req, res) => {
     if (!sellers) {
       const { data, error } = await supabase
         .from("sellers")
-        .select("id, store_name, delivery_fee")
+        .select("id, store_name, delivery_fee, is_delivery_available")
         .in("id", sellerIds);
 
       if (error) {
@@ -714,27 +762,31 @@ router.post("/cart/delivery-fee", async (req, res) => {
         });
       }
 
-      sellers = data;
+      sellers = data || [];
       cache.set(cacheKeySellers, sellers);
     }
 
     // Map seller buat akses O(1)
     const sellerMap = new Map(sellers.map((s) => [s.id, s]));
 
-    // Group items per seller-method menggunakan reduce
+    // Group items per seller-method
     const groupedOrders = itemsToCheckout.reduce((acc, item) => {
       const product = productMap.get(item.productId);
       if (!product) return acc;
 
-      // Kalau ada pickupMethod root, override semua item jadi itu
-      const method = (
-        pickupMethod ||
-        item.pickupMethod ||
-        "diambil"
-      ).toLowerCase();
+      let method;
+
+      if (pickupMethod) {
+        // Kalau ada pickupMethod global → override semua
+        method = pickupMethod.toLowerCase();
+      } else {
+        // Kalau tidak ada → ikut item.pickupMethod atau default "diambil"
+        method = (item.pickupMethod || "diambil").toLowerCase();
+      }
+
+      if (method === "pengambilan") method = "diambil";
 
       const key = `${product.seller_id}-${method}`;
-
       if (!acc[key]) {
         acc[key] = {
           seller_id: product.seller_id,
@@ -743,6 +795,7 @@ router.post("/cart/delivery-fee", async (req, res) => {
         };
       }
       acc[key].items.push(item);
+
       return acc;
     }, {});
 
@@ -759,8 +812,34 @@ router.post("/cart/delivery-fee", async (req, res) => {
           return sum + price * (item.qty || 1);
         }, 0);
 
-        const delivery_fee =
-          group.pickup_method === "diantar" ? seller.delivery_fee || 0 : 0;
+        // Logika delivery_fee berdasarkan is_delivery_available
+        let delivery_fee = 0;
+        let delivery_note = "tidak bisa diantar"; // Default
+        let delivery_status = "pickup_only"; // Default
+
+        if (group.pickup_method === "diantar") {
+          if (seller.is_delivery_available === true) {
+            delivery_fee = seller.delivery_fee || 0;
+            delivery_note = "bisa diantar";
+            delivery_status = "delivery_available";
+          } else {
+            delivery_fee = 0;
+            delivery_note = "tidak bisa diantar - hanya pickup";
+            delivery_status = "pickup_only";
+          }
+        } else if (group.pickup_method === "diambil") {
+          delivery_fee = 0;
+          if (seller.is_delivery_available === true) {
+            delivery_note = "bisa diantar (tapi pickup dipilih)";
+            delivery_status = "delivery_available";
+          } else {
+            delivery_note = "hanya bisa pickup";
+            delivery_status = "pickup_only";
+          }
+        }
+
+        // Hitung jumlah items
+        const itemCount = group.items.reduce((sum, item) => sum + (item.qty || 1), 0);
 
         return {
           seller_id: seller.id,
@@ -768,6 +847,9 @@ router.post("/cart/delivery-fee", async (req, res) => {
           pickup_method: group.pickup_method,
           total_produk: totalProduk,
           delivery_fee,
+          delivery_note,
+          delivery_status,
+          item_count: itemCount,
           total_semua: totalProduk + delivery_fee,
         };
       })
@@ -784,12 +866,27 @@ router.post("/cart/delivery-fee", async (req, res) => {
     );
     const grandTotalSemua = grandTotalProduk + grandTotalOngkir;
 
+    // Hitung statistik delivery
+    const totalItems = itemsToCheckout.reduce((sum, item) => sum + (item.qty || 1), 0);
+    const pickupOnlyItems = resultPerGroup
+      .filter(g => g.delivery_status === "pickup_only")
+      .reduce((sum, g) => sum + g.item_count, 0);
+    const deliveryAvailableItems = totalItems - pickupOnlyItems;
+
     return res.status(200).json({
       message: "✅ Data checkout berhasil dihitung.",
       sellers: resultPerGroup,
       total_produk_semua: grandTotalProduk,
       total_ongkir_semua: grandTotalOngkir,
       total_checkout_semua: grandTotalSemua,
+      delivery_stats: {
+        total_items: totalItems,
+        pickup_only_items: pickupOnlyItems,
+        delivery_available_items: deliveryAvailableItems,
+        message: pickupOnlyItems > 0 
+          ? `⚠️ ${pickupOnlyItems} item tidak bisa diantar, tapi bisa diambil sendiri ke toko`
+          : "✅ Semua item bisa diantar",
+      },
     });
   } catch (err) {
     console.error("❌ Server error:", err);
