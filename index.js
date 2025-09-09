@@ -14,6 +14,7 @@ require("./utils/cron");
 require("./utils/autocancelorder.js");
 require("./utils/autodeletorder.js");
 require("./utils/autocompleteorder.js");
+require("./utils/deletedataseller.js");
 
 // === Routes ===
 const authRoutes = require("./routes/auth");
