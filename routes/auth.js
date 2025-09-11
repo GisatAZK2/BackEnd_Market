@@ -623,15 +623,21 @@ router.post("/login/google", async (req, res) => {
       const otp = Math.floor(100000 + Math.random() * 900000).toString();
       const expiresAt = new Date(Date.now() + 5 * 60 * 1000).toISOString();
 
-      const { error: insertErr, data: newUser } = await supabase.from("users").insert([{
-        email,
-        username,
-        password: null,
-        otp_code: otp,
-        otp_expires_at: expiresAt,
-        verified: false,
-        avatar: googleAvatar,
-      }]).select().single();
+      const { error: insertErr, data: newUser } = await supabase
+        .from("users")
+        .insert([
+          {
+            email,
+            username,
+            password: null,
+            otp_code: otp,
+            otp_expires_at: expiresAt,
+            verified: false,
+            avatar: googleAvatar,
+          },
+        ])
+        .select()
+        .single();
 
       if (insertErr) {
         console.log("[Google Login] Gagal menyimpan user:", insertErr);
@@ -692,17 +698,19 @@ router.post("/login/google", async (req, res) => {
       });
     }
 
-    // 5. User verified → cek apakah seller
+    // 5. User verified → cek apakah seller dari tabel sellers berdasarkan email
     console.log("[Google Login] User sudah verified, cek apakah seller...");
     const { data: seller, error: sellerError } = await supabase
       .from("sellers")
-      .select("id, email")
+      .select("id")
       .eq("email", email)
-      .single();
+      .maybeSingle();
 
-    if (sellerError && sellerError.code !== "PGRST116") {
-      console.error("Supabase seller error:", sellerError);
+    if (sellerError) {
+      console.error("[Google Login] Error cek seller:", sellerError);
     }
+
+    const sellerId = seller ? seller.id : null;
 
     // 6. Buat JWT + set cookie
     console.log("[Google Login] User verified, buat JWT...");
@@ -724,7 +732,7 @@ router.post("/login/google", async (req, res) => {
         email: user.email,
         username: user.username,
         avatar: user.avatar || googleAvatar,
-        seller_id: seller ? seller.id : null, // 🔑 tambahin seller_id
+        seller_id: sellerId, // 🔑 seller_id hasil query dari sellers.email
       }),
       cookieOptions
     );
@@ -737,15 +745,13 @@ router.post("/login/google", async (req, res) => {
       email: user.email,
       username: user.username,
       avatar: user.avatar || googleAvatar,
-      seller_id: seller ? seller.id : null, // 🔑 kirim juga seller_id
+      seller_id: sellerId,
     });
-
   } catch (err) {
     console.error("[Google Login] Kesalahan server:", err);
     return res.status(500).json({ error: "Kesalahan server." });
   }
 });
-
 
 
 module.exports = router;
