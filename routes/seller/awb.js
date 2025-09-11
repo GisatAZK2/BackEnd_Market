@@ -5,7 +5,6 @@ const { DateTime } = require("luxon");
 const QRCode = require('qrcode');
 const PDFDocument = require('pdfkit');
 const axios = require('axios');
-const sendOrderNotification = require("../../utils/email");
 
 router.post("/seller/generate-awb", async (req, res) => {
   try {
@@ -83,8 +82,6 @@ router.post("/seller/generate-awb", async (req, res) => {
     // Logo
     let logoBuffer;
     try {
-萬元
-
       const logoUrl =
         "https://hihfiptclwrwuklojdec.supabase.co/storage/v1/object/public/store-photos/BG-Logo-Aplikasi.png";
       const response = await axios.get(logoUrl, {
@@ -419,61 +416,17 @@ router.post("/seller/generate-awb", async (req, res) => {
     };
 
     const pdfBuffer = await generatePDF(ordersData, logoBuffer);
-    const pdfBase64 = pdfBuffer.toString("base64");
 
-    const htmlContent = `
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<title>Preview Shipping Labels</title>
-<script src="https://cdn.tailwindcss.com"></script>
-<style>
-.pdf-preview { max-height: 500px; width: 100%; }
-.download-btn:hover, .print-btn:hover { transform: scale(1.05); }
-</style>
-</head>
-<body class="bg-gray-100 font-sans">
-<header class="bg-orange-500 text-white p-4 flex items-center justify-center">
-  <img src="https://hihfiptclwrwuklojdec.supabase.co/storage/v1/object/public/store-photos/BG-Logo-Aplikasi.png" class="h-10 mr-4">
-  <h1 class="text-2xl font-bold">Preview Shipping Labels</h1>
-</header>
-<div class="container mx-auto p-4">
-  <div class="bg-white p-4 rounded-lg shadow-md">
-    <h2 class="text-lg font-semibold mb-2 text-blue-600">Order IDs: ${ordersData
-      .map((o) => o.id)
-      .join(", ")}</h2>
-    <iframe class="pdf-preview" src="data:application/pdf;base64,${pdfBase64}" frameborder="0"></iframe>
-    <div class="mt-4 flex justify-between">
-      <button class="download-btn bg-blue-500 text-white px-4 py-2 rounded" onclick="downloadPDF('${pdfBase64}')">Download</button>
-      <button class="print-btn bg-green-500 text-white px-4 py-2 rounded" onclick="printPDF('${pdfBase64}')">Print</button>
-    </div>
-  </div>
-</div>
-<script>
-function downloadPDF(base64Data) {
-  const link = document.createElement('a');
-  link.href = 'data:application/pdf;base64,' + base64Data;
-  link.download = 'shipping-labels${ordersData.length === 1 ? `-${ordersData[0].id}` : ''}.pdf';
-  link.click();
-}
-function printPDF(base64Data) {
-  const win = window.open('about:blank');
-  win.document.write('<iframe src="data:application/pdf;base64,' + base64Data + '" style="width:100%;height:100%;" frameborder="0"></iframe>');
-  win.document.close();
-}
-</script>
-</body>
-</html>
-`;
-
-    res.setHeader("Content-Type", "text/html");
-    res.send(htmlContent);
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `attachment; filename=shipping-labels${ordersData.length === 1 ? `-${ordersData[0].id}` : ''}.pdf`);
+    res.send(pdfBuffer);
 
   } catch (err) {
     console.error("❌ Server error (generate-awb):", err);
     return res.status(500).json({ message: "❌ Terjadi kesalahan server", error: err.message });
   }
 });
+
+
 
 module.exports = router;
