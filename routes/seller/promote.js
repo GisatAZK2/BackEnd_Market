@@ -1552,5 +1552,312 @@ router.post("/event/register", async (req, res) => {
   });
 });
 
+// ======================
+// 2. List Event (Seller dengan jumlah seller terdaftar + status)
+// ======================
+router.get("/events/seller", async (req, res) => {
+  try {
+    const { data: events, error: eventError } = await supabase
+      .from("events")
+      .select("*")
+      .order("start_time", { ascending: true });
+
+    if (eventError) throw eventError;
+
+    const now = DateTime.utc();
+
+    const eventsWithSellerCount = await Promise.all(
+      events.map(async (event) => {
+        const { data: eventProducts, error: epError } = await supabase
+          .from("event_products")
+          .select("product_id")
+          .eq("event_id", event.id);
+
+        if (epError) throw epError;
+
+        const productIds = eventProducts.map((ep) => ep.product_id);
+
+        let sellerCount = 0;
+        if (productIds.length > 0) {
+          const { data: products, error: prodError } = await supabase
+            .from("products")
+            .select("seller_id")
+            .in("id", productIds);
+
+          if (prodError) throw prodError;
+
+          const uniqueSellers = new Set(products.map((p) => p.seller_id));
+          sellerCount = uniqueSellers.size;
+        }
+
+        // Tambah status event
+        const start = DateTime.fromISO(event.start_time);
+        const end = DateTime.fromISO(event.end_time);
+
+        let status = "upcoming";
+        if (now >= start && now <= end) status = "active";
+        if (now > end) status = "ended";
+
+        return {
+          ...event,
+          seller_count: sellerCount,
+          status,
+        };
+      })
+    );
+
+    res.json({
+      message: "✅ Daftar event untuk seller dengan jumlah seller terdaftar",
+      data: eventsWithSellerCount,
+    });
+  } catch (err) {
+    res.status(500).json({ message: "❌ Gagal ambil event seller", error: err.message });
+  }
+});
+
+// =========================
+// 1. Update stok di event
+// =========================
+router.put("/event/:eventId/product/:productId", async (req, res) => {
+  try {
+    const { eventId, productId } = req.params;
+    const { stock } = req.body; // stok baru
+
+    // ambil stok lama
+    const { data: existing, error: exError } = await supabase
+      .from("event_products")
+      .select("stock")
+      .eq("event_id", eventId)
+      .eq("product_id", productId)
+      .single();
+
+    if (exError) throw exError;
+    if (!existing) {
+      return res.status(404).json({ message: "❌ Produk tidak ditemukan di event" });
+    }
+
+    const diff = stock - existing.stock;
+    const newStock = existing.stock + diff;
+
+    const { error: upError } = await supabase
+      .from("event_products")
+      .update({ stock: newStock })
+      .eq("event_id", eventId)
+      .eq("product_id", productId);
+
+    if (upError) throw upError;
+
+    res.json({ message: "✅ Stok berhasil diperbarui", old_stock: existing.stock, new_stock: newStock });
+  } catch (err) {
+    res.status(500).json({ message: "❌ Gagal update stok", error: err.message });
+  }
+});
+
+
+// =========================
+// 2. List available product
+// =========================
+router.get("/event/:eventId/available-products", async (req, res) => {
+  try {
+    const sellerInfo = req.cookies?.seller_info
+      ? JSON.parse(req.cookies.seller_info)
+      : null;
+
+    if (!sellerInfo?.id) {
+      return res
+        .status(401)
+        .json({ message: "❌ Harus login sebagai seller" });
+    }
+
+    const seller_id = sellerInfo.id;
+    const { eventId } = req.params;
+
+    // Ambil produk yang sudah ada di event
+    const { data: eventProducts, error: epError } = await supabase
+      .from("event_products")
+      .select("product_id")
+      .eq("event_id", eventId);
+
+    if (epError) throw epError;
+
+    const excludeIds = eventProducts.map((ep) => ep.product_id);
+
+    // Ambil semua produk milik seller, exclude yang sudah join event
+    let query = supabase
+      .from("products")
+      .select("*")
+      .eq("seller_id", seller_id);
+
+    if (excludeIds.length > 0) {
+      query = query.not("id", "in", `(${excludeIds.join(",")})`);
+    }
+
+    const { data: available, error: avError } = await query;
+    if (avError) throw avError;
+
+    if (!available.length) {
+      return res.json({
+        message: "✅ Tidak ada produk tersedia untuk event ini",
+        count: 0,
+        data: [],
+      });
+    }
+
+    // === Attach diskon & stok prioritas ===
+    const enrichedProducts = await attachVariantsStockDiscountWithRealDiscount(
+      available
+    );
+
+    res.json({
+      message: "✅ Produk yang tersedia untuk ditambahkan ke event",
+      count: enrichedProducts.length,
+      data: enrichedProducts,
+    });
+  } catch (err) {
+    res.status(500).json({
+      message: "❌ Gagal ambil produk tersedia",
+      error: err.message,
+    });
+  }
+});
+
+
+// =========================
+// 3. Delete item dari event
+// =========================
+router.delete("/event/:eventId/product/:productId", async (req, res) => {
+  try {
+    const sellerInfo = req.cookies?.seller_info
+      ? JSON.parse(req.cookies.seller_info)
+      : null;
+
+    if (!sellerInfo?.id) {
+      return res.status(401).json({ message: "❌ Harus login sebagai seller" });
+    }
+    const seller_id = sellerInfo.id;
+
+    const { eventId, productId } = req.params;
+
+    // === Hapus semua produk seller dari event ===
+    if (productId === "all") {
+      const { error: delAllError } = await supabase
+        .from("event_products")
+        .delete()
+        .eq("event_id", eventId)
+        .in(
+          "product_id",
+          (
+            await supabase
+              .from("products")
+              .select("id")
+              .eq("seller_id", seller_id)
+          ).data.map((p) => p.id)
+        );
+
+      if (delAllError) throw delAllError;
+
+      return res.json({
+        message: "✅ Semua produk seller dihapus dari event",
+      });
+    }
+
+    // === Hapus satu produk, validasi dulu milik seller ===
+    const { data: product, error: prodError } = await supabase
+      .from("products")
+      .select("id")
+      .eq("id", productId)
+      .eq("seller_id", seller_id)
+      .single();
+
+    if (prodError) throw prodError;
+    if (!product) {
+      return res
+        .status(403)
+        .json({ message: "❌ Produk ini tidak dimiliki oleh seller" });
+    }
+
+    const { error: delError } = await supabase
+      .from("event_products")
+      .delete()
+      .eq("event_id", eventId)
+      .eq("product_id", productId);
+
+    if (delError) throw delError;
+
+    res.json({ message: "✅ Produk dihapus dari event" });
+  } catch (err) {
+    res.status(500).json({
+      message: "❌ Gagal hapus produk dari event",
+      error: err.message,
+    });
+  }
+});
+
+
+// =========================
+// 4. Get event by ID (flash sale)
+// =========================
+router.get("/event/:eventId", async (req, res) => {
+  try {
+    const { eventId } = req.params;
+
+    // ambil detail event
+    const { data: event, error: evError } = await supabase
+      .from("events")
+      .select("*")
+      .eq("id", eventId)
+      .single();
+
+    if (evError) throw evError;
+    if (!event) {
+      return res.status(404).json({ message: "❌ Event tidak ditemukan" });
+    }
+
+    // ambil produk dalam event
+    const { data: eventProducts, error: epError } = await supabase
+      .from("event_products")
+      .select("product_id, event_stock")
+      .eq("event_id", eventId);
+
+    if (epError) throw epError;
+
+    let products = [];
+    if (eventProducts.length > 0) {
+      const productIds = eventProducts.map((ep) => ep.product_id);
+
+      const { data: prodData, error: prodError } = await supabase
+        .from("products")
+        .select("id, product_name, product_price, seller_id")
+        .in("id", productIds);
+
+      if (prodError) throw prodError;
+
+      // gabung dengan stok event
+      products = prodData.map((p) => {
+        const ep = eventProducts.find((e) => e.product_id === p.id);
+        return { ...p, event_stock: ep?.event_stock ?? null };
+      });
+
+      // === Enrich dengan varian, stok real & diskon ===
+      products = await attachVariantsStockDiscountWithRealDiscount(products);
+    }
+
+    res.json({
+      message: "✅ Detail event flash sale",
+      event: {
+        ...event,
+        rules: event.rules || null, // kalau ga ada set null
+        products: products.length > 0 ? products : [],
+      },
+    });
+  } catch (err) {
+    res.status(500).json({
+      message: "❌ Gagal ambil detail event",
+      error: err.message,
+    });
+  }
+});
+
+
 
 module.exports = router;

@@ -640,23 +640,24 @@ router.post("/login/google", async (req, res) => {
 
       console.log("[Google Login] User baru berhasil dibuat:", newUser);
 
-          // 🚀 Kirim OTP lewat SMTP server
-          await axios.post(`${SEND_URL}/send-email`, {
-            type: "otp",
-            email,
-            code: otp,
-          });
+      // 🚀 Kirim OTP lewat SMTP server
+      await axios.post(`${SEND_URL}/send-email`, {
+        type: "otp",
+        email,
+        code: otp,
+      });
 
-          console.log("[Google Login] OTP dikirim ke email:", email);
+      console.log("[Google Login] OTP dikirim ke email:", email);
 
-          return res.status(201).json({
-            success: true,
-            step: "verify_otp",
-            message: "User baru dibuat. OTP dikirim ke email.",
-            email,
-            avatar: googleAvatar,
-          });
+      return res.status(201).json({
+        success: true,
+        step: "verify_otp",
+        message: "User baru dibuat. OTP dikirim ke email.",
+        email,
+        avatar: googleAvatar,
+      });
     }
+
     // 4. User belum verified → OTP ulang
     if (!user.verified) {
       console.log("[Google Login] User belum verified, kirim ulang OTP...");
@@ -672,7 +673,8 @@ router.post("/login/google", async (req, res) => {
         console.log("[Google Login] Gagal memperbarui OTP:", updateErr);
         return res.status(500).json({ error: "Gagal memperbarui OTP." });
       }
-            // 🚀 Kirim ulang OTP lewat SMTP microservice
+
+      // 🚀 Kirim ulang OTP lewat SMTP microservice
       await axios.post(`${SEND_URL}/send-email`, {
         type: "otp",
         email,
@@ -688,12 +690,25 @@ router.post("/login/google", async (req, res) => {
         email,
         avatar: user.avatar || googleAvatar,
       });
-
     }
 
-    // 5. User verified → buat JWT + set cookie
-    console.log("[Google Login] User sudah verified, buat JWT...");
-    const token = jwt.sign({ id: user.id }, process.env.JWT_SECRET, { expiresIn: "7d" });
+    // 5. User verified → cek apakah seller
+    console.log("[Google Login] User sudah verified, cek apakah seller...");
+    const { data: seller, error: sellerError } = await supabase
+      .from("sellers")
+      .select("id, email")
+      .eq("email", email)
+      .single();
+
+    if (sellerError && sellerError.code !== "PGRST116") {
+      console.error("Supabase seller error:", sellerError);
+    }
+
+    // 6. Buat JWT + set cookie
+    console.log("[Google Login] User verified, buat JWT...");
+    const token = jwt.sign({ id: user.id }, process.env.JWT_SECRET, {
+      expiresIn: "7d",
+    });
 
     const cookieOptions = {
       httpOnly: true,
@@ -709,6 +724,7 @@ router.post("/login/google", async (req, res) => {
         email: user.email,
         username: user.username,
         avatar: user.avatar || googleAvatar,
+        seller_id: seller ? seller.id : null, // 🔑 tambahin seller_id
       }),
       cookieOptions
     );
@@ -721,6 +737,7 @@ router.post("/login/google", async (req, res) => {
       email: user.email,
       username: user.username,
       avatar: user.avatar || googleAvatar,
+      seller_id: seller ? seller.id : null, // 🔑 kirim juga seller_id
     });
 
   } catch (err) {

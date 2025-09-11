@@ -71,27 +71,40 @@ router.post("/event", upload.single("banner"), async (req, res) => {
   res.json({ message: "✅ Event berhasil ditambahkan", data });
 });
 
-
-
-/* ===== EVENT LIST ===== */
 router.get("/event/list", async (req, res) => {
   try {
     const { data, error } = await supabase
       .from("events")
       .select("*")
-      .order("start_time", { ascending: false });
+      .order("start_time", { ascending: true });
 
-    if (error)
-      return res
-        .status(500)
-        .json({ message: "❌ Gagal ambil event", error: error.message });
-    res.json({ message: "✅ Daftar event", data });
+    if (error) throw error;
+
+    // Tambahin status event
+    const now = DateTime.utc();
+    const eventsWithStatus = data.map((event) => {
+      const start = DateTime.fromISO(event.start_time);
+      const end = DateTime.fromISO(event.end_time);
+
+      let status = "upcoming";
+      if (now >= start && now <= end) status = "active";
+      if (now > end) status = "ended";
+
+      return {
+        ...event,
+        status,
+      };
+    });
+
+    res.json({
+      message: "✅ Daftar event untuk customer",
+      data: eventsWithStatus,
+    });
   } catch (err) {
-    res.status(500).json({ message: "❌ Error server", error: err.message });
+    res.status(500).json({ message: "❌ Gagal ambil event customer", error: err.message });
   }
 });
 
-/* ===== GET LIST FLASH SALE UNTUK CUSTOMER (PAKAI HELPER DISKON) ===== */
 /* ===== GET LIST FLASH SALE UNTUK CUSTOMER (PAKAI HELPER DISKON) ===== */
 router.get("/flash-sale-customer/list", async (req, res) => {
   try {
@@ -378,164 +391,6 @@ router.get("/flash-sale-customer/:id", async (req, res) => {
       message: "❌ Terjadi kesalahan server",
       error: err.message,
     });
-  }
-});
-
-/* ===== STORE DISCOUNT CREATE ===== */
-router.post("/store-discount/create", async (req, res) => {
-  const { store_id, name, start_time, end_time, timezone, items } = req.body;
-
-  if (!store_id || !name || !items?.length || !start_time || !end_time) {
-    return res.status(400).json({
-      message: "❌ store_id, name, start_time, end_time & items wajib diisi",
-    });
-  }
-
-  const tz = timezone || "Asia/Jakarta";
-  const startUTC = DateTime.fromISO(start_time, { zone: tz }).toUTC().toISO();
-  const endUTC = DateTime.fromISO(end_time, { zone: tz }).toUTC().toISO();
-
-  try {
-    const { data: storeDiscount, error: sdErr } = await supabase
-      .from("store_discounts")
-      .insert([{ store_id, name, start_time: startUTC, end_time: endUTC }])
-      .select()
-      .single();
-
-    if (sdErr) {
-      return res.status(500).json({
-        message: "❌ Gagal simpan diskon toko",
-        error: sdErr.message,
-      });
-    }
-
-    for (const item of items) {
-      if (item.variant_id) {
-        const { data: variant } = await supabase
-          .from("product_variants")
-          .select("variant_stock")
-          .eq("id", item.variant_id)
-          .single();
-
-        if (variant) {
-          await supabase
-            .from("product_variants")
-            .update({
-              variant_stock: Math.max(
-                (variant.variant_stock || 0) - (item.stock || 0),
-                0,
-              ),
-            })
-            .eq("id", item.variant_id);
-        }
-      } else {
-        const { data: product } = await supabase
-          .from("products")
-          .select("stock")
-          .eq("id", item.product_id)
-          .single();
-
-        if (product) {
-          await supabase
-            .from("products")
-            .update({
-              stock: Math.max((product.stock || 0) - (item.stock || 0), 0),
-            })
-            .eq("id", item.product_id);
-        }
-      }
-
-      await supabase.from("store_discount_items").insert([
-        {
-          discount_id: storeDiscount.id,
-          product_id: item.product_id,
-          variant_id: item.variant_id || null,
-          stock: item.stock,
-          discount_percentage: item.discount_percentage,
-        },
-      ]);
-    }
-
-    return res.json({
-      message: "✅ Diskon toko berhasil dibuat dengan item-target",
-      store_discount: storeDiscount,
-    });
-  } catch (err) {
-    console.error(err);
-    return res.status(500).json({
-      message: "❌ Error server",
-      error: err.message,
-    });
-  }
-});
-
-router.get("/event/:id", async (req, res) => {
-  const { id } = req.params;
-  try {
-    const { data: event, error } = await supabase
-      .from("events")
-      .select("*")
-      .eq("id", id)
-      .single();
-
-    if (error || !event) {
-      return res.status(404).json({ message: "❌ Event tidak ditemukan" });
-    }
-
-    const { data: eventProducts = [] } = await supabase
-      .from("event_products")
-      .select("products(*)")
-      .eq("event_id", id);
-
-    const products = (eventProducts || [])
-      .map((p) => p.products)
-      .filter(Boolean);
-    const productsWithDiscount =
-      products.length > 0 ? await attachVariantsStockDiscount(products) : [];
-
-    return res.json({
-      message: "✅ Detail event",
-      event,
-      products: productsWithDiscount,
-    });
-  } catch (err) {
-    res.status(500).json({ message: "❌ Error server", error: err.message });
-  }
-});
-
-/* ===== STORE DISCOUNT BY SELLER ===== */
-router.get("/store-discount/seller/:seller_id", async (req, res) => {
-  const { seller_id } = req.params;
-  try {
-    const { data: storeDiscounts, error } = await supabase
-      .from("store_discounts")
-      .select("*")
-      .eq("store_id", seller_id);
-
-    if (error) {
-      return res.status(500).json({ message: "❌ Gagal ambil diskon toko" });
-    }
-
-    const discountsWithItems = [];
-    for (const discount of storeDiscounts || []) {
-      const { data: items = [] } = await supabase
-        .from("store_discount_items")
-        .select("products(*)")
-        .eq("discount_id", discount.id);
-
-      const products = (items || []).map((i) => i.products).filter(Boolean);
-      const productsWithDiscount =
-        products.length > 0 ? await attachVariantsStockDiscount(products) : [];
-
-      discountsWithItems.push({ ...discount, items: productsWithDiscount });
-    }
-
-    return res.json({
-      message: "✅ Diskon per toko berhasil diambil",
-      data: discountsWithItems,
-    });
-  } catch (err) {
-    res.status(500).json({ message: "❌ Error server", error: err.message });
   }
 });
 
