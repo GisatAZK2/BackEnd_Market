@@ -19,16 +19,20 @@ async function convertToWebp(buffer) {
 
 /* ===== EVENT CREATE ===== */
 router.post("/event", upload.single("banner"), async (req, res) => {
-  const { title, description, start_time, end_time, timezone } = req.body;
+  const { title, description, start_time, end_time, timezone, categories, min_stock, min_discount } = req.body;
+
+  // Validate required fields
   if (!title || !start_time || !end_time)
     return res
       .status(400)
       .json({ message: "❌ title, start_time, end_time wajib" });
 
+  // Set default timezone if not provided
   const tz = timezone || "Asia/Jakarta";
   const startUTC = DateTime.fromISO(start_time, { zone: tz }).toUTC().toISO();
   const endUTC = DateTime.fromISO(end_time, { zone: tz }).toUTC().toISO();
 
+  // Handle banner upload
   let banner_url = null;
   if (req.file) {
     const filePath = `events/${uuidv4()}.webp`;
@@ -41,17 +45,24 @@ router.post("/event", upload.single("banner"), async (req, res) => {
       .data.publicUrl;
   }
 
+  // Build the insert object with required and optional fields
+  const insertData = {
+    title,
+    description,
+    banner_url,
+    start_time: startUTC,
+    end_time: endUTC,
+  };
+
+  // Add optional fields if provided
+  if (categories) insertData.categories = Array.isArray(categories) ? categories : [categories];
+  if (min_stock) insertData.min_stock = parseInt(min_stock);
+  if (min_discount) insertData.min_discount = parseFloat(min_discount);
+
+  // Insert into database
   const { data, error } = await supabase
     .from("events")
-    .insert([
-      {
-        title,
-        description,
-        banner_url,
-        start_time: startUTC,
-        end_time: endUTC,
-      },
-    ])
+    .insert([insertData])
     .select()
     .single();
 
@@ -60,79 +71,7 @@ router.post("/event", upload.single("banner"), async (req, res) => {
   res.json({ message: "✅ Event berhasil ditambahkan", data });
 });
 
-/* ===== EVENT REGISTER PRODUCT (support variant) ===== */
-router.post("/event/register", async (req, res) => {
-  const { seller_id, event_id, products } = req.body;
-  if (!seller_id || !event_id || !Array.isArray(products) || !products.length)
-    return res
-      .status(400)
-      .json({ message: "❌ seller_id, event_id & products wajib" });
 
-  const { data: event } = await supabase
-    .from("events")
-    .select("*")
-    .eq("id", event_id)
-    .single();
-  if (!event)
-    return res.status(404).json({ message: "❌ Event tidak ditemukan" });
-
-  const rows = [];
-
-  for (const p of products) {
-    if (p.variant_id) {
-      const { data: variant } = await supabase
-        .from("product_variants")
-        .select("*")
-        .eq("id", p.variant_id)
-        .single();
-      if (!variant) continue;
-
-      await supabase
-        .from("product_variants")
-        .update({ variant_stock: (variant.variant_stock || 0) - p.event_stock })
-        .eq("id", p.variant_id);
-
-      rows.push({
-        seller_id,
-        event_id,
-        product_id: p.product_id,
-        variant_id: p.variant_id,
-        event_discount: p.discount_percentage,
-        event_stock: p.event_stock,
-      });
-    } else {
-      const { data: product } = await supabase
-        .from("products")
-        .select("*")
-        .eq("id", p.product_id)
-        .single();
-      if (!product) continue;
-
-      await supabase
-        .from("products")
-        .update({ stock: (product.stock || 0) - p.event_stock })
-        .eq("id", p.product_id);
-
-      rows.push({
-        seller_id,
-        event_id,
-        product_id: p.product_id,
-        variant_id: null,
-        event_discount: p.discount_percentage,
-        event_stock: p.event_stock,
-      });
-    }
-  }
-
-  const { error } = await supabase.from("event_products").insert(rows);
-  if (error)
-    return res.status(500).json({
-      message: "❌ Gagal daftar produk ke event",
-      error: error.message,
-    });
-
-  res.json({ message: "✅ Produk berhasil didaftarkan ke event" });
-});
 
 /* ===== EVENT LIST ===== */
 router.get("/event/list", async (req, res) => {

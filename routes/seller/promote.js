@@ -1343,4 +1343,214 @@ router.delete("/flash-sale/:id", requireSeller, async (req, res) => {
   }
 });
 
+
+//pendaftaran Event Global
+router.post("/event/register", async (req, res) => {
+  const sellerInfo = req.cookies?.seller_info ? JSON.parse(req.cookies.seller_info) : null;
+
+  if (!sellerInfo?.id) {
+    return res.status(401).json({ message: "❌ Harus login sebagai seller" });
+  }
+
+  const seller_id = sellerInfo.id;
+  const { event_id, products } = req.body;
+
+  console.log("📦 Request Body:", req.body);
+  console.log("👤 Seller Info:", sellerInfo);
+
+  if (!event_id || !Array.isArray(products) || !products.length) {
+    return res.status(400).json({ message: "❌ event_id & products wajib" });
+  }
+
+  // Ambil event
+  const { data: event, error: eventError } = await supabase
+    .from("events")
+    .select("*, categories, min_stock, min_discount")
+    .eq("id", event_id)
+    .single();
+
+  console.log("🎉 Event Data (raw):", event, "Error:", eventError);
+
+  if (!event) return res.status(404).json({ message: "❌ Event tidak ditemukan" });
+
+  // --- FIX CATEGORIES ---
+  if (event.categories) {
+    if (typeof event.categories === "string") {
+      try {
+        event.categories = JSON.parse(event.categories);
+      } catch {
+        event.categories = [];
+      }
+    } else if (Array.isArray(event.categories)) {
+      event.categories = event.categories.flatMap((c) => {
+        if (typeof c === "string") {
+          try {
+            return JSON.parse(c);
+          } catch {
+            return [];
+          }
+        }
+        return c;
+      });
+    }
+  } else {
+    event.categories = [];
+  }
+
+  console.log("🎉 Event Data (parsed):", event);
+
+  const rows = [];
+  const rejected = [];
+
+  for (const p of products) {
+    console.log("🔎 Cek produk input:", p);
+
+    if (!p.product_id || (!p.event_stock && p.event_stock !== 0) || !p.discount_percentage) {
+      rejected.push({ ...p, reason: "❌ Data produk tidak lengkap" });
+      continue;
+    }
+
+    // 🔍 Cek apakah produk/variant sudah ada di event
+    let query = supabase
+      .from("event_products")
+      .select("id")
+      .eq("event_id", event_id)
+      .eq("product_id", p.product_id);
+
+    if (p.variant_id) {
+      query = query.eq("variant_id", p.variant_id);
+    } else {
+      query = query.is("variant_id", null);
+    }
+
+    const { data: exists, error: existsErr } = await query.maybeSingle();
+
+    if (exists) {
+      rejected.push({ ...p, reason: "❌ Produk sudah terdaftar di event ini" });
+      continue;
+    }
+
+    if (p.variant_id) {
+      // ==== VARIANT ====
+      const { data: variant, error: vErr } = await supabase
+        .from("product_variants")
+        .select("*, product:products(id, seller_id, category_id)")
+        .eq("id", p.variant_id)
+        .single();
+
+      console.log("🧩 Variant Data:", variant, "Error:", vErr);
+
+      if (!variant) {
+        rejected.push({ ...p, reason: "❌ Variant tidak ditemukan" });
+        continue;
+      }
+
+      // ✅ Validasi seller
+      if (variant.product?.seller_id !== seller_id) {
+        rejected.push({ ...p, reason: "❌ Variant bukan milik seller ini" });
+        continue;
+      }
+
+      const kategoriOK =
+        !event.categories?.length || event.categories.includes(variant?.product?.category_id);
+      const stokOK = event.min_stock == null || p.event_stock >= event.min_stock;
+      const diskonOK = event.min_discount == null || p.discount_percentage >= event.min_discount;
+
+      if (!kategoriOK)
+        rejected.push({ ...p, reason: "❌ Kategori produk tidak sesuai dengan event" });
+      else if (!stokOK)
+        rejected.push({ ...p, reason: `❌ Stok kurang, minimal ${event.min_stock}` });
+      else if (!diskonOK)
+        rejected.push({ ...p, reason: `❌ Diskon kurang, minimal ${event.min_discount}%` });
+      else {
+        await supabase
+          .from("product_variants")
+          .update({ variant_stock: (variant.variant_stock || 0) - p.event_stock })
+          .eq("id", p.variant_id);
+
+        rows.push({
+          seller_id,
+          event_id,
+          product_id: p.product_id,
+          variant_id: p.variant_id,
+          event_discount: p.discount_percentage,
+          event_stock: p.event_stock,
+        });
+      }
+    } else {
+      // ==== PRODUK ====
+      const { data: product, error: pErr } = await supabase
+        .from("products")
+        .select("id, seller_id, category_id, stock")
+        .eq("id", p.product_id)
+        .single();
+
+      console.log("📦 Product Data:", product, "Error:", pErr);
+
+      if (!product) {
+        rejected.push({ ...p, reason: "❌ Produk tidak ditemukan" });
+        continue;
+      }
+
+      // ✅ Validasi seller
+      if (product.seller_id !== seller_id) {
+        rejected.push({ ...p, reason: "❌ Produk bukan milik seller ini" });
+        continue;
+      }
+
+      const kategoriOK =
+        !event.categories?.length || event.categories.includes(product?.category_id);
+      const stokOK = event.min_stock == null || p.event_stock >= event.min_stock;
+      const diskonOK = event.min_discount == null || p.discount_percentage >= event.min_discount;
+
+      if (!kategoriOK)
+        rejected.push({ ...p, reason: "❌ Kategori produk tidak sesuai dengan event" });
+      else if (!stokOK)
+        rejected.push({ ...p, reason: `❌ Stok kurang, minimal ${event.min_stock}` });
+      else if (!diskonOK)
+        rejected.push({ ...p, reason: `❌ Diskon kurang, minimal ${event.min_discount}%` });
+      else {
+        await supabase
+          .from("products")
+          .update({ stock: (product.stock || 0) - p.event_stock })
+          .eq("id", p.product_id);
+
+        rows.push({
+          seller_id,
+          event_id,
+          product_id: p.product_id,
+          variant_id: null,
+          event_discount: p.discount_percentage,
+          event_stock: p.event_stock,
+        });
+      }
+    }
+  }
+
+  console.log("✅ Rows valid:", rows);
+  console.log("❌ Rows rejected:", rejected);
+
+  if (!rows.length) {
+    return res.status(400).json({
+      message: "❌ Tidak ada produk yang memenuhi aturan event",
+      rejected,
+    });
+  }
+
+  const { error } = await supabase.from("event_products").insert(rows);
+  if (error)
+    return res.status(500).json({
+      message: "❌ Gagal daftar produk ke event",
+      error: error.message,
+      rejected,
+    });
+
+  res.json({
+    message: "✅ Produk berhasil didaftarkan ke event",
+    accepted: rows,
+    rejected,
+  });
+});
+
+
 module.exports = router;
