@@ -1344,86 +1344,53 @@ router.delete("/flash-sale/:id", requireSeller, async (req, res) => {
 });
 
 
-//pendaftaran Event Global
+// ===================== REGISTER PRODUK KE EVENT =====================
 router.post("/event/register", async (req, res) => {
   const sellerInfo = req.cookies?.seller_info ? JSON.parse(req.cookies.seller_info) : null;
-
-  if (!sellerInfo?.id) {
-    return res.status(401).json({ message: "❌ Harus login sebagai seller" });
-  }
+  if (!sellerInfo?.id) return res.status(401).json({ message: "❌ Harus login sebagai seller" });
 
   const seller_id = sellerInfo.id;
   const { event_id, products } = req.body;
-
-  console.log("📦 Request Body:", req.body);
-  console.log("👤 Seller Info:", sellerInfo);
 
   if (!event_id || !Array.isArray(products) || !products.length) {
     return res.status(400).json({ message: "❌ event_id & products wajib" });
   }
 
-  // Ambil event
   const { data: event, error: eventError } = await supabase
     .from("events")
     .select("*, categories, min_stock, min_discount")
     .eq("id", event_id)
     .single();
 
-  console.log("🎉 Event Data (raw):", event, "Error:", eventError);
-
   if (!event) return res.status(404).json({ message: "❌ Event tidak ditemukan" });
 
-  // --- FIX CATEGORIES ---
+  // Fix categories
   if (event.categories) {
     if (typeof event.categories === "string") {
-      try {
-        event.categories = JSON.parse(event.categories);
-      } catch {
-        event.categories = [];
-      }
+      try { event.categories = JSON.parse(event.categories); } catch { event.categories = []; }
     } else if (Array.isArray(event.categories)) {
-      event.categories = event.categories.flatMap((c) => {
-        if (typeof c === "string") {
-          try {
-            return JSON.parse(c);
-          } catch {
-            return [];
-          }
-        }
-        return c;
-      });
+      event.categories = event.categories.flatMap((c) => (typeof c === "string" ? JSON.parse(c) || [] : c));
     }
-  } else {
-    event.categories = [];
-  }
-
-  console.log("🎉 Event Data (parsed):", event);
+  } else event.categories = [];
 
   const rows = [];
   const rejected = [];
 
   for (const p of products) {
-    console.log("🔎 Cek produk input:", p);
-
     if (!p.product_id || (!p.event_stock && p.event_stock !== 0) || !p.discount_percentage) {
       rejected.push({ ...p, reason: "❌ Data produk tidak lengkap" });
       continue;
     }
 
-    // 🔍 Cek apakah produk/variant sudah ada di event
-    let query = supabase
-      .from("event_products")
-      .select("id")
-      .eq("event_id", event_id)
-      .eq("product_id", p.product_id);
-
-    if (p.variant_id) {
-      query = query.eq("variant_id", p.variant_id);
-    } else {
-      query = query.is("variant_id", null);
+    if (p.event_stock <= 0) {
+      rejected.push({ ...p, reason: "❌ Stok tidak boleh 0 atau habis" });
+      continue;
     }
 
-    const { data: exists, error: existsErr } = await query.maybeSingle();
+    // Cek produk/variant sudah ada di event
+    let query = supabase.from("event_products").select("id").eq("event_id", event_id).eq("product_id", p.product_id);
+    query = p.variant_id ? query.eq("variant_id", p.variant_id) : query.is("variant_id", null);
+    const { data: exists } = await query.maybeSingle();
 
     if (exists) {
       rejected.push({ ...p, reason: "❌ Produk sudah terdaftar di event ini" });
@@ -1431,130 +1398,57 @@ router.post("/event/register", async (req, res) => {
     }
 
     if (p.variant_id) {
-      // ==== VARIANT ====
-      const { data: variant, error: vErr } = await supabase
-        .from("product_variants")
+      const { data: variant } = await supabase.from("product_variants")
         .select("*, product:products(id, seller_id, category_id)")
         .eq("id", p.variant_id)
         .single();
 
-      console.log("🧩 Variant Data:", variant, "Error:", vErr);
+      if (!variant) { rejected.push({ ...p, reason: "❌ Variant tidak ditemukan" }); continue; }
+      if (variant.product?.seller_id !== seller_id) { rejected.push({ ...p, reason: "❌ Variant bukan milik seller ini" }); continue; }
 
-      if (!variant) {
-        rejected.push({ ...p, reason: "❌ Variant tidak ditemukan" });
-        continue;
-      }
-
-      // ✅ Validasi seller
-      if (variant.product?.seller_id !== seller_id) {
-        rejected.push({ ...p, reason: "❌ Variant bukan milik seller ini" });
-        continue;
-      }
-
-      const kategoriOK =
-        !event.categories?.length || event.categories.includes(variant?.product?.category_id);
+      const kategoriOK = !event.categories?.length || event.categories.includes(variant.product?.category_id);
       const stokOK = event.min_stock == null || p.event_stock >= event.min_stock;
       const diskonOK = event.min_discount == null || p.discount_percentage >= event.min_discount;
 
-      if (!kategoriOK)
-        rejected.push({ ...p, reason: "❌ Kategori produk tidak sesuai dengan event" });
-      else if (!stokOK)
-        rejected.push({ ...p, reason: `❌ Stok kurang, minimal ${event.min_stock}` });
-      else if (!diskonOK)
-        rejected.push({ ...p, reason: `❌ Diskon kurang, minimal ${event.min_discount}%` });
+      if (!kategoriOK) rejected.push({ ...p, reason: "❌ Kategori produk tidak sesuai event" });
+      else if (!stokOK) rejected.push({ ...p, reason: `❌ Stok kurang, minimal ${event.min_stock}` });
+      else if (!diskonOK) rejected.push({ ...p, reason: `❌ Diskon kurang, minimal ${event.min_discount}%` });
       else {
-        await supabase
-          .from("product_variants")
-          .update({ variant_stock: (variant.variant_stock || 0) - p.event_stock })
-          .eq("id", p.variant_id);
-
-        rows.push({
-          seller_id,
-          event_id,
-          product_id: p.product_id,
-          variant_id: p.variant_id,
-          event_discount: p.discount_percentage,
-          event_stock: p.event_stock,
-        });
+        await supabase.from("product_variants").update({ variant_stock: (variant.variant_stock || 0) - p.event_stock }).eq("id", p.variant_id);
+        rows.push({ seller_id, event_id, product_id: p.product_id, variant_id: p.variant_id, event_discount: p.discount_percentage, event_stock: p.event_stock });
       }
     } else {
-      // ==== PRODUK ====
-      const { data: product, error: pErr } = await supabase
-        .from("products")
+      const { data: product } = await supabase.from("products")
         .select("id, seller_id, category_id, stock")
         .eq("id", p.product_id)
         .single();
 
-      console.log("📦 Product Data:", product, "Error:", pErr);
+      if (!product) { rejected.push({ ...p, reason: "❌ Produk tidak ditemukan" }); continue; }
+      if (product.seller_id !== seller_id) { rejected.push({ ...p, reason: "❌ Produk bukan milik seller ini" }); continue; }
 
-      if (!product) {
-        rejected.push({ ...p, reason: "❌ Produk tidak ditemukan" });
-        continue;
-      }
-
-      // ✅ Validasi seller
-      if (product.seller_id !== seller_id) {
-        rejected.push({ ...p, reason: "❌ Produk bukan milik seller ini" });
-        continue;
-      }
-
-      const kategoriOK =
-        !event.categories?.length || event.categories.includes(product?.category_id);
+      const kategoriOK = !event.categories?.length || event.categories.includes(product?.category_id);
       const stokOK = event.min_stock == null || p.event_stock >= event.min_stock;
       const diskonOK = event.min_discount == null || p.discount_percentage >= event.min_discount;
 
-      if (!kategoriOK)
-        rejected.push({ ...p, reason: "❌ Kategori produk tidak sesuai dengan event" });
-      else if (!stokOK)
-        rejected.push({ ...p, reason: `❌ Stok kurang, minimal ${event.min_stock}` });
-      else if (!diskonOK)
-        rejected.push({ ...p, reason: `❌ Diskon kurang, minimal ${event.min_discount}%` });
+      if (!kategoriOK) rejected.push({ ...p, reason: "❌ Kategori produk tidak sesuai event" });
+      else if (!stokOK) rejected.push({ ...p, reason: `❌ Stok kurang, minimal ${event.min_stock}` });
+      else if (!diskonOK) rejected.push({ ...p, reason: `❌ Diskon kurang, minimal ${event.min_discount}%` });
       else {
-        await supabase
-          .from("products")
-          .update({ stock: (product.stock || 0) - p.event_stock })
-          .eq("id", p.product_id);
-
-        rows.push({
-          seller_id,
-          event_id,
-          product_id: p.product_id,
-          variant_id: null,
-          event_discount: p.discount_percentage,
-          event_stock: p.event_stock,
-        });
+        await supabase.from("products").update({ stock: (product.stock || 0) - p.event_stock }).eq("id", p.product_id);
+        rows.push({ seller_id, event_id, product_id: p.product_id, variant_id: null, event_discount: p.discount_percentage, event_stock: p.event_stock });
       }
     }
   }
 
-  console.log("✅ Rows valid:", rows);
-  console.log("❌ Rows rejected:", rejected);
-
-  if (!rows.length) {
-    return res.status(400).json({
-      message: "❌ Tidak ada produk yang memenuhi aturan event",
-      rejected,
-    });
-  }
+  if (!rows.length) return res.status(400).json({ message: "❌ Tidak ada produk yang memenuhi aturan event", rejected });
 
   const { error } = await supabase.from("event_products").insert(rows);
-  if (error)
-    return res.status(500).json({
-      message: "❌ Gagal daftar produk ke event",
-      error: error.message,
-      rejected,
-    });
+  if (error) return res.status(500).json({ message: "❌ Gagal daftar produk ke event", error: error.message, rejected });
 
-  res.json({
-    message: "✅ Produk berhasil didaftarkan ke event",
-    accepted: rows,
-    rejected,
-  });
+  res.json({ message: "✅ Produk berhasil didaftarkan ke event", accepted: rows, rejected });
 });
 
-// ======================
-// 2. List Event (Seller dengan jumlah seller terdaftar + status)
-// ======================
+// ========= List Event (Seller dengan jumlah seller terdaftar + status) ====
 router.get("/events/seller", async (req, res) => {
   try {
     const { data: events, error: eventError } = await supabase
@@ -1615,48 +1509,119 @@ router.get("/events/seller", async (req, res) => {
   }
 });
 
-// =========================
-// 1. Update stok di event
-// =========================
-router.put("/event/:eventId/product/:productId", async (req, res) => {
+// ===================== BATCH UPDATE PRODUK DI EVENT =====================
+router.put("/event/:eventId/products", async (req, res) => {
   try {
-    const { eventId, productId } = req.params;
-    const { stock } = req.body; // stok baru
+    const { eventId } = req.params;
+    const items = req.body.items; // [{ product_id, stock, event_discount }, ...]
 
-    // ambil stok lama
-    const { data: existing, error: exError } = await supabase
-      .from("event_products")
-      .select("stock")
-      .eq("event_id", eventId)
-      .eq("product_id", productId)
-      .single();
-
-    if (exError) throw exError;
-    if (!existing) {
-      return res.status(404).json({ message: "❌ Produk tidak ditemukan di event" });
+    if (!Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({ message: "❌ items harus berupa array dan tidak boleh kosong" });
     }
 
-    const diff = stock - existing.stock;
-    const newStock = existing.stock + diff;
+    const results = [];
 
-    const { error: upError } = await supabase
-      .from("event_products")
-      .update({ stock: newStock })
-      .eq("event_id", eventId)
-      .eq("product_id", productId);
+    for (const item of items) {
+      const { product_id, stock, event_discount } = item;
 
-    if (upError) throw upError;
+      // ambil data event_product + cek apakah ada variant_id
+      const { data: existing, error: exError } = await supabase
+        .from("event_products")
+        .select("event_stock, event_discount, variant_id")
+        .eq("event_id", eventId)
+        .eq("product_id", product_id)
+        .single();
 
-    res.json({ message: "✅ Stok berhasil diperbarui", old_stock: existing.stock, new_stock: newStock });
+      if (exError || !existing) {
+        results.push({ product_id, success: false, message: "❌ Produk tidak ditemukan di event" });
+        continue;
+      }
+
+      // Jangan biarkan stock event jadi negatif
+      if (typeof stock === "number" && stock <= 0) {
+        results.push({ product_id, success: false, message: "❌ Stok tidak boleh 0 atau habis" });
+        continue;
+      }
+
+      let newStock = existing.event_stock;
+      let newDiscount = existing.event_discount;
+
+      if (typeof stock === "number") {
+        const diff = stock - existing.event_stock;
+        newStock = stock;
+
+        if (diff !== 0) {
+          if (existing.variant_id) {
+            const { data: variant, error: vError } = await supabase
+              .from("product_variants")
+              .select("stock")
+              .eq("id", existing.variant_id)
+              .single();
+
+            if (vError || !variant) {
+              results.push({ product_id, success: false, message: "❌ Gagal ambil data varian" });
+              continue;
+            }
+
+            const updatedVariantStock = diff > 0 ? variant.stock - diff : variant.stock + Math.abs(diff);
+
+            if (updatedVariantStock < 0) {
+              results.push({ product_id, success: false, message: "❌ Stok varian tidak mencukupi" });
+              continue;
+            }
+
+            await supabase.from("product_variants").update({ stock: updatedVariantStock }).eq("id", existing.variant_id);
+          } else {
+            const { data: product, error: pError } = await supabase.from("products").select("stock").eq("id", product_id).single();
+
+            if (pError || !product) {
+              results.push({ product_id, success: false, message: "❌ Gagal ambil data produk" });
+              continue;
+            }
+
+            const updatedProductStock = diff > 0 ? product.stock - diff : product.stock + Math.abs(diff);
+
+            if (updatedProductStock < 0) {
+              results.push({ product_id, success: false, message: "❌ Stok produk tidak mencukupi" });
+              continue;
+            }
+
+            await supabase.from("products").update({ stock: updatedProductStock }).eq("id", product_id);
+          }
+        }
+      }
+
+      if (typeof event_discount === "number") newDiscount = event_discount;
+
+      const { error: upError } = await supabase
+        .from("event_products")
+        .update({ event_stock: newStock, event_discount: newDiscount })
+        .eq("event_id", eventId)
+        .eq("product_id", product_id);
+
+      if (upError) {
+        results.push({ product_id, success: false, message: "❌ Gagal update event_product" });
+        continue;
+      }
+
+      results.push({
+        product_id,
+        success: true,
+        message: "✅ Data event berhasil diperbarui",
+        old_stock: existing.event_stock,
+        new_stock: newStock,
+        old_discount: existing.event_discount,
+        new_discount: newDiscount,
+      });
+    }
+
+    res.json({ results });
   } catch (err) {
-    res.status(500).json({ message: "❌ Gagal update stok", error: err.message });
+    res.status(500).json({ message: "❌ Gagal batch update", error: err.message });
   }
 });
 
-
-// =========================
-// 2. List available product
-// =========================
+// ========================= List available product =========================
 router.get("/event/:eventId/available-products", async (req, res) => {
   try {
     const sellerInfo = req.cookies?.seller_info
@@ -1722,9 +1687,7 @@ router.get("/event/:eventId/available-products", async (req, res) => {
 });
 
 
-// =========================
-// 3. Delete item dari event
-// =========================
+// ======================== 3. Delete item dari event =========================
 router.delete("/event/:eventId/product/:productId", async (req, res) => {
   try {
     const sellerInfo = req.cookies?.seller_info
@@ -1735,33 +1698,31 @@ router.delete("/event/:eventId/product/:productId", async (req, res) => {
       return res.status(401).json({ message: "❌ Harus login sebagai seller" });
     }
     const seller_id = sellerInfo.id;
-
     const { eventId, productId } = req.params;
 
     // === Hapus semua produk seller dari event ===
     if (productId === "all") {
+      const { data: sellerProducts, error: prodErr } = await supabase
+        .from("products")
+        .select("id")
+        .eq("seller_id", seller_id);
+
+      if (prodErr) throw prodErr;
+
       const { error: delAllError } = await supabase
         .from("event_products")
         .delete()
         .eq("event_id", eventId)
-        .in(
-          "product_id",
-          (
-            await supabase
-              .from("products")
-              .select("id")
-              .eq("seller_id", seller_id)
-          ).data.map((p) => p.id)
-        );
+        .in("product_id", sellerProducts.map((p) => p.id));
 
       if (delAllError) throw delAllError;
 
       return res.json({
-        message: "✅ Semua produk seller dihapus dari event",
+        message: "✅ Semua produk seller dihapus dari event (stok dikembalikan otomatis oleh trigger)",
       });
     }
 
-    // === Hapus satu produk, validasi dulu milik seller ===
+    // === Validasi produk milik seller ===
     const { data: product, error: prodError } = await supabase
       .from("products")
       .select("id")
@@ -1776,6 +1737,7 @@ router.delete("/event/:eventId/product/:productId", async (req, res) => {
         .json({ message: "❌ Produk ini tidak dimiliki oleh seller" });
     }
 
+    // === Hapus produk dari event ===
     const { error: delError } = await supabase
       .from("event_products")
       .delete()
@@ -1784,7 +1746,9 @@ router.delete("/event/:eventId/product/:productId", async (req, res) => {
 
     if (delError) throw delError;
 
-    res.json({ message: "✅ Produk dihapus dari event" });
+    res.json({
+      message: "✅ Produk dihapus dari event (stok dikembalikan otomatis oleh trigger)",
+    });
   } catch (err) {
     res.status(500).json({
       message: "❌ Gagal hapus produk dari event",
@@ -1794,9 +1758,7 @@ router.delete("/event/:eventId/product/:productId", async (req, res) => {
 });
 
 
-// =========================
-// 4. Get event by ID (flash sale)
-// =========================
+// ========================= Get event by ID (flash sale) =========================
 router.get("/event/:eventId", async (req, res) => {
   try {
     const { eventId } = req.params;
@@ -1857,7 +1819,5 @@ router.get("/event/:eventId", async (req, res) => {
     });
   }
 });
-
-
 
 module.exports = router;
