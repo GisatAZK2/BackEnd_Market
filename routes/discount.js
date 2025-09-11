@@ -105,6 +105,68 @@ router.get("/event/list", async (req, res) => {
   }
 });
 
+router.get("/event/:eventId", async (req, res) => {
+  try {
+    const { eventId } = req.params;
+
+    // ambil detail event
+    const { data: event, error: evError } = await supabase
+      .from("events")
+      .select("*")
+      .eq("id", eventId)
+      .single();
+
+    if (evError) throw evError;
+    if (!event) {
+      return res.status(404).json({ message: "❌ Event tidak ditemukan" });
+    }
+
+    // ambil produk dalam event
+    const { data: eventProducts, error: epError } = await supabase
+      .from("event_products")
+      .select("product_id, event_stock")
+      .eq("event_id", eventId);
+
+    if (epError) throw epError;
+
+    let products = [];
+    if (eventProducts.length > 0) {
+      const productIds = eventProducts.map((ep) => ep.product_id);
+
+      const { data: prodData, error: prodError } = await supabase
+        .from("products")
+        .select("id, product_name, product_price, seller_id")
+        .in("id", productIds);
+
+      if (prodError) throw prodError;
+
+      // gabung dengan stok event
+      products = prodData.map((p) => {
+        const ep = eventProducts.find((e) => e.product_id === p.id);
+        return { ...p, event_stock: ep?.event_stock ?? null };
+      });
+
+      // === Enrich dengan varian, stok real & diskon ===
+      products = await attachVariantsStockDiscountWithRealDiscount(products);
+    }
+
+    res.json({
+      message: "✅ Detail event flash sale",
+      event: {
+        ...event,
+        rules: event.rules || null, // kalau ga ada set null
+        products: products.length > 0 ? products : [],
+      },
+    });
+  } catch (err) {
+    res.status(500).json({
+      message: "❌ Gagal ambil detail event",
+      error: err.message,
+    });
+  }
+});
+
+
 /* ===== GET LIST FLASH SALE UNTUK CUSTOMER (PAKAI HELPER DISKON) ===== */
 router.get("/flash-sale-customer/list", async (req, res) => {
   try {

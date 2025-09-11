@@ -4,11 +4,6 @@ const supabase = require("../../config/supabase");
 const axios = require("axios");
 const router = express.Router();
 
-const {
-  attachVariantsStockDiscountWithRealDiscount
-} = require("../../utils/applyDiscountAndVariants");
-
-
 const SEND_URL = process.env.SEND_SERVICE_URL;
 
 

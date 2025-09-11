@@ -1,213 +1,247 @@
-# README: API Backend untuk Sistem E-Commerce (Checkout, Delivery Fee, dan Trending Products)
+# Dokumentasi API Promosi Penjual dan Diskon Pelanggan
 
-## Deskripsi
-API ini dibangun menggunakan Express.js dan terintegrasi dengan Supabase sebagai database. API ini menangani tiga endpoint utama:
-- **POST /cart/checkout**: Menangani proses checkout barang dari keranjang belanja, termasuk pembuatan order, validasi alamat, perhitungan biaya pengiriman, dan penghapusan item dari keranjang.
-- **POST /cart/delivery-fee**: Menghitung biaya pengiriman berdasarkan item yang dipilih, metode pengambilan, dan ketersediaan pengiriman dari seller.
-- **GET /trending**: Mengambil daftar produk trending berdasarkan kategori acak atau riwayat pencarian pengguna (dari cookie), dengan personalisasi sederhana.
+API ini menyediakan fitur untuk mengelola promosi penjual dan diskon pelanggan melalui rute-rute yang terpisah untuk penjual dan pelanggan. API ini dibangun menggunakan Express.js dan Supabase sebagai database. Berikut adalah penjelasan rute yang tersedia untuk penjual dan pelanggan.
 
-Endpoint pertama dan kedua menggunakan base URL: `https://backendcihuyy.up.railway.app/order`.  
-Endpoint ketiga menggunakan base URL: `https://sharecihuy.sytes.net/product`.
+## Base URL
+- **Penjual**: `backendcihuyy.up.railway.app/seller/V1/promoteseller`
+- **Pelanggan**: `backendcihuyy.up.railway.app/discount/`
 
-**Catatan Penting**:
-- Gunakan cookie untuk menyimpan informasi Trendig produk by seller (misalnya `user_info` dan `user_search_history`).
+## Deskripsi Umum
+API ini memungkinkan:
+- **Penjual**: Mendaftarkan produk ke event promosi, mengelola produk dalam event, menghapus produk dari event, serta melihat daftar produk yang tersedia untuk event.
+- **Pelanggan**: Melihat daftar event promosi dan detail event tertentu beserta produk yang terkait.
 
+## Rute Penjual
+Berikut adalah endpoint yang tersedia untuk penjual di bawah base URL `backendcihuyy.up.railway.app/seller/V1/promoteseller`.
 
-## Endpoint API
+### 1. **POST /event/register**
+Mendaftarkan produk ke event promosi.
 
-### 1. POST /cart/checkout
-**URL Lengkap**: `https://backendcihuyy.up.railway.app/order/cart/checkout`  
-**Deskripsi**: Memproses checkout dari keranjang belanja. Validasi user, alamat, item, dan buat order per seller. Hapus item dari cart setelah sukses.  
-**Header**:  
-- Content-Type: application/json  
-- Cookie: user_info (JSON user data), user_search_history (opsional).  
-
-**Body Request (JSON)**:  
-```json
-{
-  "itemsToCheckout": [
-    {
-      "productId": "uuid-product",
-      "variantId": "uuid-variant" (opsional),
-      "qty": 2,
-      "pickupMethod": "diantar" atau "diambil" (opsional)
-    }
-  ],
-  "pickupMethod": "diantar" (global override, opsional),
-  "address": {  // Opsional, jika update alamat
-    "nama_penerima": "Nama Penerima",
-    "no_telepon": "08123456789",
-    "alamat_lengkap": "Alamat lengkap",
-    "kode_pos": "12345",
-    "provinsi_id": 1,
-    "kota_id": 2,
-    "kecamatan_id": 3,
-    "kelurahan_id": 4
+- **Deskripsi**: Menambahkan produk atau varian produk ke event tertentu dengan memeriksa aturan seperti kategori, stok minimum, dan diskon minimum.
+- **Body**:
+  ```json
+  {
+    "event_id": "string",
+    "products": [
+      {
+        "product_id": "string",
+        "variant_id": "string | null",
+        "event_stock": number,
+        "discount_percentage": number
+      }
+    ]
   }
-}
-```
-
-**Response Sukses (200)**:  
-```json
-{
-  "message": "✅ Berhasil checkout 1 order. Semua item siap diproses! (⏱ 0.5s)",
-  "orders": [
-    {
-      "id": "uuid-order",
-      "user_id": "uuid-user",
-      "seller_id": "uuid-seller",
-      "pickup_method": "diantar",
-      "status": "pending",
-      "total_price": 150000,
-      "delivery_fee": 10000,
-      "buyer_address": { ... }
-    }
-  ],
-  "delivery_stats": {
-    "total_items": 2,
-    "pickup_only_items": 0,
-    "delivery_available_items": 2
+  ```
+- **Respons Sukses**:
+  ```json
+  {
+    "message": "✅ Produk berhasil didaftarkan ke event",
+    "accepted": [{ seller_id, event_id, product_id, variant_id, event_discount, event_stock }],
+    "rejected": [{ product_id, variant_id, reason }]
   }
-}
-```
+  ```
+- **Respons Gagal**:
+  - 401: Harus login sebagai penjual.
+  - 400: Data tidak lengkap atau tidak ada produk yang memenuhi aturan.
+  - 404: Event tidak ditemukan.
+  - 500: Gagal mendaftarkan produk.
 
-**Response Error (400/500)**:  
-```json
-{
-  "message": "⚠️ Tidak ada item untuk di-checkout."
-}
-```
+### 2. **GET /events/seller**
+Mengambil daftar event dengan jumlah penjual terdaftar dan status event.
 
-### 2. POST /cart/delivery-fee
-**URL Lengkap**: `https://backendcihuyy.up.railway.app/order/cart/delivery-fee`  
-**Deskripsi**: Menghitung biaya pengiriman dan total checkout berdasarkan item dan metode. Grup per seller dan metode.  
-**Header**: Content-Type: application/json  
-
-**Body Request (JSON)**:  
-```json
-{
-  "itemsToCheckout": [
-    {
-      "productId": "uuid-product",
-      "variantId": "uuid-variant" (opsional),
-      "qty": 1,
-      "pickupMethod": "diantar" (opsional)
-    }
-  ],
-  "pickupMethod": "diantar" (global, opsional)
-}
-```
-
-**Response Sukses (200)**:  
-```json
-{
-  "message": "✅ Data checkout berhasil dihitung.",
-  "sellers": [
-    {
-      "seller_id": "uuid-seller",
-      "store_name": "Toko ABC",
-      "pickup_method": "diantar",
-      "total_produk": 100000,
-      "delivery_fee": 10000,
-      "delivery_note": "bisa diantar",
-      "delivery_status": "delivery_available",
-      "item_count": 1,
-      "total_semua": 110000
-    }
-  ],
-  "total_produk_semua": 100000,
-  "total_ongkir_semua": 10000,
-  "total_checkout_semua": 110000,
-  "delivery_stats": {
-    "total_items": 1,
-    "pickup_only_items": 0,
-    "delivery_available_items": 1,
-    "message": "✅ Semua item bisa diantar"
+- **Deskripsi**: Mengembalikan daftar semua event dengan informasi jumlah penjual yang mendaftar dan status event (upcoming, active, ended).
+- **Respons Sukses**:
+  ```json
+  {
+    "message": "✅ Daftar event untuk seller dengan jumlah seller terdaftar",
+    "data": [
+      {
+        "id": "string",
+        "start_time": "string",
+        "end_time": "string",
+        "seller_count": number,
+        "status": "upcoming | active | ended",
+        ...
+      }
+    ]
   }
-}
-```
+  ```
+- **Respons Gagal**:
+  - 500: Gagal mengambil daftar event.
 
-**Response Error (400/500)**:  
-```json
-{
-  "message": "⚠️ Tidak ada item untuk dihitung biaya kirim."
-}
-```
+### 3. **PUT /event/:eventId/products**
+Memperbarui stok dan diskon produk dalam event secara batch.
 
-### 3. GET /trending
-**URL Lengkap**: `https://sharecihuy.sytes.net/product/trending`  
-**Deskripsi**: Mengambil produk trending dengan personalisasi berdasarkan riwayat pencarian (dari cookie). 60% dari kategori utama (acak atau dari history), 40% dari lainnya. Gunakan seedrandom untuk stabilitas harian.  
-**Header**: Cookie: user_search_history (array string pencarian, opsional).  
+- **Deskripsi**: Memperbarui stok dan/atau diskon untuk produk tertentu dalam event. Memastikan stok tidak negatif dan memperbarui stok produk/varian di database.
+- **Parameter**: `eventId` (string)
+- **Body**:
+  ```json
+  {
+    "items": [
+      {
+        "product_id": "string",
+        "stock": number,
+        "event_discount": number
+      }
+    ]
+  }
+  ```
+- **Respons Sukses**:
+  ```json
+  {
+    "results": [
+      {
+        "product_id": "string",
+        "success": boolean,
+        "message": "string",
+        "old_stock": number,
+        "new_stock": number,
+        "old_discount": number,
+        "new_discount": number
+      }
+    ]
+  }
+  ```
+- **Respons Gagal**:
+  - 400: Items tidak valid.
+  - 500: Gagal memperbarui produk.
 
-**Parameter Query**: Tidak ada (GET).  
+### 4. **GET /event/:eventId/available-products**
+Mengambil daftar produk yang tersedia untuk ditambahkan ke event.
 
-**Response Sukses (200)**:  
-```json
-{
-  "message": "🔥 Trending personal berdasarkan riwayat search Anda di kategori \"Elektronik\" (60%) + kategori lain (40%)",
-  "date": "2025-09-09",
-  "total": 20,
-  "main_category": "Elektronik",
-  "personalized": true,
-  "search_keywords_used": ["laptop", "hp"],
-  "products": [
-    {
-      "id": "uuid-product",
-      "product_name": "Produk A",
-      "price": 100000,
-      "final_price": 90000,
-      "discount_percentage": 10,
-      "avg_rating": 4.5,
-      "total_ratings": 10,
-      "variants": [ ... ]
+- **Deskripsi**: Mengembalikan produk milik penjual yang belum terdaftar di event tertentu, lengkap dengan informasi varian, stok, dan diskon.
+- **Parameter**: `eventId` (string)
+- **Respons Sukses**:
+  ```json
+  {
+    "message": "✅ Produk yang tersedia untuk ditambahkan ke event",
+    "count": number,
+    "data": [
+      {
+        "id": "string",
+        "product_name": "string",
+        "product_price": number,
+        "stock": number,
+        ...
+      }
+    ]
+  }
+  ```
+- **Respons Gagal**:
+  - 401: Harus login sebagai penjual.
+  - 500: Gagal mengambil produk.
+
+### 5. **DELETE /event/:eventId/product/:productId**
+Menghapus produk dari event.
+
+- **Deskripsi**: Menghapus produk tertentu atau semua produk milik penjual dari event. Stok dikembalikan otomatis melalui trigger.
+- **Parameter**:
+  - `eventId` (string)
+  - `productId` (string, gunakan "all" untuk menghapus semua produk penjual)
+- **Respons Sukses**:
+  ```json
+  {
+    "message": "✅ Produk dihapus dari event (stok dikembalikan otomatis oleh trigger)"
+  }
+  ```
+- **Respons Gagal**:
+  - 401: Harus login sebagai penjual.
+  - 403: Produk bukan milik penjual.
+  - 500: Gagal menghapus produk.
+
+### 6. **GET /event/:eventId**
+Mengambil detail event untuk penjual.
+
+- **Deskripsi**: Mengembalikan detail event beserta produk yang terkait, dengan filter berdasarkan penjual jika login.
+- **Parameter**: `eventId` (string)
+- **Respons Sukses**:
+  ```json
+  {
+    "message": "✅ Detail event flash sale",
+    "event": {
+      "id": "string",
+      "start_time": "string",
+      "end_time": "string",
+      "rules": "string | null",
+      "products": [
+        {
+          "id": "string",
+          "product_name": "string",
+          "product_price": number,
+          "event_stock": number,
+          ...
+        }
+      ]
     }
-  ]
-}
-```
+  }
+  ```
+- **Respons Gagal**:
+  - 404: Event tidak ditemukan.
+  - 500: Gagal mengambil detail event.
 
-**Response Error (404/500)**:  
-```json
-{
-  "message": "❌ Tidak ada kategori tersedia"
-}
-```
+## Rute Pelanggan
+Berikut adalah endpoint yang tersedia untuk pelanggan di bawah base URL `backendcihuyy.up.railway.app/discount/`.
 
-## Contoh Kasus Penggunaan (Use Cases)
+### 1. **GET /event/list**
+Mengambil daftar event untuk pelanggan.
 
-### Kasus 1: Checkout Barang dengan Pengiriman
-- **Skenario**: User logged in, punya item di cart yang memerlukan pengiriman. Alamat belum lengkap, jadi kirim address baru di body.
-- **Langkah**:
-  1. Kirim POST ke `/cart/checkout` dengan itemsToCheckout dan address.
-  2. API validasi alamat, update user, buat order, hitung delivery fee, kirim email notif.
-- **Hasil Diharapkan**: Order dibuat, item dihapus dari cart, response dengan stats delivery.
-- **Potensi Error**: Jika alamat tidak lengkap → 400 dengan `needUpdateAddress: true`.
+- **Deskripsi**: Mengembalikan daftar semua event dengan status (upcoming, active, ended).
+- **Respons Sukses**:
+  ```json
+  {
+    "message": "✅ Daftar event untuk customer",
+    "data": [
+      {
+        "id": "string",
+        "start_time": "string",
+        "end_time": "string",
+        "status": "upcoming | active | ended",
+        ...
+      }
+    ]
+  }
+  ```
+- **Respons Gagal**:
+  - 500: Gagal mengambil daftar event.
 
-### Kasus 2: Hitung Biaya Pengiriman Sebelum Checkout
-- **Skenario**: User ingin preview total sebelum checkout, termasuk ongkir.
-- **Langkah**:
-  1. Kirim POST ke `/cart/delivery-fee` dengan itemsToCheckout.
-  2. API grup per seller, hitung fee berdasarkan is_delivery_available.
-- **Hasil Diharapkan**: Response dengan breakdown per seller dan grand total, plus stats jika ada item pickup-only.
-- **Potensi Error**: Jika seller tidak support delivery tapi dipilih "diantar" → delivery_note: "tidak bisa diantar".
+### 2. **GET /event/:eventId**
+Mengambil detail event untuk pelanggan.
 
-### Kasus 3: Tampilkan Produk Trending Personal
-- **Skenario**: User punya riwayat pencarian ["laptop", "hp"], cookie user_search_history diset.
-- **Langkah**:
-  1. Kirim GET ke `/trending`.
-  2. API parse cookie, match kategori (misal "Elektronik"), pilih 60% dari sana, 40% random lain.
-- **Hasil Diharapkan**: Produk trending personal, stabil sepanjang hari berkat seedrandom.
-- **Potensi Error**: Jika tidak ada produk → 404. Fallback ke random jika history kosong.
-
-### Kasus 4: Checkout dengan Item Pickup-Only
-- **Skenario**: Beberapa seller tidak support delivery, tapi user pilih "diantar".
-- **Langkah**: Checkout seperti biasa.
-- **Hasil Diharapkan**: Order dibuat dengan delivery_fee=0, message warning di response, dan notif email dengan pickup_only_note.
+- **Deskripsi**: Mengembalikan detail event beserta produk yang terkait, termasuk informasi varian, stok, dan diskon.
+- **Parameter**: `eventId` (string)
+- **Respons Sukses**:
+  ```json
+  {
+    "message": "✅ Detail event flash sale",
+    "event": {
+      "id": "string",
+      "start_time": "string",
+      "end_time": "string",
+      "rules": "string | null",
+      "products": [
+        {
+          "id": "string",
+          "product_name": "string",
+          "product_price": number,
+          "event_stock": number,
+          ...
+        }
+      ]
+    }
+  }
+  ```
+- **Respons Gagal**:
+  - 404: Event tidak ditemukan.
+  - 500: Gagal mengambil detail event.
 
 ## Catatan Tambahan
-- **Caching**: Digunakan untuk produk dan seller agar efisien.
-- **Async Operations**: Email dan snapshot item dilakukan di background agar tidak blok response.
-- **Keamanan**: Gunakan HTTPS, validasi input, dan middleware anti-spam.
-- **Testing**: Gunakan tools seperti Postman untuk test endpoint dengan cookie.
-- **Kontribusi**: Jika ada bug, buka issue atau PR.
+- **Autentikasi Penjual**: Semua rute penjual memerlukan cookie `seller_info` yang berisi informasi penjual (ID penjual). Jika tidak ada, akan mengembalikan error 401.
+- **Manajemen Stok**: Penambahan atau pengurangan stok event akan memperbarui stok produk/varian di database. Penghapusan produk dari event akan mengembalikan stok secara otomatis melalui trigger.
+- **Format Tanggal**: Menggunakan `DateTime` dari library Luxon untuk menentukan status event berdasarkan `start_time` dan `end_time`.
+- **Fungsi Tambahan**: Fungsi `attachVariantsStockDiscountWithRealDiscount` digunakan untuk memperkaya data produk dengan informasi varian, stok, dan diskon.
 
-Dibuat pada September 2025. Hubungi developer untuk update.
+## Cara Menjalankan
+1. Pastikan Anda memiliki akses ke Supabase dan konfigurasikan kredensialnya.
+2. Jalankan server Express.js di lingkungan Node.js.
+3. Gunakan base URL yang sesuai untuk mengakses endpoint penjual atau pelanggan.
+4. Pastikan cookie `seller_info` tersedia untuk rute penjual.

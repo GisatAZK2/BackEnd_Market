@@ -1762,6 +1762,8 @@ router.delete("/event/:eventId/product/:productId", async (req, res) => {
 router.get("/event/:eventId", async (req, res) => {
   try {
     const { eventId } = req.params;
+    const sellerInfo = req.cookies.seller_info ? JSON.parse(req.cookies.seller_info) : null;
+    const sellerId = sellerInfo?.seller_id;
 
     // ambil detail event
     const { data: event, error: evError } = await supabase
@@ -1787,10 +1789,17 @@ router.get("/event/:eventId", async (req, res) => {
     if (eventProducts.length > 0) {
       const productIds = eventProducts.map((ep) => ep.product_id);
 
-      const { data: prodData, error: prodError } = await supabase
+      // Query products dengan filter seller_id jika ada
+      let productQuery = supabase
         .from("products")
         .select("id, product_name, product_price, seller_id")
         .in("id", productIds);
+
+      if (sellerId) {
+        productQuery = productQuery.eq("seller_id", sellerId);
+      }
+
+      const { data: prodData, error: prodError } = await productQuery;
 
       if (prodError) throw prodError;
 
@@ -1819,5 +1828,6 @@ router.get("/event/:eventId", async (req, res) => {
     });
   }
 });
+
 
 module.exports = router;
