@@ -1722,7 +1722,31 @@ router.get("/event/:eventId/available-products", async (req, res) => {
     const seller_id = sellerInfo.id;
     const { eventId } = req.params;
 
-    // Ambil semua product+variant yang sudah ada di event
+    // === Ambil detail event (categories) ===
+    const { data: event, error: eventError } = await supabase
+      .from("events")
+      .select("categories")
+      .eq("id", eventId)
+      .single();
+
+    if (eventError) throw eventError;
+
+    // 🔧 Normalisasi event.categories
+    let eventCategoryIds = [];
+    if (Array.isArray(event.categories)) {
+      event.categories.forEach((cat) => {
+        if (typeof cat === "string") {
+          try {
+            const parsed = JSON.parse(cat);
+            if (Array.isArray(parsed)) {
+              eventCategoryIds.push(...parsed);
+            }
+          } catch (_) {}
+        }
+      });
+    }
+
+    // === Ambil semua produk yang sudah ikut event ===
     const { data: eventProducts, error: epError } = await supabase
       .from("event_products")
       .select("product_id, variant_id")
@@ -1732,29 +1756,47 @@ router.get("/event/:eventId/available-products", async (req, res) => {
 
     const usedProductIds = [...new Set(eventProducts.map((ep) => ep.product_id))];
 
-    // Ambil semua produk seller
+    // === Ambil semua produk seller ===
     const { data: products, error: prodError } = await supabase
       .from("products")
-      .select("id, product_name, product_price, product_image_url, stock, seller_id")
+      .select(`
+        id,
+        product_name,
+        product_price,
+        product_image_url,
+        stock,
+        seller_id,
+        category_id,
+        categories:category_id (id, name)
+      `)
       .eq("seller_id", seller_id);
 
     if (prodError) throw prodError;
+
     if (!products.length) {
       return res.json({ message: "✅ Tidak ada produk tersedia", count: 0, data: [] });
     }
 
-    // Enrich dengan varian
-    let enriched = await attachVariantsStockDiscountWithRealDiscount(products);
+    // === Filter produk berdasarkan kategori event ===
+    const filteredProducts = eventCategoryIds.length > 0
+      ? products.filter(p => p.category_id && eventCategoryIds.includes(p.category_id))
+      : products;
 
-    // Filter: produk tanpa varian yang belum ikut event, dan produk dengan varian (exclude varian yang sudah dipakai)
+    if (!filteredProducts.length) {
+      return res.json({ message: "✅ Tidak ada produk tersedia untuk kategori event", count: 0, data: [] });
+    }
+
+    // === Tambahin variants ke produk ===
+    let enriched = await attachVariantsStockDiscountWithRealDiscount(filteredProducts);
+
+    // === Filter produk berdasarkan penggunaan di event ===
     const available = enriched.map((p) => {
       const usedVariants = eventProducts.filter((ep) => ep.product_id === p.id).map((ep) => ep.variant_id);
 
       if (p.variants.length === 0) {
-        // Produk tanpa varian → exclude kalau sudah ikut
-        return usedVariants.includes(null) ? null : p;
+        const isUsed = usedVariants.includes(null);
+        return isUsed ? null : p;
       } else {
-        // Produk dengan varian → exclude variant yang sudah ikut
         const freeVariants = p.variants.filter((v) => !usedVariants.includes(v.id));
         if (freeVariants.length === 0) return null;
         return { ...p, variants: freeVariants };
@@ -1767,7 +1809,6 @@ router.get("/event/:eventId/available-products", async (req, res) => {
       data: available,
     });
   } catch (err) {
-    console.error("❌ Gagal ambil produk tersedia:", err);
     res.status(500).json({
       message: "❌ Gagal ambil produk tersedia",
       error: err.message,
