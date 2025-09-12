@@ -1511,14 +1511,16 @@ router.get("/events/seller", async (req, res) => {
 
 // ===================== BATCH UPDATE PRODUK DI EVENT =====================
 // Batch update produk/varian di event
+// === Update stok & diskon event products ===
 router.put("/event/:eventId/products", async (req, res) => {
   try {
     const { eventId } = req.params;
-    const items = req.body.items; 
-    // [{ product_id, variant_id (opsional), stock, event_discount }, ...]
+    const items = req.body.items;
 
     if (!Array.isArray(items) || items.length === 0) {
-      return res.status(400).json({ message: "❌ items harus berupa array dan tidak boleh kosong" });
+      return res.status(400).json({
+        message: "❌ items harus berupa array dan tidak boleh kosong",
+      });
     }
 
     const results = [];
@@ -1528,7 +1530,7 @@ router.put("/event/:eventId/products", async (req, res) => {
 
       console.log("👉 Processing item:", item);
 
-      // ambil data event_product
+      // 🔹 Ambil data event_product
       let query = supabase
         .from("event_products")
         .select("event_stock, event_discount, variant_id")
@@ -1541,86 +1543,136 @@ router.put("/event/:eventId/products", async (req, res) => {
       console.log("🔎 existing event_product:", existing, " error:", exError);
 
       if (exError || !existing) {
-        results.push({ product_id, variant_id, success: false, message: "❌ Produk/varian tidak ditemukan di event" });
+        results.push({
+          product_id,
+          variant_id,
+          success: false,
+          message: "❌ Produk/varian tidak ditemukan di event",
+        });
         continue;
       }
 
-      // Validasi stok
+      // 🔹 Validasi stok input
       if (typeof stock === "number" && stock <= 0) {
-        results.push({ product_id, variant_id, success: false, message: "❌ Stok tidak boleh 0 atau habis" });
+        results.push({
+          product_id,
+          variant_id,
+          success: false,
+          message: "❌ Stok tidak boleh 0 atau habis",
+        });
         continue;
       }
 
       let newStock = existing.event_stock;
       let newDiscount = existing.event_discount;
 
-      // Hitung stok baru
+      // 🔹 Hitung stok baru
       if (typeof stock === "number") {
         const diff = stock - existing.event_stock;
         newStock = stock;
 
         if (diff !== 0) {
           if (existing.variant_id || variant_id) {
+            // === Produk dengan varian ===
             const { data: variant, error: vError } = await supabase
               .from("product_variants")
-              .select("variant_stock") // ⬅️ pakai variant_stock
+              .select("variant_stock, product_id")
               .eq("id", variant_id || existing.variant_id)
               .single();
 
             console.log("🔎 variant:", variant, " error:", vError);
 
             if (vError || !variant) {
-              results.push({ product_id, variant_id, success: false, message: "❌ Gagal ambil data varian" });
+              results.push({
+                product_id,
+                variant_id,
+                success: false,
+                message: "❌ Gagal ambil data varian",
+              });
+              continue;
+            }
+
+            // Pastikan varian terhubung ke produk
+            if (variant.product_id !== product_id) {
+              results.push({
+                product_id,
+                variant_id,
+                success: false,
+                message: "❌ Varian tidak sesuai dengan produk",
+              });
               continue;
             }
 
             const updatedVariantStock = variant.variant_stock - diff;
-            console.log(`🔧 Update variant stock: ${variant.variant_stock} - ${diff} = ${updatedVariantStock}`);
+            console.log(
+              `🔧 Update variant stock: ${variant.variant_stock} - ${diff} = ${updatedVariantStock}`
+            );
 
             if (updatedVariantStock < 0) {
-              results.push({ product_id, variant_id, success: false, message: "❌ Stok varian tidak mencukupi" });
+              results.push({
+                product_id,
+                variant_id,
+                success: false,
+                message: "❌ Stok varian tidak mencukupi",
+              });
               continue;
             }
 
-            await supabase.from("product_variants").update({ variant_stock: updatedVariantStock }).eq("id", variant_id || existing.variant_id);
+            await supabase
+              .from("product_variants")
+              .update({ variant_stock: updatedVariantStock })
+              .eq("id", variant_id || existing.variant_id);
           } else {
+            // === Produk tanpa varian ===
             const { data: product, error: pError } = await supabase
               .from("products")
-              .select("product_stock, has_variant") // ⬅️ pakai product_stock
+              .select("stock")
               .eq("id", product_id)
               .single();
 
             console.log("🔎 product:", product, " error:", pError);
 
             if (pError || !product) {
-              results.push({ product_id, success: false, message: "❌ Gagal ambil data produk" });
+              results.push({
+                product_id,
+                success: false,
+                message: "❌ Gagal ambil data produk",
+              });
               continue;
             }
 
-            if (product.has_variant) {
-              results.push({ product_id, success: false, message: "❌ Produk ini punya varian, gunakan variant_id" });
-              continue;
-            }
-
-            const updatedProductStock = product.product_stock - diff;
-            console.log(`🔧 Update product stock: ${product.product_stock} - ${diff} = ${updatedProductStock}`);
+            const updatedProductStock = product.stock - diff;
+            console.log(
+              `🔧 Update product stock: ${product.stock} - ${diff} = ${updatedProductStock}`
+            );
 
             if (updatedProductStock < 0) {
-              results.push({ product_id, success: false, message: "❌ Stok produk tidak mencukupi" });
+              results.push({
+                product_id,
+                success: false,
+                message: "❌ Stok produk tidak mencukupi",
+              });
               continue;
             }
 
-            await supabase.from("products").update({ product_stock: updatedProductStock }).eq("id", product_id);
+            await supabase
+              .from("products")
+              .update({ stock: updatedProductStock })
+              .eq("id", product_id);
           }
         }
       }
 
+      // 🔹 Update diskon event jika ada
       if (typeof event_discount === "number") newDiscount = event_discount;
 
-      // Update event_products
+      // 🔹 Update event_products
       let updateQuery = supabase
         .from("event_products")
-        .update({ event_stock: newStock, event_discount: newDiscount })
+        .update({
+          event_stock: newStock,
+          event_discount: newDiscount,
+        })
         .eq("event_id", eventId)
         .eq("product_id", product_id);
 
@@ -1630,7 +1682,12 @@ router.put("/event/:eventId/products", async (req, res) => {
       console.log("📝 Update event_products error:", upError);
 
       if (upError) {
-        results.push({ product_id, variant_id, success: false, message: "❌ Gagal update event_product" });
+        results.push({
+          product_id,
+          variant_id,
+          success: false,
+          message: "❌ Gagal update event_product",
+        });
         continue;
       }
 
@@ -1649,7 +1706,9 @@ router.put("/event/:eventId/products", async (req, res) => {
     res.json({ results });
   } catch (err) {
     console.error("💥 Fatal error:", err);
-    res.status(500).json({ message: "❌ Gagal batch update", error: err.message });
+    res
+      .status(500)
+      .json({ message: "❌ Gagal batch update", error: err.message });
   }
 });
 
