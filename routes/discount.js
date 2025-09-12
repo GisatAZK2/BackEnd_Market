@@ -109,7 +109,7 @@ router.get("/event/:eventId", async (req, res) => {
   try {
     const { eventId } = req.params;
 
-    // ambil detail event
+    // 🔹 Ambil detail event
     const { data: event, error: evError } = await supabase
       .from("events")
       .select("*")
@@ -121,7 +121,7 @@ router.get("/event/:eventId", async (req, res) => {
       return res.status(404).json({ message: "❌ Event tidak ditemukan" });
     }
 
-    // ambil produk dalam event
+    // 🔹 Ambil produk dalam event
     const { data: eventProducts, error: epError } = await supabase
       .from("event_products")
       .select("product_id, event_stock")
@@ -133,20 +133,44 @@ router.get("/event/:eventId", async (req, res) => {
     if (eventProducts.length > 0) {
       const productIds = eventProducts.map((ep) => ep.product_id);
 
+      // 🔹 Ambil produk + ratings
       const { data: prodData, error: prodError } = await supabase
         .from("products")
-        .select("id, product_name, product_price, seller_id")
+        .select(`
+          id,
+          product_name,
+          product_price,
+          product_image_url,
+          stock,
+          terjual,
+          seller_id,
+          ratings!left (
+            rating
+          )
+        `)
         .in("id", productIds);
 
       if (prodError) throw prodError;
 
-      // gabung dengan stok event
+      // 🔹 Gabung produk dengan stok event + hitung rating
       products = prodData.map((p) => {
         const ep = eventProducts.find((e) => e.product_id === p.id);
-        return { ...p, event_stock: ep?.event_stock ?? null };
+
+        let avgRating = null;
+        if (p.ratings && p.ratings.length > 0) {
+          const sum = p.ratings.reduce((acc, r) => acc + r.rating, 0);
+          avgRating = sum / p.ratings.length;
+        }
+
+        return {
+          ...p,
+          event_stock: ep?.event_stock ?? null,
+          avg_rating: avgRating ? Number(avgRating.toFixed(2)) : null,
+          total_ratings: p.ratings ? p.ratings.length : 0,
+        };
       });
 
-      // === Enrich dengan varian, stok real & diskon ===
+      // 🔹 Enrich dengan varian, stok real & diskon
       products = await attachVariantsStockDiscountWithRealDiscount(products);
     }
 
@@ -154,11 +178,12 @@ router.get("/event/:eventId", async (req, res) => {
       message: "✅ Detail event flash sale",
       event: {
         ...event,
-        rules: event.rules || null, // kalau ga ada set null
+        rules: event.rules || null,
         products: products.length > 0 ? products : [],
       },
     });
   } catch (err) {
+    console.error("❌ Gagal ambil detail event:", err);
     res.status(500).json({
       message: "❌ Gagal ambil detail event",
       error: err.message,

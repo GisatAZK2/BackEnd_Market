@@ -1765,7 +1765,7 @@ router.get("/event/:eventId", async (req, res) => {
     const sellerInfo = req.cookies.seller_info ? JSON.parse(req.cookies.seller_info) : null;
     const sellerId = sellerInfo?.seller_id;
 
-    // ambil detail event
+    // 🔹 Ambil detail event
     const { data: event, error: evError } = await supabase
       .from("events")
       .select("*")
@@ -1777,7 +1777,7 @@ router.get("/event/:eventId", async (req, res) => {
       return res.status(404).json({ message: "❌ Event tidak ditemukan" });
     }
 
-    // ambil produk dalam event
+    // 🔹 Ambil produk dalam event
     const { data: eventProducts, error: epError } = await supabase
       .from("event_products")
       .select("product_id, event_stock")
@@ -1789,10 +1789,10 @@ router.get("/event/:eventId", async (req, res) => {
     if (eventProducts.length > 0) {
       const productIds = eventProducts.map((ep) => ep.product_id);
 
-      // Query products dengan filter seller_id jika ada
+      // 🔹 Query products (filter seller kalau ada)
       let productQuery = supabase
         .from("products")
-        .select("id, product_name, product_price, seller_id")
+        .select("id, product_name, product_price, product_image_url, stock, seller_id")
         .in("id", productIds);
 
       if (sellerId) {
@@ -1800,16 +1800,22 @@ router.get("/event/:eventId", async (req, res) => {
       }
 
       const { data: prodData, error: prodError } = await productQuery;
-
       if (prodError) throw prodError;
 
-      // gabung dengan stok event
+      // 🔹 Rename stock → stock_asli & tambahin event_stock
       products = prodData.map((p) => {
         const ep = eventProducts.find((e) => e.product_id === p.id);
-        return { ...p, event_stock: ep?.event_stock ?? null };
+        return {
+          ...p,
+          stock_asli: p.stock,      // rename stock jadi stock_asli
+          event_stock: ep?.event_stock ?? null,
+        };
       });
 
-      // === Enrich dengan varian, stok real & diskon ===
+      // Hapus stock lama biar ga bingung
+      products = products.map(({ stock, ...rest }) => rest);
+
+      // 🔹 Enrich dengan varian, stok real & diskon
       products = await attachVariantsStockDiscountWithRealDiscount(products);
     }
 
@@ -1817,11 +1823,12 @@ router.get("/event/:eventId", async (req, res) => {
       message: "✅ Detail event flash sale",
       event: {
         ...event,
-        rules: event.rules || null, // kalau ga ada set null
+        rules: event.rules || null,
         products: products.length > 0 ? products : [],
       },
     });
   } catch (err) {
+    console.error("❌ Gagal ambil detail event:", err);
     res.status(500).json({
       message: "❌ Gagal ambil detail event",
       error: err.message,
