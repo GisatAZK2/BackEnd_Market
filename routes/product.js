@@ -652,15 +652,17 @@ router.get("/by-category/:category_id", async (req, res) => {
 
 // Produk terkait (suggestions)
 
+// === ROUTE GET PRODUCT DETAIL ===
 router.get("/:id", async (req, res) => {
   const { id } = req.params;
 
-  // Cek cache
+  // cek cache
   const cached = cache.get(`product_${id}`);
   if (cached) {
-    return res
-      .status(200)
-      .json({ message: "✅ Produk ditemukan (cache)", product: cached });
+    return res.status(200).json({
+      message: "✅ Produk ditemukan (cache)",
+      product: cached,
+    });
   }
 
   try {
@@ -689,7 +691,7 @@ router.get("/:id", async (req, res) => {
           store_address,
           store_image_url
         )
-      `,
+      `
       )
       .eq("id", id)
       .single();
@@ -700,6 +702,7 @@ router.get("/:id", async (req, res) => {
 
     const productsWithVariants =
       await attachVariantsStockDiscountWithRealDiscount([product]);
+
     const result = { ...productsWithVariants[0], seller: product.seller };
 
     cache.set(`product_${id}`, result);

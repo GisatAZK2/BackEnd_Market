@@ -35,11 +35,9 @@ async function attachVariantsStockDiscountWithRealDiscount(products) {
       .in("product_id", productIds),
   ]);
 
-  // Ambil event dan flash sale detail sekali
+  // Ambil event & flash sale detail
   const eventIds = [...new Set(eventProducts.map((e) => e.event_id))];
-  const flashSaleIds = [
-    ...new Set(flashSaleProducts.map((f) => f.flash_sale_id)),
-  ];
+  const flashSaleIds = [...new Set(flashSaleProducts.map((f) => f.flash_sale_id))];
 
   const [{ data: events = [] }, { data: flashSales = [] }] = await Promise.all([
     eventIds.length
@@ -81,10 +79,7 @@ async function attachVariantsStockDiscountWithRealDiscount(products) {
           const start = DateTime.fromISO(event.start_time).toUTC();
           const end = DateTime.fromISO(event.end_time).toUTC();
           if (start <= now && end >= now) {
-            discountPercentage = Math.max(
-              discountPercentage,
-              ep.event_discount
-            );
+            discountPercentage = Math.max(discountPercentage, ep.event_discount);
             if (!sources.includes("event")) sources.push("event");
             details.events.push({ ...event, discount: ep.event_discount });
           }
@@ -100,8 +95,6 @@ async function attachVariantsStockDiscountWithRealDiscount(products) {
         .forEach((fsp) => {
           const flashSale = flashSaleMap[fsp.flash_sale_id];
           if (!flashSale) return;
-
-          // 🚫 skip flash sale yang disabled
           if (flashSale.status === "disabled") return;
 
           const start = DateTime.fromISO(flashSale.start_time).toUTC();
@@ -109,7 +102,6 @@ async function attachVariantsStockDiscountWithRealDiscount(products) {
 
           if (flashSale.status === "active") {
             if (start <= now && end >= now) {
-              // ongoing flash sale
               discountPercentage = fsp.discount_percentage;
               if (!sources.includes("flash_sale")) sources.push("flash_sale");
               details.flash_sales.push({
@@ -118,7 +110,6 @@ async function attachVariantsStockDiscountWithRealDiscount(products) {
                 ongoing: true,
               });
             } else if (start > now) {
-              // upcoming flash sale
               upcomingFlashSale = fsp.discount_percentage;
               if (!sources.includes("flash_sale_upcoming"))
                 sources.push("flash_sale_upcoming");
@@ -128,7 +119,6 @@ async function attachVariantsStockDiscountWithRealDiscount(products) {
                 upcoming: true,
               });
             } else {
-              // expired flash sale
               details.flash_sales.push({
                 ...flashSale,
                 discount: fsp.discount_percentage,
@@ -186,12 +176,9 @@ async function attachVariantsStockDiscountWithRealDiscount(products) {
     // === PRODUK DENGAN VARIAN ===
     const variantsWithDiscount = productVariants.map((v) => {
       const discount = calcDiscount(product.id, v.id);
-      let finalPrice = applyDiscount(
-        v.variant_price,
-        discount.discountPercentage
-      );
+      let finalPrice = applyDiscount(v.variant_price, discount.discountPercentage);
       if (discount.upcomingFlashSale !== null)
-        finalPrice = Number("3" + finalPrice); // kode untuk upcoming
+        finalPrice = Number("3" + finalPrice); // kode upcoming
       return {
         ...v,
         original_price: v.variant_price,
@@ -202,22 +189,10 @@ async function attachVariantsStockDiscountWithRealDiscount(products) {
       };
     });
 
-    const finalPrice = Math.min(
-      ...variantsWithDiscount.map((v) => v.final_price)
-    );
-    const maxDiscount = Math.max(
-      ...variantsWithDiscount.map((v) => v.applied_discount)
-    );
-
     return {
       ...product,
       variants: variantsWithDiscount,
-      finalStock: product.stock,
-      finalPrice,
-      discountPercentage: maxDiscount,
-      discountSource: [
-        ...new Set(variantsWithDiscount.flatMap((v) => v.discount_source)),
-      ],
+      // ❌ root tidak punya finalStock, finalPrice, discountPercentage kalau ada varian
     };
   });
 }
