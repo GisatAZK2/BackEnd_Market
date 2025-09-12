@@ -69,42 +69,89 @@ Mengambil daftar event dengan jumlah penjual terdaftar dan status event.
 - **Respons Gagal**:
   - 500: Gagal mengambil daftar event.
 
-### 3. **PUT /event/:eventId/products**
-Memperbarui stok dan diskon produk dalam event secara batch.
 
-- **Deskripsi**: Memperbarui stok dan/atau diskon untuk produk tertentu dalam event. Memastikan stok tidak negatif dan memperbarui stok produk/varian di database.
-- **Parameter**: `eventId` (string)
-- **Body**:
+### 3. PUT `/event/:eventId/products`
+Endpoint ini digunakan untuk memperbarui stok dan/atau diskon produk dalam event secara batch.
+
+#### Parameter
+- **Path Parameters**:
+  - `eventId`: ID dari event yang produknya akan diperbarui.
+- **Body** (JSON):
   ```json
   {
     "items": [
       {
         "product_id": "string",
-        "stock": number,
-        "event_discount": number
+        "variant_id": "string" (opsional),
+        "stock": number (opsional),
+        "event_discount": number (opsional)
       }
     ]
   }
   ```
-- **Respons Sukses**:
+
+#### Autentikasi
+- Tidak ada autentikasi eksplisit dalam kode, tetapi dianjurkan untuk menambahkan validasi seller.
+
+#### Contoh Request
+```bash
+PUT /event/123/products
+```
+**Body**:
+```json
+{
+  "items": [
+    {
+      "product_id": "456",
+      "variant_id": "789",
+      "stock": 50,
+      "event_discount": 10
+    },
+    {
+      "product_id": "101",
+      "stock": 100
+    }
+  ]
+}
+```
+
+#### Response
+- **Sukses** (200):
   ```json
   {
     "results": [
       {
-        "product_id": "string",
-        "success": boolean,
-        "message": "string",
-        "old_stock": number,
-        "new_stock": number,
-        "old_discount": number,
-        "new_discount": number
+        "product_id": "456",
+        "variant_id": "789",
+        "success": true,
+        "message": "✅ Data event berhasil diperbarui",
+        "old_stock": 30,
+        "new_stock": 50,
+        "old_discount": 5,
+        "new_discount": 10
+      },
+      {
+        "product_id": "101",
+        "success": true,
+        "message": "✅ Data event berhasil diperbarui",
+        "old_stock": 80,
+        "new_stock": 100,
+        "old_discount": 0,
+        "new_discount": 0
       }
     ]
   }
   ```
-- **Respons Gagal**:
-  - 400: Items tidak valid.
-  - 500: Gagal memperbarui produk.
+- **Error**:
+  - 400: Jika `items` bukan array atau kosong, stok tidak valid, atau produk memiliki varian tetapi `variant_id` tidak diberikan.
+  - 500: Jika terjadi kesalahan server.
+
+#### Catatan
+- Pembaruan stok akan otomatis menyesuaikan stok di tabel `products` atau `product_variants`.
+- Jika stok tidak mencukupi, pembaruan akan gagal untuk item tersebut.
+- Logging disediakan untuk debugging (lihat `console.log` dalam kode).
+
+
 
 ### 4. **GET /event/:eventId/available-products**
 Mengambil daftar produk yang tersedia untuk ditambahkan ke event.
@@ -131,23 +178,58 @@ Mengambil daftar produk yang tersedia untuk ditambahkan ke event.
   - 401: Harus login sebagai penjual.
   - 500: Gagal mengambil produk.
 
-### 5. **DELETE /event/:eventId/product/:productId**
-Menghapus produk dari event.
+### 5. DELETE `/event/:eventId/product/:productId`
+Endpoint ini digunakan untuk menghapus produk atau varian tertentu dari event.
 
-- **Deskripsi**: Menghapus produk tertentu atau semua produk milik penjual dari event. Stok dikembalikan otomatis melalui trigger.
-- **Parameter**:
-  - `eventId` (string)
-  - `productId` (string, gunakan "all" untuk menghapus semua produk penjual)
-- **Respons Sukses**:
+#### Parameter
+- **Path Parameters**:
+  - `eventId`: ID dari event yang ingin dihapus produknya.
+  - `productId`: ID dari produk yang akan dihapus. Gunakan `all` untuk menghapus semua produk seller dari event.
+- **Query Parameters**:
+  - `mode`: (opsional) Mode penghapusan, nilai yang valid: `product` (hapus produk beserta semua variannya) atau `variant` (hapus varian spesifik).
+  - `variantId`: (opsional, wajib jika `mode=variant`) ID dari varian produk yang akan dihapus.
+
+#### Autentikasi
+- Memerlukan cookie `seller_info` yang berisi informasi seller dalam format JSON.
+- Seller harus login untuk mengakses endpoint ini.
+
+#### Contoh Request
+1. **Hapus semua produk seller dari event**:
+   ```bash
+   DELETE /event/123/product/all
+   ```
+2. **Hapus produk tertentu (tanpa varian)**:
+   ```bash
+   DELETE /event/123/product/456
+   ```
+3. **Hapus produk beserta semua variannya**:
+   ```bash
+   DELETE /event/123/product/456?mode=product
+   ```
+4. **Hapus varian spesifik**:
+   ```bash
+   DELETE /event/123/product/456?mode=variant&variantId=789
+   ```
+
+#### Response
+- **Sukses** (200):
   ```json
   {
-    "message": "✅ Produk dihapus dari event (stok dikembalikan otomatis oleh trigger)"
+    "message": "✅ Produk dihapus dari event (event_stock dikembalikan otomatis oleh trigger)"
   }
   ```
-- **Respons Gagal**:
-  - 401: Harus login sebagai penjual.
-  - 403: Produk bukan milik penjual.
-  - 500: Gagal menghapus produk.
+- **Error**:
+  - 401: Jika seller belum login.
+  - 403: Jika produk bukan milik seller.
+  - 400: Jika parameter tidak valid (misalnya mode salah atau variantId tidak diberikan).
+  - 500: Jika terjadi kesalahan server.
+
+#### Catatan
+- Penghapusan stok event akan otomatis mengembalikan stok ke tabel `products` atau `product_variants` melalui trigger di database.
+- Validasi dilakukan untuk memastikan produk atau varian milik seller.
+
+---
+
 
 ### 6. **GET /event/:eventId**
 Mengambil detail event untuk penjual.
