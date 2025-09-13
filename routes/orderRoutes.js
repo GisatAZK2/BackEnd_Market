@@ -1,3 +1,4 @@
+// routes/checkout.js
 const express = require("express");
 const router = express.Router();
 const supabase = require("../config/supabase");
@@ -7,17 +8,180 @@ const verifyCaptcha = require("../middleware/verifyCaptcha");
 const {
   attachVariantsStockDiscountWithRealDiscount,
 } = require("../utils/applyDiscountAndVariants");
-
-const SEND_URL = process.env.SEND_SERVICE_URL;
-
+const {Xendit} = require("xendit-node");
 const { DateTime } = require("luxon");
-
-
+const crypto = require("crypto");
 const NodeCache = require("node-cache");
+
+// -----------------------------
+// Environment variables
+// -----------------------------
+const SEND_URL = process.env.SEND_SERVICE_URL;
+const XENDIT_SECRET_KEY = process.env.XENDIT_SECRET_KEY;
+const FRONTEND_URL = process.env.FRONTEND_URL;
+const CRYPTO_SECRET_KEY =
+  process.env.CRYPTO_SECRET_KEY || "please_set_a_real_secret_in_env";
+
+if (!XENDIT_SECRET_KEY) {
+  console.warn(
+    "⚠️ XENDIT_SECRET_KEY belum diset - invoice creation akan gagal jika dipanggil."
+  );
+}
+if (!CRYPTO_SECRET_KEY) {
+  console.warn("⚠️ CRYPTO_SECRET_KEY belum diset - signatures tidak aman.");
+}
+
+// -----------------------------
+// Xendit init
+// -----------------------------
+const xendit = new Xendit({ secretKey: XENDIT_SECRET_KEY });
+const { Invoice } = xendit;
+
+// -----------------------------
+// Cache setup
+// -----------------------------
 const cache = new NodeCache({ stdTTL: 60, checkperiod: 120 });
 const orderCache = new NodeCache({ stdTTL: 30, checkperiod: 60 });
 
-// Helper: parsing aman untuk URL gambar
+const cacheGet = (k) => cache.get(k);
+const cacheSet = (k, v, ttlSec = 60) => cache.set(k, v, ttlSec);
+
+// -----------------------------
+// Helper crypto utilities
+// -----------------------------
+/**
+ * Generate deterministic "wallet address" for a seller using HMAC-SHA256(sellerId)
+ * Not a blockchain address — hanya identifier yang derived secara kriptografis.
+ */
+function generateWalletAddress(sellerId) {
+  return crypto
+    .createHmac("sha256", CRYPTO_SECRET_KEY)
+    .update(String(sellerId))
+    .digest("hex");
+}
+
+/**
+ * Sign arbitrary payload (object) using HMAC-SHA256 and return hex signature.
+ * We canonicalize payload by JSON.stringify with stable key ordering.
+ */
+function signPayload(payload) {
+  const stableStringify = (obj) => {
+    if (obj === null || typeof obj !== "object") return JSON.stringify(obj);
+    if (Array.isArray(obj))
+      return `[${obj.map(stableStringify).join(",")}]`;
+    const keys = Object.keys(obj).sort();
+    return `{${keys
+      .map((k) => JSON.stringify(k) + ":" + stableStringify(obj[k]))
+      .join(",")}}`;
+  };
+  const str = stableStringify(payload);
+  return crypto
+    .createHmac("sha256", CRYPTO_SECRET_KEY)
+    .update(str)
+    .digest("hex");
+}
+
+function verifySignature(payload, signature) {
+  const expected = signPayload(payload);
+  return crypto.timingSafeEqual(
+    Buffer.from(expected, "hex"),
+    Buffer.from(signature, "hex")
+  );
+}
+
+// -----------------------------
+// Helper DB wallet operations
+// -----------------------------
+async function getSellerBalance(sellerId) {
+  const { data, error } = await supabase
+    .from("seller_balances")
+    .select("balance")
+    .eq("seller_id", sellerId)
+    .single();
+
+  if (error && error.code === "PGRST116") {
+    return 0;
+  }
+  if (error) throw error;
+  return Number(data?.balance ?? 0);
+}
+
+async function upsertSellerBalance(sellerId, newBalance) {
+  const { data, error } = await supabase
+    .from("seller_balances")
+    .upsert({ seller_id: sellerId, balance: newBalance }, { onConflict: "seller_id" })
+    .select()
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+async function recordSellerTransaction({ sellerId, amount, type, orderId = null, metadata = {} }) {
+  const timestamp = DateTime.now().toISO();
+  const payloadToSign = { sellerId, amount, type, orderId, metadata, timestamp };
+  const signature = signPayload(payloadToSign);
+
+  const insertObj = {
+    seller_id: sellerId,
+    amount,
+    type,
+    order_id: orderId,
+    timestamp,
+    signature,
+    metadata,
+  };
+
+  const { data, error } = await supabase
+    .from("seller_balance_transactions")
+    .insert([insertObj])
+    .select()
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+/**
+ * Mint (credit) seller balance.
+ */
+async function mintSellerBalance(sellerId, amount, opts = {}) {
+  if (amount <= 0) throw new Error("Amount harus > 0");
+  const current = await getSellerBalance(sellerId);
+  const newBalance = Number(current) + Number(amount);
+  await upsertSellerBalance(sellerId, newBalance);
+  await recordSellerTransaction({
+    sellerId,
+    amount,
+    type: "credit",
+    orderId: opts.orderId || null,
+    metadata: opts.metadata || {},
+  });
+  return newBalance;
+}
+
+/**
+ * Withdraw (debit) seller balance.
+ */
+async function withdrawSellerBalance(sellerId, amount, opts = {}) {
+  if (amount <= 0) throw new Error("Amount harus > 0");
+  const current = await getSellerBalance(sellerId);
+  if (Number(current) < Number(amount)) {
+    throw new Error("Insufficient funds");
+  }
+  const newBalance = Number(current) - Number(amount);
+  await upsertSellerBalance(sellerId, newBalance);
+  await recordSellerTransaction({
+    sellerId,
+    amount,
+    type: "debit",
+    orderId: opts.orderId || null,
+    metadata: opts.metadata || {},
+  });
+  return newBalance;
+}
+
+// -----------------------------
+// Small helpers
+// -----------------------------
 function safeParseImageUrl(data) {
   if (!data) return null;
   try {
@@ -29,6 +193,10 @@ function safeParseImageUrl(data) {
   } catch {
     return data; // fallback kalau bukan JSON valid
   }
+}
+
+function formatCurrencyNumber(v) {
+  return Math.round(Number(v));
 }
 
 // ======================
@@ -233,6 +401,8 @@ router.get("/received", async (req, res) => {
   }
 });
 
+
+// ✅ Checkout Route
 router.post("/cart/checkout", detectspam, verifyCaptcha, async (req, res) => {
   const startTime = Date.now();
   console.log("===== 🛒 [CHECKOUT ROUTE DIPANGGIL] =====");
@@ -240,469 +410,252 @@ router.post("/cart/checkout", detectspam, verifyCaptcha, async (req, res) => {
   console.log("🍪 Cookies:", req.cookies);
 
   try {
-    const { itemsToCheckout, pickupMethod, address } = req.body;
+    const { itemsToCheckout, pickupMethod, address, paymentMethod } = req.body;
     const userInfo = req.cookies?.user_info ? JSON.parse(req.cookies.user_info) : null;
 
-    console.log("👤 User info:", userInfo);
-
     if (!itemsToCheckout?.length) {
-      console.log("⚠️ Tidak ada item untuk di-checkout.");
       return res.status(400).json({ message: "⚠️ Tidak ada item untuk di-checkout." });
     }
+    if (!paymentMethod || !["cod", "digital"].includes(paymentMethod.toLowerCase())) {
+      return res.status(400).json({
+        message: "⚠️ Metode pembayaran tidak valid. Pilih 'cod' atau 'digital'.",
+      });
+    }
 
-    // ==========================
-    // 🔹 Ambil buyer info
-    // ==========================
+    // ================================
+    // Ambil data buyer
+    // ================================
     let buyerAddress = null;
+    let userData = null;
+
     if (userInfo?.id) {
-      console.log("🔍 Ambil data user dari Supabase:", userInfo.id);
-      const { data: userData, error: userError } = await supabase
+      const { data: fetchedUserData, error: userError } = await supabase
         .from("users")
-        .select(`
-          alamat_lengkap,
-          provinsi,
-          kota_kabupaten,
-          kecamatan,
-          kelurahan,
-          kode_pos,
-          nama_penerima,
-          no_telepon,
-          email,
-          username
-        `)
+        .select(
+          `alamat_lengkap, provinsi, kota_kabupaten, kecamatan, kelurahan,
+           kode_pos, nama_penerima, no_telepon, email, username`
+        )
         .eq("id", userInfo.id)
         .single();
 
-      console.log("📦 Data user:", userData);
+      userData = fetchedUserData;
       if (userError) {
-        console.error("❌ Gagal ambil data user:", userError.message);
-        return res.status(500).json({
-          message: "❌ Gagal memeriksa data buyer.",
-          error: userError.message,
-        });
+        return res.status(500).json({ message: "❌ Gagal memeriksa data buyer.", error: userError.message });
       }
-
-      // Cek apakah ada item yang memerlukan delivery
-      const adaDiantar = itemsToCheckout.some(
-        (item) => {
-          const method = pickupMethod 
-            ? pickupMethod.toLowerCase()
-            : (item.pickupMethod || "diambil").toLowerCase();
-          return method === "diantar";
-        }
-      );
-      console.log("🚚 Ada item diantar?", adaDiantar);
-
-      if (adaDiantar) {
-        const isAlamatLengkap =
-          userData &&
-          Object.values({
-            alamat_lengkap: userData.alamat_lengkap,
-            provinsi: userData.provinsi,
-            kota_kabupaten: userData.kota_kabupaten,
-            kecamatan: userData.kecamatan,
-            kelurahan: userData.kelurahan,
-            kode_pos: userData.kode_pos,
-            nama_penerima: userData.nama_penerima,
-            no_telepon: userData.no_telepon,
-          }).every(Boolean);
-
-        console.log("🏠 Alamat lengkap?", isAlamatLengkap);
-
-        if (!isAlamatLengkap && address) {
-          // Update user address if provided in the request
-          console.log("🔄 Updating user address...");
-          const {
-            nama_penerima,
-            no_telepon,
-            alamat_lengkap,
-            kode_pos,
-            provinsi_id,
-            kota_id,
-            kecamatan_id,
-            kelurahan_id,
-          } = address;
-
-          // Validate required address fields
-          if (
-            !nama_penerima ||
-            !no_telepon ||
-            !alamat_lengkap ||
-            !kode_pos ||
-            !provinsi_id ||
-            !kota_id ||
-            !kecamatan_id ||
-            !kelurahan_id
-          ) {
-            console.log("⚠️ Address data incomplete:", address);
-            return res.status(400).json({
-              message: "⚠️ Lengkapi semua field alamat pengiriman.",
-              needUpdateAddress: true,
-            });
-          }
-
-          // Fetch region names based on IDs
-          const [provinsiData, kotaData, kecamatanData, kelurahanData] = await Promise.all([
-            supabase.from("provinces").select("name").eq("id", provinsi_id).single(),
-            supabase.from("regencies").select("name").eq("id", kota_id).single(),
-            supabase.from("districts").select("name").eq("id", kecamatan_id).single(),
-            supabase.from("villages").select("name").eq("id", kelurahan_id).single(),
-          ]);
-
-          if (
-            provinsiData.error ||
-            kotaData.error ||
-            kecamatanData.error ||
-            kelurahanData.error
-          ) {
-            console.error("❌ Gagal mengambil data wilayah:", {
-              provinsiError: provinsiData.error,
-              kotaError: kotaData.error,
-              kecamatanError: kecamatanData.error,
-              kelurahanError: kelurahanData.error,
-            });
-            return res.status(500).json({
-              message: "❌ Gagal memvalidasi data wilayah.",
-              error: "Invalid region data",
-            });
-          }
-
-          // Update user address in the users table
-          const { error: updateError } = await supabase
-            .from("users")
-            .update({
-              nama_penerima,
-              no_telepon,
-              alamat_lengkap,
-              kode_pos,
-              provinsi: provinsiData.data.name,
-              kota_kabupaten: kotaData.data.name,
-              kecamatan: kecamatanData.data.name,
-              kelurahan: kelurahanData.data.name,
-            })
-            .eq("id", userInfo.id);
-
-          if (updateError) {
-            console.error("❌ Gagal update alamat user:", updateError.message);
-            return res.status(500).json({
-              message: "❌ Gagal memperbarui alamat.",
-              error: updateError.message,
-            });
-          }
-
-          console.log("✅ Alamat user berhasil diupdate.");
-          // Set buyerAddress with updated data
-          buyerAddress = {
-            nama_penerima,
-            no_telepon,
-            alamat_lengkap,
-            kode_pos,
-            provinsi: provinsiData.data.name,
-            kota_kabupaten: kotaData.data.name,
-            kecamatan: kecamatanData.data.name,
-            kelurahan: kelurahanData.data.name,
-            email: userData.email,
-            username: userData.username,
-          };
-        } else if (!isAlamatLengkap) {
-          return res.status(400).json({
-            message: "⚠️ Lengkapi alamat pengiriman terlebih dahulu.",
-            needUpdateAddress: true,
-          });
-        } else {
-          buyerAddress = userData;
-        }
-      } else {
-        buyerAddress = userData;
-      }
+      buyerAddress = userData;
     }
 
-    // ==========================
-    // 🔹 Ambil produk + varian
-    // ==========================
+    // ================================
+    // Ambil produk & varian
+    // ================================
     const productIds = [...new Set(itemsToCheckout.map((i) => i.productId))];
-    console.log("🛍 Product IDs:", productIds);
-
-    const cacheKeyProducts = `products:${productIds.sort().join(",")}`;
-    let products = cache.get(cacheKeyProducts);
-
-    if (!products) {
-      console.log("📡 Fetch produk + varian dari Supabase...");
-      const [productRowsRes, variantRowsRes] = await Promise.all([
-        supabase.from("products").select("*").in("id", productIds),
-        supabase.from("product_variants").select("*").in("product_id", productIds),
-      ]);
-
-      console.log("📦 Produk:", productRowsRes.data);
-      console.log("📦 Variants:", variantRowsRes.data);
-
-      if (!productRowsRes.data?.length) {
-        console.error("❌ Gagal ambil produk:", productRowsRes.error);
-        return res
-          .status(500)
-          .json({ message: "❌ Gagal mengambil data produk.", error: productRowsRes.error });
-      }
-      if (variantRowsRes.error) {
-        console.error("❌ Gagal ambil varian:", variantRowsRes.error);
-        return res
-          .status(500)
-          .json({ message: "❌ Gagal mengambil varian.", error: variantRowsRes.error });
-      }
-
-      products = productRowsRes.data.map((p) => ({
-        ...p,
-        variants: variantRowsRes.data.filter((v) => v.product_id === p.id),
-      }));
-
-      products = await attachVariantsStockDiscountWithRealDiscount(products);
-      cache.set(cacheKeyProducts, products);
-    } else {
-      console.log("✅ Produk dari cache");
+    const [productRowsRes, variantRowsRes] = await Promise.all([
+      supabase.from("products").select("*").in("id", productIds),
+      supabase.from("product_variants").select("*").in("product_id", productIds),
+    ]);
+    if (!productRowsRes.data?.length) {
+      return res.status(500).json({ message: "❌ Gagal ambil produk.", error: productRowsRes.error });
     }
 
+    let products = productRowsRes.data.map((p) => ({
+      ...p,
+      variants: variantRowsRes.data.filter((v) => v.product_id === p.id),
+    }));
+    products = await attachVariantsStockDiscountWithRealDiscount(products);
     const productMap = Object.fromEntries(products.map((p) => [p.id, p]));
-    console.log("🗺 Product Map:", productMap);
 
-    // ==========================
-    // 🔹 Ambil seller data dulu untuk cek delivery availability
-    // ==========================
+    // ================================
+    // Ambil seller
+    // ================================
     const sellerIds = [...new Set(products.map((p) => p.seller_id))];
-    console.log("🏪 Seller IDs:", sellerIds);
-
-    const cacheKeySellers = `sellers:${sellerIds.sort().join(",")}`;
-    let sellerData = cache.get(cacheKeySellers);
-
-    if (!sellerData) {
-      console.log("📡 Fetch seller data dari Supabase...");
-      const { data } = await supabase
-        .from("sellers")
-        .select("id, store_name, email, delivery_fee, is_delivery_available")
-        .in("id", sellerIds);
-      sellerData = data || [];
-      cache.set(cacheKeySellers, sellerData);
-    } else {
-      console.log("✅ Seller data dari cache");
-    }
+    const { data: sellerData } = await supabase
+      .from("sellers")
+      .select("id, store_name, email, delivery_fee, is_delivery_available")
+      .in("id", sellerIds);
     const sellerMap = Object.fromEntries(sellerData.map((s) => [s.id, s]));
-    console.log("🗺 Seller Map:", sellerMap);
 
-    // ==========================
-    // 🔹 Group order per seller dan hitung delivery stats
-    // ==========================
+    // ================================
+    // Group per seller
+    // ================================
     const orderGroups = {};
-    let pickupOnlyItemsCount = 0;
-    let totalItemsCount = 0;
-
     itemsToCheckout.forEach((item) => {
       const product = productMap[item.productId];
-      if (!product) return;
-      
       const seller = sellerMap[product.seller_id];
-      if (!seller) return;
-
       const variant = product.variants?.find((v) => v.id === item.variantId);
       const finalPrice = variant?.final_price ?? product.finalPrice;
-      
-      // Tentukan method
-      const method = pickupMethod 
+      const method = pickupMethod
         ? pickupMethod.toLowerCase()
         : (item.pickupMethod || "diambil").toLowerCase();
-      
-      if (method === "pengambilan") method = "diambil";
-      
-      const groupKey = `${product.seller_id}-${method}`;
-      
-      if (!orderGroups[groupKey]) {
-        orderGroups[groupKey] = { 
-          seller_id: product.seller_id, 
-          pickup_method: method, 
-          items: [],
-          delivery_available: seller.is_delivery_available || false
-        };
+      const key = `${product.seller_id}-${method}`;
+      if (!orderGroups[key]) {
+        orderGroups[key] = { seller_id: product.seller_id, pickup_method: method, items: [] };
       }
-      
-      orderGroups[groupKey].items.push({
-        ...item,
-        product,
-        variant,
-        finalPrice,
-        discountPercentage: product.discount_percentage ?? 0,
-        variantDiscountPercentage: variant?.applied_discount ?? 0,
-      });
-
-      // Hitung stats
-      const itemQty = item.qty || 1;
-      totalItemsCount += itemQty;
-      
-      if (method === "diantar" && !seller.is_delivery_available) {
-        pickupOnlyItemsCount += itemQty;
-      }
+      orderGroups[key].items.push({ ...item, product, variant, finalPrice });
     });
 
-    console.log("📦 Order Groups:", orderGroups);
-    console.log("📊 Delivery Stats:", { totalItemsCount, pickupOnlyItemsCount });
-
-    // ==========================
-    // 🔹 Insert orders paralel
-    // ==========================
-    console.log("📝 Membuat order...");
+    // ================================
+    // Insert orders + buat invoice
+    // ================================
     const createdOrders = await Promise.all(
       Object.values(orderGroups).map(async (group) => {
-        const { seller_id, pickup_method, items, delivery_available } = group;
+        const { seller_id, pickup_method, items } = group;
         const baseTotal = items.reduce((sum, i) => sum + i.finalPrice * i.qty, 0);
-        const deliveryFee = pickup_method === "diantar" && delivery_available 
-          ? sellerMap[seller_id]?.delivery_fee || 0 
-          : 0;
-        const totalPrice = baseTotal + deliveryFee;
-        const confirmDeadline = DateTime.now()
-          .setZone("Asia/Jakarta")
-          .plus({ minutes: 30 })
-          .toISO();
+        const deliveryFee =
+          pickup_method === "diantar" && sellerMap[seller_id]?.is_delivery_available
+            ? sellerMap[seller_id]?.delivery_fee || 0
+            : 0;
+        const totalPrice = formatCurrencyNumber(baseTotal + deliveryFee);
 
-        console.log(`🛒 Insert order untuk seller ${seller_id}:`, {
-          totalPrice,
+        const confirmDeadline = DateTime.now().setZone("Asia/Jakarta").plus({ minutes: 30 }).toISO();
+        const orderPayload = {
+          user_id: userInfo?.id || null,
+          seller_id,
           pickup_method,
-          deliveryFee,
-          delivery_available,
-        });
-
+          status: "pending",
+          total_price: totalPrice,
+          confirm_deadline: confirmDeadline,
+          delivery_fee: deliveryFee,
+          buyer_address: buyerAddress || null,
+          payment_method: paymentMethod.toLowerCase(),
+          payment_status: "pending",
+        };
         const { data: order, error: orderError } = await supabase
           .from("orders")
-          .insert([
-            {
-              user_id: userInfo?.id || null,
-              seller_id,
-              pickup_method,
-              status: "pending",
-              total_price: totalPrice,
-              confirm_deadline: confirmDeadline,
-              delivery_fee: deliveryFee,
-              buyer_address: buyerAddress || null,
-            },
-          ])
+          .insert([orderPayload])
           .select()
           .single();
-          
-        if (orderError) {
-          console.error("❌ Gagal insert order:", orderError.message);
-          return null;
+        if (orderError) return null;
+
+        await supabase.from("order_items").insert(
+          items.map((i) => ({
+            order_id: order.id,
+            product_id: i.productId,
+            variant_id: i.variantId || null,
+            quantity: i.qty,
+            price_per_item: i.finalPrice,
+          }))
+        );
+
+        // 🔗 Xendit Invoice
+        let paymentUrl = null;
+        if (paymentMethod.toLowerCase() === "digital") {
+          try {
+            const invoiceRes = await axios.post(
+              "https://api.xendit.co/v2/invoices",
+              {
+                external_id: `order-${order.id}`,
+                amount: Number(totalPrice),
+                description: `Pembayaran order ${order.id}`,
+                success_redirect_url: `${FRONTEND_URL}/payment/success?order_id=${order.id}`,
+                failure_redirect_url: `${FRONTEND_URL}/payment/failure?order_id=${order.id}`,
+                currency: "IDR",
+              },
+              { auth: { username: XENDIT_SECRET_KEY, password: "" } }
+            );
+
+            paymentUrl = invoiceRes.data.invoice_url;
+
+            // ✅ GET Invoice buat verifikasi
+            const checkInvoice = await axios.get(
+              `https://api.xendit.co/v2/invoices/${invoiceRes.data.id}`,
+              { auth: { username: XENDIT_SECRET_KEY, password: "" } }
+            );
+            console.log("📄 Invoice Xendit Verified:", checkInvoice.data.status);
+
+            await supabase.from("orders").update({
+              payment_id: invoiceRes.data.id,
+              payment_url: paymentUrl,
+            }).eq("id", order.id);
+
+            order.payment_id = invoiceRes.data.id;
+            order.payment_url = paymentUrl;
+          } catch (err) {
+            console.error("❌ Xendit invoice error:", err?.response?.data || err.message);
+            return null;
+          }
         }
 
-        console.log("✅ Order dibuat:", order);
-
-        const orderItems = items.map((i) => ({
-          order_id: order.id,
-          product_id: i.productId,
-          variant_id: i.variantId || null,
-          quantity: i.qty,
-          price_per_item: i.finalPrice,
-        }));
-        console.log("📦 Order Items:", orderItems);
-
-        await supabase.from("order_items").insert(orderItems);
-
-        // Snapshot & email background
-        (async () => {
-          const snapshotItems = items.map((i) => ({
-            order_id: order.id,
-            product_id: i.product.id,
-            product_name: i.product.product_name,
-            product_price: i.product.price,
-            final_price: i.finalPrice,
-            discount_percentage: i.discountPercentage,
-            product_image_url: safeParseImageUrl(i.product.product_image_url),
-            variant_id: i.variant?.id || null,
-            variant_name: i.variant?.variant_name || null,
-            variant_price: i.variant?.price ?? null,
-            variant_final_price: i.variant?.final_price ?? null,
-            variant_discount_percentage: i.variantDiscountPercentage,
-            variant_image_url: i.variant?.variant_image_url || null,
-          }));
-          console.log("📸 Snapshot Items:", snapshotItems);
-
-          await supabase.from("order_item_details").insert(snapshotItems);
-          await supabase.from("order_details_items").insert(snapshotItems);
-
-          if (userInfo) {
-            console.log("📧 Kirim notifikasi email ke buyer & seller");
-            // ganti dengan request ke server SMTP
-            await axios.post(`${SEND_URL}/send-email-order`, {
-              order_id: order.id,
-              products: items.map((i) => ({
-                product_name: i.product.product_name,
-                variant_name: i.variant?.variant_name || null,
-                quantity: i.qty,
-                total_price: i.finalPrice * i.qty,
-                product_image_url:
-                  i.variant?.variant_image_url || safeParseImageUrl(i.product.product_image_url),
-              })),
-              buyer_email: userInfo.email,
-              seller_email: sellerMap[seller_id]?.email,
-              buyer_username: userInfo.username,
-              pickup_method,
-              new_status: "pending",
-              pickup_only_note: !delivery_available && pickup_method === "diantar" 
-                ? "Item ini hanya bisa diambil sendiri ke toko" 
-                : null,
-            });   
-          }
-        })();
-
-        return { order, items: orderItems };
+        return { order: { ...order, payment_url: paymentUrl } };
       })
     );
 
-    // ==========================
-    // 🔹 Hapus item dari cart
-    // ==========================
-    if (userInfo?.id) {
-      console.log("🗑 Hapus item dari cart...");
-      const { data: cart } = await supabase
-        .from("carts")
-        .select("items")
-        .eq("user_id", userInfo.id)
-        .maybeSingle();
-      console.log("🛒 Cart sebelum hapus:", cart);
-
-      if (cart?.items?.length) {
-        const remainingItems = cart.items.filter(
-          (cartItem) =>
-            !itemsToCheckout.some(
-              (checkoutItem) =>
-                checkoutItem.productId === cartItem.productId &&
-                (checkoutItem.variantId || null) === (cartItem.variantId || null)
-            )
-        );
-        console.log("🛒 Cart setelah hapus:", remainingItems);
-        await supabase.from("carts").update({ items: remainingItems }).eq("user_id", userInfo.id);
-      }
-    }
-
-    // ==========================
-    // 🔹 Response
-    // ==========================
+    // ================================
+    // Response
+    // ================================
     const endTime = Date.now();
     const finalOrders = createdOrders.filter(Boolean).map((o) => o.order);
-    console.log("✅ Semua order berhasil dibuat:", finalOrders);
-
-    const successMessage = pickupOnlyItemsCount > 0 
-      ? `✅ Berhasil checkout ${finalOrders.length} order. ⚠️ ${pickupOnlyItemsCount} item tidak bisa diantar, tapi bisa diambil sendiri ke toko. (⏱ ${(endTime - startTime) / 1000}s)`
-      : `✅ Berhasil checkout ${finalOrders.length} order. Semua item siap diproses! (⏱ ${(endTime - startTime) / 1000}s)`;
-
     return res.status(200).json({
-      message: successMessage,
+      message: `✅ Checkout sukses (${(endTime - startTime) / 1000}s)`,
       orders: finalOrders,
-      delivery_stats: {
-        total_items: totalItemsCount,
-        pickup_only_items: pickupOnlyItemsCount,
-        delivery_available_items: totalItemsCount - pickupOnlyItemsCount,
-      },
     });
   } catch (err) {
     console.error("❌ Server error:", err);
     return res.status(500).json({ message: "❌ Terjadi kesalahan server", error: err.message });
   }
 });
+
+
+// -----------------------------
+// Webhook Xendit
+// -----------------------------
+router.post("/payment/webhook", async (req, res) => {
+  try {
+    const { external_id, status } = req.body;
+    if (!external_id) return res.status(400).send("missing external_id");
+
+    const orderId = external_id.split("-")[1];
+    if (!orderId) return res.status(400).send("invalid external_id");
+
+    if (status === "PAID") {
+      await supabase
+        .from("orders")
+        .update({ payment_status: "paid", status: "processing" })
+        .eq("id", orderId);
+      console.log(`✅ Pembayaran order ${orderId} sukses.`);
+
+      const { data: order, error: orderErr } = await supabase
+        .from("orders")
+        .select("*")
+        .eq("id", orderId)
+        .single();
+      if (orderErr || !order) {
+        console.error("❌ Gagal ambil order untuk distribusi:", orderErr);
+        return res.status(500).send("error");
+      }
+
+      const sellerId = order.seller_id;
+      const grossAmount = Number(order.total_price || 0);
+      const platformFee = 0;
+      const netToSeller = grossAmount - platformFee;
+
+      try {
+        const newBalance = await mintSellerBalance(sellerId, netToSeller, {
+          orderId,
+          metadata: { source: "xendit_paid", grossAmount, platformFee },
+        });
+
+        console.log(
+          `➡️ Credited seller ${sellerId} amount ${netToSeller}. New balance: ${newBalance}`
+        );
+      } catch (e) {
+        console.error("❌ Gagal credit seller balance:", e);
+      }
+    } else if (status === "EXPIRED") {
+      await supabase
+        .from("orders")
+        .update({ payment_status: "expired", status: "dibatalkan" })
+        .eq("id", orderId);
+      console.log(`⚠ Pembayaran order ${orderId} expired.`);
+    }
+
+    res.status(200).send("OK");
+  } catch (err) {
+    console.error("❌ Webhook error:", err?.message || err);
+    res.status(500).send("Error");
+  }
+});
+
+
 
 
 router.post("/cart/delivery-fee", async (req, res) => {

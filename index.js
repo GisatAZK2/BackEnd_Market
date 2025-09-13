@@ -39,6 +39,7 @@ const productseller = require("./routes/seller/product.js");
 const ratingselelr = require("./routes/seller/rating.js");
 const StatistikSeller = require("./routes/seller/stastikdata.js");
 const awblabelseller = require("./routes/seller/awb.js");
+const paymentseller = require("./routes/seller/finance.js");
 
 // ===== Global Sticker ====
 const sticker = require("./routes/sticker.js");
@@ -143,6 +144,7 @@ sellerRouter.use("/promoteseller", promoteproductseller);
 sellerRouter.use("/ratingseller", ratingselelr);
 sellerRouter.use("/statsSeller", StatistikSeller);
 sellerRouter.use("/awbseller", awblabelseller);
+sellerRouter.use("/withdrawpayment", paymentseller);
 sellerRouter.get("/test", (req, res) => {
   res.json({ message: "Seller V1 API aktif 🚀" });
 });
