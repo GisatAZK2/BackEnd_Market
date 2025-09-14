@@ -123,6 +123,7 @@ router.get("/store-discount/available-products", async (req, res) => {
     const sellerName = sellerData.name;
     const now = new Date().toISOString();
 
+    // 🔹 Ambil semua item diskon aktif
     const { data: discountItems = [], error: discountErr } = await supabase
       .from("store_discount_items")
       .select(`
@@ -132,130 +133,191 @@ router.get("/store-discount/available-products", async (req, res) => {
         discount_percentage,
         stock,
         store_discounts(id, name, start_time, end_time, store_id),
-        products(*, seller_name, product_image_url),
-        product_variants(*, variant_image_url)
+        products(id, product_name, product_description, stock, seller_name, product_image_url),
+        product_variants(id, variant_name, variant_stock, variant_image_url)
       `)
       .gte("store_discounts.start_time", now)
       .lte("store_discounts.end_time", now);
 
     if (discountErr) throw discountErr;
 
-    // 🔹 Grouping diskon per product
+    // 🔹 Grouping diskon per produk
     const grouped = discountItems.reduce((acc, item) => {
       if (!item.products || item.products.seller_name !== sellerName) return acc;
 
-      const existing = acc.find(p => p.product_id === item.product_id);
-      const variantStock = item.product_variants?.variant_stock ?? null;
+      const existing = acc.find((p) => p.product_id === item.product_id);
 
+      const productImage =
+        Array.isArray(item.products.product_image_url) &&
+        item.products.product_image_url.length > 0
+          ? item.products.product_image_url[0]
+          : item.products.product_image_url || null;
+
+      // Data variant jika ada
       const variantData = item.variant_id
         ? {
             variant_id: item.variant_id,
-            stock: item.stock ?? variantStock,
+            store_discount_stock: item.stock ?? item.product_variants?.variant_stock ?? null,
+            stock_asli: item.product_variants?.variant_stock ?? null,
             discount_percentage: item.discount_percentage,
+            is_on_discount: true,
             variant_data: item.product_variants
               ? {
                   variant_name: item.product_variants.variant_name,
                   variant_stock: item.product_variants.variant_stock,
-                  variant_image_url: item.product_variants.variant_image_url || null
+                  variant_image_url:
+                    item.product_variants.variant_image_url || null,
                 }
               : null,
-            is_on_discount: true
           }
         : null;
 
       if (existing) {
         if (variantData) {
-          const existsVar = existing.variants.find(v => v.variant_id === variantData.variant_id);
-          if (!existsVar) existing.variants.push(variantData);
+          const existsVar = existing.variants.find(
+            (v) => v.variant_id === variantData.variant_id
+          );
+          if (existsVar) {
+            Object.assign(existsVar, variantData);
+          } else {
+            existing.variants.push(variantData);
+          }
+        } else {
+          existing.product_data.is_on_discount = true;
+          existing.discount_percentage = item.discount_percentage;
+
+          // hanya tampilkan stok di root kalau produk tidak punya varian
+          if (!item.product_variants?.length) {
+            existing.product_data.store_discount_stock =
+              item.stock ?? item.products.stock ?? null;
+            existing.product_data.stock_asli = item.products.stock ?? null;
+          }
         }
       } else {
-        acc.push({
+        const baseProduct = {
           product_id: item.product_id,
           product_data: {
             product_name: item.products.product_name,
             product_description: item.products.product_description,
-            stock: item.variant_id ? null : item.stock ?? item.products.stock,
             seller_name: sellerName,
-            product_image_url: item.products.product_image_url || null,
-            is_on_discount: item.variant_id ? undefined : true
+            product_image_url: productImage,
+            is_on_discount: true,
           },
-          stock: item.variant_id ? null : item.stock ?? item.products.stock,
           discount_percentage: item.variant_id ? null : item.discount_percentage,
-          variants: variantData ? [variantData] : []
-        });
+          variants: variantData ? [variantData] : [],
+        };
+
+        // hanya tampilkan stok di root kalau produk tidak punya varian
+        if (!item.variant_id) {
+          baseProduct.product_data.store_discount_stock =
+            item.stock ?? item.products.stock ?? null;
+          baseProduct.product_data.stock_asli = item.products.stock ?? null;
+        }
+
+        acc.push(baseProduct);
       }
 
       return acc;
     }, []);
 
+    // 🔹 Ambil semua produk seller
     const { data: allProducts = [], error: allProdErr } = await supabase
       .from("products")
-      .select("*, product_variants(*)")
+      .select(
+        `
+        id,
+        product_name,
+        product_description,
+        stock,
+        seller_name,
+        product_image_url,
+        product_variants(id, variant_name, variant_stock, variant_image_url)
+      `
+      )
       .eq("seller_name", sellerName);
 
     if (allProdErr) throw allProdErr;
 
-    // 🔹 Merge produk yang belum diskon & beri is_on_discount false ke semua variant
-    const mergedProducts = allProducts.map(prod => {
-      const found = grouped.find(g => g.product_id === prod.id);
+    // 🔹 Merge produk yg tidak ada diskon
+    const mergedProducts = allProducts.map((prod) => {
+      const found = grouped.find((g) => g.product_id === prod.id);
+
+      const productImage =
+        Array.isArray(prod.product_image_url) && prod.product_image_url.length > 0
+          ? prod.product_image_url[0]
+          : prod.product_image_url || null;
+
       if (found) {
-        found.variants = (prod.product_variants || []).map(v => {
-          const existingVar = found.variants.find(fv => fv.variant_id === v.id);
+        // merge variants
+        found.variants = (prod.product_variants || []).map((v) => {
+          const existingVar = found.variants.find((fv) => fv.variant_id === v.id);
           if (existingVar) return existingVar;
+
           return {
             variant_id: v.id,
-            stock: v.stock,
+            stock_asli: v.variant_stock,
             discount_percentage: null,
             is_on_discount: false,
             variant_data: {
               variant_name: v.variant_name,
-              variant_stock: v.stock,
-              variant_image_url: v.variant_image_url || null
-            }
+              variant_stock: v.variant_stock,
+              variant_image_url: v.variant_image_url || null,
+            },
           };
         });
+
+        // kalau ada varian → hapus field stok root
+        if (found.variants.length > 0) {
+          delete found.product_data.store_discount_stock;
+          delete found.product_data.stock_asli;
+        }
+
         return found;
       }
 
-      const variants = (prod.product_variants || []).map(v => ({
+      // Produk tanpa diskon
+      const variants = (prod.product_variants || []).map((v) => ({
         variant_id: v.id,
-        stock: v.stock,
+        stock_asli: v.variant_stock,
         discount_percentage: null,
         is_on_discount: false,
         variant_data: {
           variant_name: v.variant_name,
-          variant_stock: v.stock,
-          variant_image_url: v.variant_image_url || null
-        }
+          variant_stock: v.variant_stock,
+          variant_image_url: v.variant_image_url || null,
+        },
       }));
+
+      const productData = {
+        product_name: prod.product_name,
+        product_description: prod.product_description,
+        seller_name: sellerName,
+        product_image_url: productImage,
+        is_on_discount: false,
+      };
+
+      // hanya kalau tidak punya varian → ada stok root
+      if (!variants.length) {
+        productData.stock_asli = prod.stock;
+      }
 
       return {
         product_id: prod.id,
-        product_data: {
-          product_name: prod.product_name,
-          product_description: prod.product_description,
-          stock: variants.length ? null : prod.stock,
-          seller_name: sellerName,
-          product_image_url: prod.product_image_url || null,
-          is_on_discount: variants.length ? undefined : false
-        },
-        stock: variants.length ? null : prod.stock,
+        product_data: productData,
         discount_percentage: null,
-        variants
+        variants,
       };
     });
 
     return res.json({
       message: "✅ Daftar produk dengan status diskon",
-      items: mergedProducts
+      items: mergedProducts,
     });
-
   } catch (err) {
     console.error("❌ Server error:", err);
     return res.status(500).json({ error: "Internal server error" });
   }
 });
-
 
 /* ===== GET ALL STORE DISCOUNT (BY SELLER - pakai cookies) ===== */
 router.get("/store-discount/all", async (req, res) => {
