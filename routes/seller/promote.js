@@ -507,7 +507,32 @@ router.delete("/store-discount/:id", async (req, res) => {
   try {
     if (product_id) {
       // Mode hapus item tertentu
-      const query = supabase.from("store_discount_items").delete()
+      const { data: itemsToDelete, error: fetchErr } = await supabase
+        .from("store_discount_items")
+        .select("*")
+        .eq("discount_id", req.params.id)
+        .eq("product_id", product_id)
+        .maybeSingle();
+
+      if (fetchErr) return res.status(500).json({ message: "❌ Gagal ambil item", error: fetchErr.message });
+
+      if (itemsToDelete) {
+        // balikin stock
+        const qty = itemsToDelete.stock || 0;
+        if (variant_id) {
+          await supabase.rpc("increase_variant_stock", {
+            variant_id_input: variant_id,
+            qty,
+          });
+        } else {
+          await supabase.rpc("increase_product_stock", {
+            product_id_input: product_id,
+            qty,
+          });
+        }
+      }
+
+      let query = supabase.from("store_discount_items").delete()
         .eq("discount_id", req.params.id)
         .eq("product_id", product_id);
 
@@ -520,9 +545,32 @@ router.delete("/store-discount/:id", async (req, res) => {
       return res.json({ message: `✅ Item ${product_id}${variant_id ? ' varian ' + variant_id : ''} berhasil dihapus dari diskon` });
     } else {
       // Mode hapus seluruh diskon
+      const { data: allItems, error: fetchErr } = await supabase
+        .from("store_discount_items")
+        .select("*")
+        .eq("discount_id", req.params.id);
+
+      if (fetchErr) return res.status(500).json({ message: "❌ Gagal ambil items", error: fetchErr.message });
+
+      // balikin stock semua item
+      for (const item of allItems) {
+        if (item.variant_id) {
+          await supabase.rpc("increase_variant_stock", {
+            variant_id_input: item.variant_id,
+            qty: item.stock,
+          });
+        } else {
+          await supabase.rpc("increase_product_stock", {
+            product_id_input: item.product_id,
+            qty: item.stock,
+          });
+        }
+      }
+
       await supabase.from("store_discount_items").delete().eq("discount_id", req.params.id);
       await supabase.from("store_discounts").delete().eq("id", req.params.id);
-      return res.json({ message: "✅ Diskon berhasil dihapus" });
+
+      return res.json({ message: "✅ Diskon berhasil dihapus dan stok dikembalikan" });
     }
   } catch (err) {
     console.error(err);
