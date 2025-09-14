@@ -1,3 +1,6 @@
+// routes/products.js
+const express = require("express");
+const router = express.Router();
 const supabase = require("../config/supabase");
 const { DateTime } = require("luxon");
 
@@ -11,7 +14,7 @@ async function attachVariantsStockDiscountWithRealDiscount(products) {
   const now = DateTime.utc();
   const productIds = products.map((p) => p.id);
 
-  // Ambil semua varian sekaligus
+  // Ambil semua data varian + diskon
   const [
     { data: variants = [] },
     { data: eventProducts = [] },
@@ -21,21 +24,22 @@ async function attachVariantsStockDiscountWithRealDiscount(products) {
     supabase.from("product_variants").select("*").in("product_id", productIds),
     supabase
       .from("event_products")
-      .select("event_discount,event_id,variant_id,product_id")
-      .in("product_id", productIds),
+      .select("event_discount,event_id,variant_id,product_id,event_stock"),
     supabase
       .from("flash_sale_products")
-      .select("flash_sale_id,discount_percentage,variant_id,product_id")
+      .select(
+        "flash_sale_id,discount_percentage,variant_id,product_id,flash_stock"
+      )
       .in("product_id", productIds),
     supabase
       .from("store_discount_items")
       .select(
-        `product_id,variant_id,discount_percentage,store_discounts!inner(id,name,start_time,end_time)`
+        `product_id,variant_id,discount_percentage,stock,store_discounts!inner(id,name,start_time,end_time)`
       )
       .in("product_id", productIds),
   ]);
 
-  // Ambil event & flash sale detail
+  // Ambil detail event & flash sale
   const eventIds = [...new Set(eventProducts.map((e) => e.event_id))];
   const flashSaleIds = [...new Set(flashSaleProducts.map((f) => f.flash_sale_id))];
 
@@ -76,6 +80,8 @@ async function attachVariantsStockDiscountWithRealDiscount(products) {
         .forEach((ep) => {
           const event = eventMap[ep.event_id];
           if (!event) return;
+          if (ep.event_stock !== null && ep.event_stock <= 0) return; // stok habis → skip
+
           const start = DateTime.fromISO(event.start_time).toUTC();
           const end = DateTime.fromISO(event.end_time).toUTC();
           if (start <= now && end >= now) {
@@ -96,6 +102,7 @@ async function attachVariantsStockDiscountWithRealDiscount(products) {
           const flashSale = flashSaleMap[fsp.flash_sale_id];
           if (!flashSale) return;
           if (flashSale.status === "disabled") return;
+          if (fsp.flash_stock !== null && fsp.flash_stock <= 0) return; // stok habis → skip
 
           const start = DateTime.fromISO(flashSale.start_time).toUTC();
           const end = DateTime.fromISO(flashSale.end_time).toUTC();
@@ -138,18 +145,22 @@ async function attachVariantsStockDiscountWithRealDiscount(products) {
           (i) => i.product_id === productId && i.variant_id === null
         );
       if (matched?.store_discounts) {
-        const sd = matched.store_discounts;
-        const start = DateTime.fromISO(sd.start_time).toUTC();
-        const end = DateTime.fromISO(sd.end_time).toUTC();
-        if (start <= now && end >= now) {
-          if (discountPercentage === 0)
-            discountPercentage = matched.discount_percentage;
-          if (!sources.includes("store_discount"))
-            sources.push("store_discount");
-          details.store_discounts.push({
-            ...sd,
-            discount_percentage: matched.discount_percentage,
-          });
+        if (matched.stock !== null && matched.stock <= 0) {
+          // stok habis → skip
+        } else {
+          const sd = matched.store_discounts;
+          const start = DateTime.fromISO(sd.start_time).toUTC();
+          const end = DateTime.fromISO(sd.end_time).toUTC();
+          if (start <= now && end >= now) {
+            if (discountPercentage === 0)
+              discountPercentage = matched.discount_percentage;
+            if (!sources.includes("store_discount"))
+              sources.push("store_discount");
+            details.store_discounts.push({
+              ...sd,
+              discount_percentage: matched.discount_percentage,
+            });
+          }
         }
       }
 
@@ -192,11 +203,9 @@ async function attachVariantsStockDiscountWithRealDiscount(products) {
     return {
       ...product,
       variants: variantsWithDiscount,
-      // ❌ root tidak punya finalStock, finalPrice, discountPercentage kalau ada varian
     };
   });
 }
-
 
 module.exports = {
   applyDiscount,
