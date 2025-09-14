@@ -290,6 +290,7 @@ router.get("/store-discount/all", async (req, res) => {
 });
 
 // ================= GET DISCOUNT =================
+// ================= GET DISCOUNT (Produk + Variants) =================
 router.get("/store-discount/:id", async (req, res) => {
   const sellerInfo = req.cookies?.seller_info
     ? JSON.parse(req.cookies.seller_info)
@@ -302,6 +303,7 @@ router.get("/store-discount/:id", async (req, res) => {
   const { id } = req.params;
 
   try {
+    // Ambil diskon utama
     const { data: discount, error } = await supabase
       .from("store_discounts")
       .select("*")
@@ -313,19 +315,58 @@ router.get("/store-discount/:id", async (req, res) => {
       return res.status(404).json({ message: "❌ Diskon tidak ditemukan" });
     }
 
+    // Ambil items diskon
     const { data: rawItems = [] } = await supabase
       .from("store_discount_items")
-      .select("id, product_id, variant_id, stock, discount_percentage, products(*), product_variants(*)")
+      .select(`
+        id,
+        product_id,
+        variant_id,
+        stock,
+        discount_percentage,
+        products(*),
+        product_variants(*)
+      `)
       .eq("discount_id", discount.id);
-      
-    const items = rawItems.map(({ id,stock,product_id,variant_id,...rest }) => ({
-      id,
-      product_id,
-      variant_id,
-      store_discount_stock: stock, 
-          ...rest,
-     
-    }));
+
+    // Map hasil berdasarkan apakah punya variant atau tidak
+    const items = rawItems.map(
+      ({
+        id,
+        stock,
+        discount_percentage,
+        product_id,
+        variant_id,
+        products,
+        product_variants,
+      }) => {
+        // Jika ada variant_id → masuk ke dalam product_variants
+        if (variant_id && product_variants) {
+          return {
+            id,
+            product_id,
+            variant_id,
+            products,
+            product_variants: {
+              ...product_variants,
+              store_discount_stock: stock,
+              discount_percentage,
+            },
+          };
+        }
+
+        // Jika tidak ada variant → tetap taruh di level item
+        return {
+          id,
+          product_id,
+          variant_id,
+          store_discount_stock: stock,
+          discount_percentage,
+          products,
+          product_variants,
+        };
+      }
+    );
 
     return res.json({
       message: "✅ Diskon berhasil diambil",
