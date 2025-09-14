@@ -18,6 +18,7 @@ async function convertToWebp(buffer) {
 }
 
 /* ===== STORE DISCOUNT CREATE ===== */
+// ================= CREATE DISCOUNT =================
 router.post("/store-discount/create", async (req, res) => {
   const sellerInfo = req.cookies?.seller_info
     ? JSON.parse(req.cookies.seller_info)
@@ -40,103 +41,24 @@ router.post("/store-discount/create", async (req, res) => {
   const endUTC = DateTime.fromISO(end_time, { zone: tz }).toUTC().toISO();
 
   try {
-    // 🔍 Cek duplikat diskon (nama + periode sama)
-    const { data: existingDiscount, error: checkErr } = await supabase
-      .from("store_discounts")
-      .select("id")
-      .eq("store_id", sellerInfo.id)
-      .eq("name", name)
-      .eq("start_time", startUTC)
-      .eq("end_time", endUTC)
-      .maybeSingle();
-
-    if (checkErr) {
-      return res.status(500).json({ message: "❌ Gagal cek duplikat", error: checkErr.message });
-    }
-
-    if (existingDiscount) {
-      return res.status(409).json({
-        message: "❌ Diskon dengan nama & periode sama sudah ada",
-      });
-    }
-
-    // 🔍 Ambil semua diskon aktif toko ini
-    const nowISO = new Date().toISOString();
-    const { data: activeDiscounts, error: activeDiscErr } = await supabase
-      .from("store_discounts")
-      .select("id")
-      .eq("store_id", sellerInfo.id)
-      .gt("end_time", nowISO);
-
-    if (activeDiscErr) {
-      return res.status(500).json({ message: "❌ Gagal ambil diskon aktif", error: activeDiscErr.message });
-    }
-
-    const activeDiscountIds = activeDiscounts?.map(d => d.id) || [];
-
-    // 🔍 Validasi: pastikan produk/varian belum ada di diskon aktif
-    for (const item of items) {
-      if (item.variants?.length) {
-        for (const variant of item.variants) {
-          if (activeDiscountIds.length > 0) {
-            const { data: activeItem, error: activeErr } = await supabase
-              .from("store_discount_items")
-              .select("id")
-              .eq("product_id", item.product_id)
-              .eq("variant_id", variant.variant_id)
-              .in("discount_id", activeDiscountIds);
-
-            if (activeErr) {
-              return res.status(500).json({ message: "❌ Gagal cek produk aktif", error: activeErr.message });
-            }
-            if (activeItem?.length) {
-              return res.status(409).json({
-                message: `❌ Produk ${item.product_id} varian ${variant.variant_id} sudah ada di diskon aktif`,
-              });
-            }
-          }
-        }
-      } else {
-        if (activeDiscountIds.length > 0) {
-          const { data: activeItem, error: activeErr } = await supabase
-            .from("store_discount_items")
-            .select("id")
-            .eq("product_id", item.product_id)
-            .is("variant_id", null)
-            .in("discount_id", activeDiscountIds);
-
-          if (activeErr) {
-            return res.status(500).json({ message: "❌ Gagal cek produk aktif", error: activeErr.message });
-          }
-          if (activeItem?.length) {
-            return res.status(409).json({
-              message: `❌ Produk ${item.product_id} sudah ada di diskon aktif`,
-            });
-          }
-        }
-      }
-    }
-
-    // ✅ Simpan store_discounts
+    // Insert store_discount
     const { data: storeDiscount, error: sdErr } = await supabase
       .from("store_discounts")
-      .insert([
-        { store_id: sellerInfo.id, name, start_time: startUTC, end_time: endUTC },
-      ])
+      .insert([{ store_id: sellerInfo.id, name, start_time: startUTC, end_time: endUTC }])
       .select()
       .single();
 
-    if (sdErr) {
-      return res.status(500).json({
-        message: "❌ Gagal simpan diskon toko",
-        error: sdErr.message,
-      });
-    }
+    if (sdErr) throw sdErr;
 
-    // ✅ Insert item discount
     for (const item of items) {
       if (item.variants?.length) {
         for (const variant of item.variants) {
+          // 🔥 Kurangi stok varian
+          await supabase.rpc("decrease_variant_stock", {
+            variant_id_input: variant.variant_id,
+            qty: variant.stock,
+          });
+
           await supabase.from("store_discount_items").insert([{
             discount_id: storeDiscount.id,
             product_id: item.product_id,
@@ -146,6 +68,12 @@ router.post("/store-discount/create", async (req, res) => {
           }]);
         }
       } else {
+        // 🔥 Kurangi stok produk
+        await supabase.rpc("decrease_product_stock", {
+          product_id_input: item.product_id,
+          qty: item.stock,
+        });
+
         await supabase.from("store_discount_items").insert([{
           discount_id: storeDiscount.id,
           product_id: item.product_id,
@@ -157,17 +85,16 @@ router.post("/store-discount/create", async (req, res) => {
     }
 
     return res.json({
-      message: "✅ Diskon toko berhasil dibuat dengan item-target",
+      message: "✅ Diskon toko berhasil dibuat",
       store_discount: storeDiscount,
     });
   } catch (err) {
-    console.error(err);
-    return res.status(500).json({
-      message: "❌ Error server",
-      error: err.message,
-    });
+    console.error("❌ Error create discount:", err);
+    return res.status(500).json({ message: "❌ Error server", error: err.message });
   }
 });
+
+
 
 /**
  * GET /store-discount/available-products
@@ -362,6 +289,7 @@ router.get("/store-discount/all", async (req, res) => {
   }
 });
 
+// ================= GET DISCOUNT =================
 router.get("/store-discount/:id", async (req, res) => {
   const sellerInfo = req.cookies?.seller_info
     ? JSON.parse(req.cookies.seller_info)
@@ -374,7 +302,6 @@ router.get("/store-discount/:id", async (req, res) => {
   const { id } = req.params;
 
   try {
-    // Ambil data diskon
     const { data: discount, error } = await supabase
       .from("store_discounts")
       .select("*")
@@ -386,83 +313,26 @@ router.get("/store-discount/:id", async (req, res) => {
       return res.status(404).json({ message: "❌ Diskon tidak ditemukan" });
     }
 
-    // Ambil semua item diskon beserta produk & varian
     const { data: rawItems = [] } = await supabase
       .from("store_discount_items")
       .select("id, product_id, variant_id, stock, discount_percentage, products(*), product_variants(*)")
       .eq("discount_id", discount.id);
-
-    // 🔥 Group items dan filter stock/variant + ambil image
-    const groupedItems = rawItems.reduce((acc, item) => {
-      const existing = acc.find(p => p.product_id === item.product_id);
-
-      const variantData = item.product_variants
-        ? {
-            variant_name: item.product_variants.variant_name,
-            variant_stock: item.product_variants.variant_stock
-          }
-        : null;
-
-      // Ambil stock dari product atau varian pertama jika stock null
-      const productStock = item.products?.stock ?? variantData?.variant_stock ?? null;
-
-      const productData = item.products
-        ? {
-            product_name: item.products.product_name,
-            product_description: item.products.product_description,
-            product_image_url: item.products.product_image_url, // ambil field image
-            stock: productStock
-          }
-        : { stock: productStock };
-
-      if (existing) {
-        if (item.variant_id) {
-          existing.variants.push({
-            variant_id: item.variant_id,
-            stock: item.stock ?? variantData?.variant_stock ?? null,
-            discount_percentage: item.discount_percentage,
-            variant_data: variantData
-          });
-
-          // update stock product jika masih null
-          if (!existing.product_data.stock && variantData?.variant_stock != null) {
-            existing.product_data.stock = variantData.variant_stock;
-          }
-        } else {
-          existing.stock = item.stock;
-          existing.discount_percentage = item.discount_percentage;
-        }
-      } else {
-        acc.push({
-          product_id: item.product_id,
-          product_data: productData,
-          stock: productStock, // ambil langsung dari productStock
-          discount_percentage: item.variant_id ? null : item.discount_percentage,
-          variants: item.variant_id
-            ? [
-                {
-                  variant_id: item.variant_id,
-                  stock: item.stock ?? variantData?.variant_stock ?? null,
-                  discount_percentage: item.discount_percentage,
-                  variant_data: variantData
-                }
-              ]
-            : []
-        });
-      }
-
-      return acc;
-    }, []);
+      
+    const items = rawItems.map(({ stock, ...rest }) => ({
+  ...rest,
+  store_discount_stock: stock, // overwrite
+}));
 
     return res.json({
       message: "✅ Diskon berhasil diambil",
-      data: { ...discount, items: groupedItems },
+      data: { ...discount, items },
     });
   } catch (err) {
     console.error("❌ Error get discount by id:", err);
     res.status(500).json({ message: "❌ Error server", error: err.message });
   }
 });
+
 
 router.post("/store-discount/duplicate/:id", async (req, res) => {
   const sellerInfo = req.cookies?.seller_info
@@ -521,6 +391,7 @@ router.post("/store-discount/duplicate/:id", async (req, res) => {
 });
 
 
+// ================= EDIT DISCOUNT =================
 router.put("/store-discount/edit/:id", async (req, res) => {
   const sellerInfo = req.cookies?.seller_info
     ? JSON.parse(req.cookies.seller_info)
@@ -529,11 +400,10 @@ router.put("/store-discount/edit/:id", async (req, res) => {
   if (!sellerInfo?.id)
     return res.status(401).json({ error: "❌ Harus login sebagai seller" });
 
-  const { items } = req.body; // format: [{ product_id, variant_id, stock, discount_percentage }]
+  const { items } = req.body;
 
   try {
     for (const item of items) {
-      // 🔹 Cek apakah item/variant sudah ada
       let query = supabase
         .from("store_discount_items")
         .select("*")
@@ -547,43 +417,76 @@ router.put("/store-discount/edit/:id", async (req, res) => {
       }
 
       const { data: existing, error: existErr } = await query.maybeSingle();
-      if (existErr)
-        return res.status(500).json({
-          message: "❌ Gagal cek item diskon",
-          error: existErr.message,
-        });
+      if (existErr) throw existErr;
 
       if (existing) {
-        // 🔹 Update stock / discount_percentage
+        // hitung selisih stok
+        const diff = (item.stock ?? existing.stock) - existing.stock;
+
+        if (diff > 0) {
+          // stok bertambah → kurangi stok produk/varian
+          if (item.variant_id) {
+            await supabase.rpc("decrease_variant_stock", {
+              variant_id_input: item.variant_id,
+              qty: diff,
+            });
+          } else {
+            await supabase.rpc("decrease_product_stock", {
+              product_id_input: item.product_id,
+              qty: diff,
+            });
+          }
+        } else if (diff < 0) {
+          // stok berkurang → balikin stok produk/varian
+          const restore = Math.abs(diff);
+          if (item.variant_id) {
+            await supabase.rpc("increase_variant_stock", {
+              variant_id_input: item.variant_id,
+              qty: restore,
+            });
+          } else {
+            await supabase.rpc("increase_product_stock", {
+              product_id_input: item.product_id,
+              qty: restore,
+            });
+          }
+        }
+
         await supabase
           .from("store_discount_items")
           .update({
             stock: item.stock ?? existing.stock,
-            discount_percentage:
-              item.discount_percentage ?? existing.discount_percentage,
+            discount_percentage: item.discount_percentage ?? existing.discount_percentage,
           })
           .eq("id", existing.id);
       } else {
-        // 🔹 Insert item baru
-        await supabase.from("store_discount_items").insert([
-          {
-            discount_id: req.params.id,
-            product_id: item.product_id,
-            variant_id: item.variant_id || null,
-            stock: item.stock,
-            discount_percentage: item.discount_percentage,
-          },
-        ]);
+        // item baru → langsung kurangi stok
+        if (item.variant_id) {
+          await supabase.rpc("decrease_variant_stock", {
+            variant_id_input: item.variant_id,
+            qty: item.stock,
+          });
+        } else {
+          await supabase.rpc("decrease_product_stock", {
+            product_id_input: item.product_id,
+            qty: item.stock,
+          });
+        }
+
+        await supabase.from("store_discount_items").insert([{
+          discount_id: req.params.id,
+          product_id: item.product_id,
+          variant_id: item.variant_id || null,
+          stock: item.stock,
+          discount_percentage: item.discount_percentage,
+        }]);
       }
     }
 
     return res.json({ message: "✅ Diskon berhasil diperbarui" });
   } catch (err) {
-    console.error(err);
-    return res.status(500).json({
-      message: "❌ Error server",
-      error: err.message,
-    });
+    console.error("❌ Error edit discount:", err);
+    return res.status(500).json({ message: "❌ Error server", error: err.message });
   }
 });
 
