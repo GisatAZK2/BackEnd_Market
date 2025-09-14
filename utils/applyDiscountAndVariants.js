@@ -185,20 +185,27 @@ async function attachVariantsStockDiscountWithRealDiscount(products) {
     }
 
     // === PRODUK DENGAN VARIAN ===
-    const variantsWithDiscount = productVariants.map((v) => {
-      const discount = calcDiscount(product.id, v.id);
-      let finalPrice = applyDiscount(v.variant_price, discount.discountPercentage);
-      if (discount.upcomingFlashSale !== null)
-        finalPrice = Number("3" + finalPrice); // kode upcoming
-      return {
-        ...v,
-        original_price: v.variant_price,
-        final_price: finalPrice,
-        applied_discount: discount.discountPercentage,
-        discount_source: discount.sources,
-        discount_details: discount.details,
-      };
-    });
+    // routes/products.js -> di return varian
+      const variantsWithDiscount = productVariants.map((v) => {
+        const discount = calcDiscount(product.id, v.id);
+        let finalPrice = applyDiscount(v.variant_price, discount.discountPercentage);
+        if (discount.upcomingFlashSale !== null)
+          finalPrice = Number("3" + finalPrice); // kode upcoming
+
+        return {
+          id: v.id,
+          variant_name: v.variant_name,
+          variant_price: v.variant_price,
+          variant_image_url: v.variant_image_url, // 🆕 gambar varian
+          variant_stock: v.variant_stock,         // 🆕 stok varian
+          original_price: v.variant_price,
+          final_price: finalPrice,
+          applied_discount: discount.discountPercentage,
+          discount_source: discount.sources,
+          discount_details: discount.details,
+        };
+      });
+
 
     return {
       ...product,

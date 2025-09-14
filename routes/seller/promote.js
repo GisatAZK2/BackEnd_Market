@@ -1451,6 +1451,12 @@ router.post("/event/register", async (req, res) => {
 // ========= List Event (Seller dengan jumlah seller terdaftar + status) ====
 router.get("/events/seller", async (req, res) => {
   try {
+    const sellerInfo = req.cookies?.seller_info ? JSON.parse(req.cookies.seller_info) : null;
+    if (!sellerInfo?.id) {
+      return res.status(401).json({ message: "❌ Harus login sebagai seller" });
+    }
+    const seller_id = sellerInfo.id;
+
     const { data: events, error: eventError } = await supabase
       .from("events")
       .select("*")
@@ -1462,29 +1468,75 @@ router.get("/events/seller", async (req, res) => {
 
     const eventsWithSellerCount = await Promise.all(
       events.map(async (event) => {
-        const { data: eventProducts, error: epError } = await supabase
+        // 🔹 ambil produk & varian yang masuk ke event ini
+        const { data: myEventProducts, error: myEpError } = await supabase
           .from("event_products")
-          .select("product_id")
+          .select("product_id, variant_id, event_id")
           .eq("event_id", event.id);
 
-        if (epError) throw epError;
+        if (myEpError) throw myEpError;
 
-        const productIds = eventProducts.map((ep) => ep.product_id);
+        const productIds = myEventProducts.map((ep) => ep.product_id);
 
-        let sellerCount = 0;
+        let myProducts = [];
         if (productIds.length > 0) {
+          // 🔹 ambil nama produk & varian sesuai seller
           const { data: products, error: prodError } = await supabase
             .from("products")
-            .select("seller_id")
+            .select(`
+              id,
+              seller_id,
+              product_name,
+              variants:product_variants (
+                id,
+                variant_name
+              )
+            `)
             .in("id", productIds);
 
           if (prodError) throw prodError;
 
-          const uniqueSellers = new Set(products.map((p) => p.seller_id));
+          // filter produk seller sendiri
+          const ownProducts = products.filter((p) => p.seller_id === seller_id);
+
+          // 🔹 merge product + variant event
+          myProducts = ownProducts.map((p) => {
+            const eps = myEventProducts.filter((e) => e.product_id === p.id);
+
+            // ambil variant_id dari event
+            let eventVariants = [];
+            if (eps.some((e) => e.variant_id)) {
+              eventVariants = p.variants
+                .filter((v) => eps.some((e) => e.variant_id === v.id))
+                .map((v) => ({
+                  variant_id: v.id,
+                  variant_name: v.variant_name,
+                }));
+            }
+
+            return {
+              product_id: p.id,
+              product_name: p.product_name,
+              variants: eventVariants, // bisa kosong kalau event level produk
+            };
+          });
+        }
+
+        // hitung semua seller global
+        let sellerCount = 0;
+        if (productIds.length > 0) {
+          const { data: allProducts, error: allProdError } = await supabase
+            .from("products")
+            .select("seller_id")
+            .in("id", productIds);
+
+          if (allProdError) throw allProdError;
+
+          const uniqueSellers = new Set(allProducts.map((p) => p.seller_id));
           sellerCount = uniqueSellers.size;
         }
 
-        // Tambah status event
+        // status event
         const start = DateTime.fromISO(event.start_time);
         const end = DateTime.fromISO(event.end_time);
 
@@ -1494,6 +1546,7 @@ router.get("/events/seller", async (req, res) => {
 
         return {
           ...event,
+          my_products: myProducts,
           seller_count: sellerCount,
           status,
         };
@@ -1501,7 +1554,7 @@ router.get("/events/seller", async (req, res) => {
     );
 
     res.json({
-      message: "✅ Daftar event untuk seller dengan jumlah seller terdaftar",
+      message: "✅ Daftar event untuk seller dengan produk & varian",
       data: eventsWithSellerCount,
     });
   } catch (err) {

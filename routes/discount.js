@@ -121,65 +121,81 @@ router.get("/event/:eventId", async (req, res) => {
       return res.status(404).json({ message: "❌ Event tidak ditemukan" });
     }
 
-    // 🔹 Ambil produk dalam event
+    // 🔹 Ambil daftar produk dalam event
     const { data: eventProducts, error: epError } = await supabase
       .from("event_products")
-      .select("product_id, event_stock")
+      .select("product_id, event_stock, variant_id")
       .eq("event_id", eventId);
 
     if (epError) throw epError;
-
-    let products = [];
-    if (eventProducts.length > 0) {
-      const productIds = eventProducts.map((ep) => ep.product_id);
-
-      // 🔹 Ambil produk + ratings
-      const { data: prodData, error: prodError } = await supabase
-        .from("products")
-        .select(`
-          id,
-          product_name,
-          product_price,
-          product_image_url,
-          stock,
-          terjual,
-          seller_id,
-          ratings!left (
-            rating
-          )
-        `)
-        .in("id", productIds);
-
-      if (prodError) throw prodError;
-
-      // 🔹 Gabung produk dengan stok event + hitung rating
-      products = prodData.map((p) => {
-        const ep = eventProducts.find((e) => e.product_id === p.id);
-
-        let avgRating = null;
-        if (p.ratings && p.ratings.length > 0) {
-          const sum = p.ratings.reduce((acc, r) => acc + r.rating, 0);
-          avgRating = sum / p.ratings.length;
-        }
-
-        return {
-          ...p,
-          event_stock: ep?.event_stock ?? null,
-          avg_rating: avgRating ? Number(avgRating.toFixed(2)) : null,
-          total_ratings: p.ratings ? p.ratings.length : 0,
-        };
+    if (!eventProducts?.length) {
+      return res.json({
+        message: "✅ Event ditemukan, tapi tidak ada produk",
+        event: { ...event, rules: event.rules || null, products: [] },
       });
-
-      // 🔹 Enrich dengan varian, stok real & diskon
-      products = await attachVariantsStockDiscountWithRealDiscount(products);
     }
+
+    const productIds = [...new Set(eventProducts.map((ep) => ep.product_id))];
+
+    // 🔹 Ambil produk + seller
+    const { data: prodData, error: prodError } = await supabase
+      .from("products")
+      .select(`
+        id,
+        product_name,
+        product_description,
+        product_price,
+        product_image_url,
+        stock,
+        min_price,
+        max_price,
+        terjual,
+        created_at,
+        category_id,
+        keywords,
+        seller:sellers (
+          id,
+          name,
+          email,
+          phone,
+          store_name,
+          store_address,
+          store_image_url
+        )
+      `)
+      .in("id", productIds);
+
+    if (prodError) throw prodError;
+
+    // 🔹 Enrich dengan varian, stok real & diskon
+    let enrichedProducts = await attachVariantsStockDiscountWithRealDiscount(prodData);
+
+    // 🔹 Filter hanya varian yang kena event
+    const products = enrichedProducts.map((product) => {
+      const eps = eventProducts.filter((e) => e.product_id === product.id);
+
+      let eventVariants = [];
+      if (product.variants && product.variants.length > 0) {
+        eventVariants = product.variants
+          .filter((v) => v.discount_source?.includes("event")) // cuma varian yg ada event discount
+          .map((v) => {
+            const ev = eps.find((e) => e.variant_id === v.id);
+            return { ...v, event_stock: ev?.event_stock ?? null };
+          });
+      }
+
+      return {
+        ...product,
+        variants: eventVariants,
+      };
+    }).filter((p) => p.variants.length > 0); // jangan tampilkan produk kalau ga ada varian event
 
     res.json({
       message: "✅ Detail event flash sale",
       event: {
         ...event,
         rules: event.rules || null,
-        products: products.length > 0 ? products : [],
+        products: products,
       },
     });
   } catch (err) {
@@ -190,7 +206,6 @@ router.get("/event/:eventId", async (req, res) => {
     });
   }
 });
-
 
 /* ===== GET LIST FLASH SALE UNTUK CUSTOMER (PAKAI HELPER DISKON) ===== */
 router.get("/flash-sale-customer/list", async (req, res) => {
