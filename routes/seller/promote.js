@@ -318,10 +318,14 @@ router.get("/store-discount/:id", async (req, res) => {
       .select("id, product_id, variant_id, stock, discount_percentage, products(*), product_variants(*)")
       .eq("discount_id", discount.id);
       
-    const items = rawItems.map(({ stock, ...rest }) => ({
-  ...rest,
-  store_discount_stock: stock, // overwrite
-}));
+    const items = rawItems.map(({ id,stock,product_id,variant_id,...rest }) => ({
+      id,
+      product_id,
+      variant_id,
+      store_discount_stock: stock, 
+          ...rest,
+     
+    }));
 
     return res.json({
       message: "✅ Diskon berhasil diambil",
