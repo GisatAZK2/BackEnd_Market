@@ -1583,7 +1583,7 @@ router.put("/event/:eventId/products", async (req, res) => {
 
       console.log("👉 Processing item:", item);
 
-      // 🔹 Ambil data event_product
+      // 🔹 Cek apakah produk sudah ada di event
       let query = supabase
         .from("event_products")
         .select("event_stock, event_discount, variant_id")
@@ -1645,7 +1645,6 @@ router.put("/event/:eventId/products", async (req, res) => {
               continue;
             }
 
-            // Pastikan varian terhubung ke produk
             if (variant.product_id !== product_id) {
               results.push({
                 product_id,
