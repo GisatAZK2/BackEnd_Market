@@ -110,14 +110,14 @@ app.use("/share", (req, res, next) => {
 }, share);
 
 // === Webhook Payment Endpoint (skip API key juga) ===
-app.use("/payment/webhook", webhookpayment);
+app.use("/payment", webhookpayment);
 
 // === API Key Middleware (Skip /share, /chat, dan /order/payment/webhook) ===
 app.use((req, res, next) => {
   if (
     req.path.startsWith("/share") ||
     req.path.startsWith("/chat") ||
-    req.path.startsWith("/order/payment/webhook")
+    req.path.startsWith("/payment")
   ) {
     return next();
   }
