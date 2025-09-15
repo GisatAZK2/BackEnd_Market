@@ -403,7 +403,7 @@ router.get("/received", async (req, res) => {
 
 
 // ✅ Checkout Route
-router.post("/cart/checkout", detectspam, verifyCaptcha, async (req, res) => {
+router.post("/cart/checkout", async (req, res) => {
   const startTime = Date.now();
   console.log("===== 🛒 [CHECKOUT ROUTE DIPANGGIL] =====");
   console.log("📥 Body request:", req.body);

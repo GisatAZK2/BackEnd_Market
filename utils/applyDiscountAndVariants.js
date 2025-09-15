@@ -24,7 +24,8 @@ async function attachVariantsStockDiscountWithRealDiscount(products) {
     supabase.from("product_variants").select("*").in("product_id", productIds),
     supabase
       .from("event_products")
-      .select("event_discount,event_id,variant_id,product_id,event_stock"),
+      .select("event_discount,event_id,variant_id,product_id,event_stock")
+      .in("product_id", productIds),
     supabase
       .from("flash_sale_products")
       .select(
@@ -61,113 +62,108 @@ async function attachVariantsStockDiscountWithRealDiscount(products) {
   const eventMap = Object.fromEntries(events.map((e) => [e.id, e]));
   const flashSaleMap = Object.fromEntries(flashSales.map((f) => [f.id, f]));
 
+  // ====== Kalkulasi Diskon dengan Prioritas ======
+  const calcDiscount = (productId, variantId = null) => {
+    const activeDiscounts = {
+      flash_sale: null,
+      event: null,
+      store_discount: null,
+    };
+
+    // === EVENT ===
+    eventProducts
+      .filter(
+        (ep) =>
+          ep.product_id === productId &&
+          (!variantId || ep.variant_id === variantId)
+      )
+      .forEach((ep) => {
+        const event = eventMap[ep.event_id];
+        if (!event) return;
+        if (ep.event_stock !== null && ep.event_stock <= 0) return; // stok habis
+
+        const start = DateTime.fromISO(event.start_time).toUTC();
+        const end = DateTime.fromISO(event.end_time).toUTC();
+        if (start <= now && end >= now) {
+          activeDiscounts.event = {
+            discount: ep.event_discount,
+            source: "event",
+            details: { ...event, discount: ep.event_discount },
+          };
+        }
+      });
+
+    // === FLASH SALE ===
+    flashSaleProducts
+      .filter(
+        (fp) =>
+          fp.product_id === productId &&
+          (!variantId || fp.variant_id === variantId)
+      )
+      .forEach((fsp) => {
+        const flashSale = flashSaleMap[fsp.flash_sale_id];
+        if (!flashSale) return;
+        if (flashSale.status === "disabled") return;
+        if (fsp.flash_stock !== null && fsp.flash_stock <= 0) return; // stok habis
+
+        const start = DateTime.fromISO(flashSale.start_time).toUTC();
+        const end = DateTime.fromISO(flashSale.end_time).toUTC();
+
+        if (flashSale.status === "active" && start <= now && end >= now) {
+          activeDiscounts.flash_sale = {
+            discount: fsp.discount_percentage,
+            source: "flash_sale",
+            details: { ...flashSale, discount: fsp.discount_percentage },
+          };
+        }
+      });
+
+    // === STORE DISCOUNT ===
+    const matched =
+      (variantId &&
+        storeDiscountItems.find(
+          (i) => i.product_id === productId && i.variant_id === variantId
+        )) ||
+      storeDiscountItems.find(
+        (i) => i.product_id === productId && i.variant_id === null
+      );
+    if (matched?.store_discounts) {
+      if (!(matched.stock !== null && matched.stock <= 0)) {
+        const sd = matched.store_discounts;
+        const start = DateTime.fromISO(sd.start_time).toUTC();
+        const end = DateTime.fromISO(sd.end_time).toUTC();
+        if (start <= now && end >= now) {
+          activeDiscounts.store_discount = {
+            discount: matched.discount_percentage,
+            source: "store_discount",
+            details: { ...sd, discount: matched.discount_percentage },
+          };
+        }
+      }
+    }
+
+    // === PRIORITAS DISKON ===
+    let applied = null;
+    if (activeDiscounts.flash_sale) {
+      applied = activeDiscounts.flash_sale;
+    } else if (activeDiscounts.event) {
+      applied = activeDiscounts.event;
+    } else if (activeDiscounts.store_discount) {
+      applied = activeDiscounts.store_discount;
+    }
+
+    return {
+      discountPercentage: applied ? applied.discount : 0,
+      sources: applied ? [applied.source] : [],
+      details: applied ? applied.details : {},
+    };
+  };
+
+  // ====== Proses Produk ======
   return products.map((product) => {
     const productVariants = variants.filter((v) => v.product_id === product.id);
 
-    const calcDiscount = (productId, variantId = null) => {
-      let discountPercentage = 0;
-      let upcomingFlashSale = null;
-      const sources = [];
-      const details = { events: [], flash_sales: [], store_discounts: [] };
-
-      // === EVENT ===
-      eventProducts
-        .filter(
-          (ep) =>
-            ep.product_id === productId &&
-            (!variantId || ep.variant_id === variantId)
-        )
-        .forEach((ep) => {
-          const event = eventMap[ep.event_id];
-          if (!event) return;
-          if (ep.event_stock !== null && ep.event_stock <= 0) return; // stok habis → skip
-
-          const start = DateTime.fromISO(event.start_time).toUTC();
-          const end = DateTime.fromISO(event.end_time).toUTC();
-          if (start <= now && end >= now) {
-            discountPercentage = Math.max(discountPercentage, ep.event_discount);
-            if (!sources.includes("event")) sources.push("event");
-            details.events.push({ ...event, discount: ep.event_discount });
-          }
-        });
-
-      // === FLASH SALE ===
-      flashSaleProducts
-        .filter(
-          (fp) =>
-            fp.product_id === productId &&
-            (!variantId || fp.variant_id === variantId)
-        )
-        .forEach((fsp) => {
-          const flashSale = flashSaleMap[fsp.flash_sale_id];
-          if (!flashSale) return;
-          if (flashSale.status === "disabled") return;
-          if (fsp.flash_stock !== null && fsp.flash_stock <= 0) return; // stok habis → skip
-
-          const start = DateTime.fromISO(flashSale.start_time).toUTC();
-          const end = DateTime.fromISO(flashSale.end_time).toUTC();
-
-          if (flashSale.status === "active") {
-            if (start <= now && end >= now) {
-              discountPercentage = fsp.discount_percentage;
-              if (!sources.includes("flash_sale")) sources.push("flash_sale");
-              details.flash_sales.push({
-                ...flashSale,
-                discount: fsp.discount_percentage,
-                ongoing: true,
-              });
-            } else if (start > now) {
-              upcomingFlashSale = fsp.discount_percentage;
-              if (!sources.includes("flash_sale_upcoming"))
-                sources.push("flash_sale_upcoming");
-              details.flash_sales.push({
-                ...flashSale,
-                discount: fsp.discount_percentage,
-                upcoming: true,
-              });
-            } else {
-              details.flash_sales.push({
-                ...flashSale,
-                discount: fsp.discount_percentage,
-                expired: true,
-              });
-            }
-          }
-        });
-
-      // === STORE DISCOUNT ===
-      const matched =
-        (variantId &&
-          storeDiscountItems.find(
-            (i) => i.product_id === productId && i.variant_id === variantId
-          )) ||
-        storeDiscountItems.find(
-          (i) => i.product_id === productId && i.variant_id === null
-        );
-      if (matched?.store_discounts) {
-        if (matched.stock !== null && matched.stock <= 0) {
-          // stok habis → skip
-        } else {
-          const sd = matched.store_discounts;
-          const start = DateTime.fromISO(sd.start_time).toUTC();
-          const end = DateTime.fromISO(sd.end_time).toUTC();
-          if (start <= now && end >= now) {
-            if (discountPercentage === 0)
-              discountPercentage = matched.discount_percentage;
-            if (!sources.includes("store_discount"))
-              sources.push("store_discount");
-            details.store_discounts.push({
-              ...sd,
-              discount_percentage: matched.discount_percentage,
-            });
-          }
-        }
-      }
-
-      return { discountPercentage, upcomingFlashSale, sources, details };
-    };
-
-    // === PRODUK TANPA VARIAN ===
+    // === Produk tanpa varian ===
     if (productVariants.length === 0) {
       const discount = calcDiscount(product.id);
       return {
@@ -184,28 +180,27 @@ async function attachVariantsStockDiscountWithRealDiscount(products) {
       };
     }
 
-    // === PRODUK DENGAN VARIAN ===
-    // routes/products.js -> di return varian
-      const variantsWithDiscount = productVariants.map((v) => {
-        const discount = calcDiscount(product.id, v.id);
-        let finalPrice = applyDiscount(v.variant_price, discount.discountPercentage);
-        if (discount.upcomingFlashSale !== null)
-          finalPrice = Number("3" + finalPrice); // kode upcoming
+    // === Produk dengan varian ===
+    const variantsWithDiscount = productVariants.map((v) => {
+      const discount = calcDiscount(product.id, v.id);
+      const finalPrice = applyDiscount(
+        v.variant_price,
+        discount.discountPercentage
+      );
 
-        return {
-          id: v.id,
-          variant_name: v.variant_name,
-          variant_price: v.variant_price,
-          variant_image_url: v.variant_image_url, // 🆕 gambar varian
-          variant_stock: v.variant_stock,         // 🆕 stok varian
-          original_price: v.variant_price,
-          final_price: finalPrice,
-          applied_discount: discount.discountPercentage,
-          discount_source: discount.sources,
-          discount_details: discount.details,
-        };
-      });
-
+      return {
+        id: v.id,
+        variant_name: v.variant_name,
+        variant_price: v.variant_price,
+        variant_image_url: v.variant_image_url,
+        variant_stock: v.variant_stock,
+        original_price: v.variant_price,
+        final_price: finalPrice,
+        applied_discount: discount.discountPercentage,
+        discount_source: discount.sources,
+        discount_details: discount.details,
+      };
+    });
 
     return {
       ...product,

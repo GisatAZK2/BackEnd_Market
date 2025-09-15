@@ -15,6 +15,7 @@ require("./utils/autocancelorder.js");
 require("./utils/autodeletorder.js");
 require("./utils/autocompleteorder.js");
 require("./utils/deletedataseller.js");
+const webhookpayment = require("./utils/webhookpayment.js");
 
 // === Routes ===
 const authRoutes = require("./routes/auth");
@@ -99,7 +100,6 @@ app.get("/favicon.ico", (req, res) => {
   res.sendFile(path.join(__dirname, "routes", "assets", "favicon.png"));
 });
 
-
 // === Share Endpoint ===
 app.use("/share", (req, res, next) => {
   const origin = req.headers.origin;
@@ -109,9 +109,16 @@ app.use("/share", (req, res, next) => {
   next();
 }, share);
 
-// === API Key Middleware (Skip /share and /chat) ===
+// === Webhook Payment Endpoint (skip API key juga) ===
+app.use("/order/payment/webhook", webhookpayment);
+
+// === API Key Middleware (Skip /share, /chat, dan /order/payment/webhook) ===
 app.use((req, res, next) => {
-  if (req.path.startsWith("/share") || req.path.startsWith("/chat")) {
+  if (
+    req.path.startsWith("/share") ||
+    req.path.startsWith("/chat") ||
+    req.path.startsWith("/order/payment/webhook")
+  ) {
     return next();
   }
   return requireApiKey(req, res, next);
