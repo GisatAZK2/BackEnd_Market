@@ -110,7 +110,7 @@ app.use("/share", (req, res, next) => {
 }, share);
 
 // === Webhook Payment Endpoint (skip API key juga) ===
-app.use("/order/payment/webhook", webhookpayment);
+app.use("/payment/webhook", webhookpayment);
 
 // === API Key Middleware (Skip /share, /chat, dan /order/payment/webhook) ===
 app.use((req, res, next) => {
