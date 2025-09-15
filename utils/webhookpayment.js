@@ -187,8 +187,9 @@ router.post("/payment/webhook", async (req, res) => {
       return res.status(400).send("missing external_id");
     }
 
-    const orderId = external_id.split("-")[1];
-    if (!orderId) {
+    // ✅ ambil UUID full, bukan cuma potongan
+    const orderId = external_id.replace(/^order-/, "");
+    if (!orderId || orderId.length < 36) {
       console.warn("⚠ Invalid external_id format:", external_id);
       return res.status(400).send("invalid external_id");
     }
@@ -202,7 +203,7 @@ router.post("/payment/webhook", async (req, res) => {
       .single();
 
     if (orderErr || !order) {
-      console.error("❌ Gagal ambil order:", orderErr);
+      console.error("❌ Gagal ambil order:", orderErr || "Order not found");
       return res.status(500).send("error fetching order");
     }
 
