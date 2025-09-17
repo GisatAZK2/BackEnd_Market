@@ -61,6 +61,10 @@ router.post(
         delivery_fee,
         password,
         username,
+        pin,
+        bankCode,
+        accountHolderName,
+        accountNumber,
       } = req.body;
 
       // Validate required fields
@@ -79,10 +83,15 @@ router.post(
         !longitude ||
         typeof is_delivery_available === "undefined" ||
         !req.file ||
-        !password
+        !password ||
+        !pin ||
+        !bankCode ||
+        !accountHolderName ||
+        !accountNumber
       ) {
         return res.status(400).json({
-          error: "Semua field wajib diisi termasuk gambar, koordinat, dan password.",
+          error:
+            "Semua field wajib diisi termasuk gambar, koordinat, password, PIN, bankCode, accountHolderName, dan accountNumber.",
         });
       }
 
@@ -110,6 +119,11 @@ router.post(
         return res
           .status(400)
           .json({ error: "Password tidak memenuhi persyaratan keamanan." });
+      }
+
+      // Validate PIN (4-6 digits)
+      if (!pin || pin.toString().length < 4 || pin.toString().length > 6) {
+        return res.status(400).json({ error: "PIN harus 4-6 digit." });
       }
 
       // Ambil nama wilayah
@@ -189,6 +203,8 @@ router.post(
 
       // Hash the provided password
       const hashedPassword = await bcrypt.hash(password, 10);
+      // Hash the PIN for withdrawal
+      const hashedPin = await bcrypt.hash(pin.toString(), 12);
       const finalUsername =
         username && username.trim() !== ""
           ? username.trim()
@@ -271,6 +287,26 @@ router.post(
         return res
           .status(500)
           .json({ error: "Gagal menyimpan user ke database." });
+      }
+
+      // Simpan seller balance dengan PIN dan informasi bank
+      const { error: balanceInsertError } = await supabase
+        .from("seller_balances")
+        .insert([
+          {
+            seller_id: newSeller.id,
+            withdrawable_balance: 0,
+            seller_pin_hash: hashedPin,
+            bank_code: bankCode,
+            account_holder_name: accountHolderName,
+            account_number: accountNumber,
+          },
+        ]);
+
+      if (balanceInsertError) {
+        return res
+          .status(500)
+          .json({ error: "Gagal menyimpan saldo seller ke database." });
       }
 
       // Kirim OTP lewat SMTP microservice

@@ -1,3 +1,4 @@
+
 // routes/seller/order.js
 const express = require("express");
 const supabase = require("../../config/supabase");
@@ -6,7 +7,7 @@ const QRCode = require("qrcode");
 const PDFDocument = require("pdfkit");
 const router = express.Router();
 
-const SEND_URL = process.env.SEND_SERVICE_URL;
+const SEND_URL = process.env.SEND_URL;
 const CRYPTO_SECRET_KEY = process.env.CRYPTO_SECRET_KEY || "please_set_a_real_secret_in_env";
 
 const NodeCache = require("node-cache");
@@ -14,9 +15,7 @@ const orderCache = new NodeCache({ stdTTL: 30, checkperiod: 60 });
 const crypto = require("crypto");
 const { DateTime } = require("luxon");
 
-// -----------------------------
-// Helper crypto utilities (sama dengan checkout)
-// -----------------------------
+// Helper crypto utilities
 function signPayload(payload) {
   const stableStringify = (obj) => {
     if (obj === null || typeof obj !== "object") return JSON.stringify(obj);
@@ -28,9 +27,7 @@ function signPayload(payload) {
   return crypto.createHmac("sha256", CRYPTO_SECRET_KEY).update(str).digest("hex");
 }
 
-// -----------------------------
-// Helper DB wallet operations (sama dengan checkout)
-// -----------------------------
+// Helper DB wallet operations for sellers
 async function getSellerBalance(sellerId) {
   const { data, error } = await supabase
     .from("seller_balances")
@@ -42,10 +39,20 @@ async function getSellerBalance(sellerId) {
     return { balance: 0, withdrawable_balance: 0 };
   }
   if (error) throw error;
-  return { 
-    balance: Number(data?.balance ?? 0), 
-    withdrawable_balance: Number(data?.withdrawable_balance ?? 0) 
+  return {
+    balance: Number(data?.balance ?? 0),
+    withdrawable_balance: Number(data?.withdrawable_balance ?? 0),
   };
+}
+
+async function upsertSellerBalance(sellerId, newBalance) {
+  const { data, error } = await supabase
+    .from("seller_balances")
+    .upsert({ seller_id: sellerId, balance: newBalance }, { onConflict: "seller_id" })
+    .select()
+    .single();
+  if (error) throw error;
+  return data;
 }
 
 async function recordSellerTransaction({ sellerId, amount, type, orderId = null, metadata = {} }) {
@@ -63,10 +70,110 @@ async function recordSellerTransaction({ sellerId, amount, type, orderId = null,
     metadata,
   };
 
-  const { data, error } = await supabase.from("seller_balance_transactions").insert([insertObj]).select().single();
+  const { data, error } = await supabase
+    .from("seller_balance_transactions")
+    .insert([insertObj])
+    .select()
+    .single();
   if (error) throw error;
   return data;
 }
+
+async function withdrawSellerBalance(sellerId, amount, opts = {}) {
+  if (amount <= 0) throw new Error("Amount harus > 0");
+  const current = await getSellerBalance(sellerId);
+  if (Number(current.balance) < Number(amount)) {
+    throw new Error("Insufficient funds");
+  }
+  const newBalance = Number(current.balance) - Number(amount);
+  await upsertSellerBalance(sellerId, newBalance);
+  await recordSellerTransaction({
+    sellerId,
+    amount,
+    type: "debit",
+    orderId: opts.orderId || null,
+    metadata: opts.metadata || {},
+  });
+  return newBalance;
+}
+
+// Helper DB wallet operations for users
+async function getUserBalance(userId) {
+  const { data, error } = await supabase
+    .from("user_balances")
+    .select("balance")
+    .eq("user_id", userId)
+    .single();
+
+  if (error && error.code === "PGRST116") {
+    return 0;
+  }
+  if (error) throw error;
+  return Number(data?.balance ?? 0);
+}
+
+async function upsertUserBalance(userId, newBalance) {
+  const { data, error } = await supabase
+    .from("user_balances")
+    .upsert({ user_id: userId, balance: newBalance }, { onConflict: "user_id" })
+    .select()
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+async function recordUserTransaction({ userId, amount, type, orderId = null, metadata = {} }) {
+  const timestamp = DateTime.now().toISO();
+  const payloadToSign = { userId, amount, type, orderId, metadata, timestamp };
+  const signature = signPayload(payloadToSign);
+
+  const insertObj = {
+    user_id: userId,
+    amount,
+    type,
+    order_id: orderId,
+    timestamp,
+    signature,
+    metadata,
+  };
+
+  const { data, error } = await supabase
+    .from("user_balance_transactions")
+    .insert([insertObj])
+    .select()
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+async function mintUserBalance(userId, amount, opts = {}) {
+  if (amount <= 0) throw new Error("Amount harus > 0");
+  const current = await getUserBalance(userId);
+  const newBalance = Number(current) + Number(amount);
+  await upsertUserBalance(userId, newBalance);
+  await recordUserTransaction({
+    userId,
+    amount,
+    type: "credit",
+    orderId: opts.orderId || null,
+    metadata: opts.metadata || {},
+  });
+  return newBalance;
+}
+
+function safeParseImageUrl(data) {
+  if (!data) return null;
+  try {
+    const parsed = JSON.parse(data);
+    if (Array.isArray(parsed) && parsed.length > 0) {
+      return parsed[0];
+    }
+    return typeof parsed === "string" ? parsed : null;
+  } catch {
+    return data; // Fallback kalau bukan JSON valid
+  }
+}
+
 
 
 function safeParseImageUrl(data) {
@@ -630,14 +737,13 @@ router.get("/seller/:orderId", async (req, res) => {
   }
 });
 
-
 // -----------------------------
 // Update order status route
-// -----------------------------
+
 router.put("/orders/:id/status", async (req, res) => {
   const startTime = Date.now();
   console.log(`===== 📦 [UPDATE ORDER STATUS] Order ID: ${req.params.id} =====`);
-  
+
   try {
     // Parse seller info safely
     let sellerInfo;
@@ -660,17 +766,17 @@ router.put("/orders/:id/status", async (req, res) => {
       return res.status(400).json({ message: "⚠️ Aksi tidak boleh kosong." });
     }
 
-    // ===== Helper Functions =====
+    // Helper Functions
     const fetchOrder = async () => {
       const cacheKey = `order:${orderId}-${sellerInfo.id}`;
       let order = orderCache.get(cacheKey);
-      
+
       if (!order) {
         const { data, error } = await supabase
           .from("orders")
           .select(`
             *,
-            buyer:users(nama_penerima, no_telepon, email, username),
+            buyer:users(id, nama_penerima, no_telepon, email, username),
             seller:sellers(
               id, email, store_name,
               latitude, longitude,
@@ -680,7 +786,7 @@ router.put("/orders/:id/status", async (req, res) => {
           .eq("id", orderId)
           .eq("seller_id", sellerInfo.id)
           .single();
-        
+
         if (error || !data) {
           console.error("❌ Order fetch error:", error?.message);
           throw new Error("Order not found or access denied");
@@ -688,14 +794,14 @@ router.put("/orders/:id/status", async (req, res) => {
         order = data;
         orderCache.set(cacheKey, order, 30);
       }
-      
+
       return order;
     };
 
     const fetchOrderItems = async () => {
       const cacheKey = `order-items:${orderId}`;
       let items = orderCache.get(cacheKey);
-      
+
       if (!items) {
         const { data, error } = await supabase
           .from("order_items")
@@ -705,37 +811,93 @@ router.put("/orders/:id/status", async (req, res) => {
         items = data || [];
         orderCache.set(cacheKey, items, 30);
       }
-      
+
       return items;
     };
 
     const fetchProductDetails = async (items) => {
       if (!items.length) return [];
-      
-      const productIds = [...new Set(items.map(i => i.product_id))];
-      const variantIds = items.map(i => i.variant_id).filter(Boolean);
-      
+
+      const productIds = [...new Set(items.map((i) => i.product_id))];
+      const variantIds = items.map((i) => i.variant_id).filter(Boolean);
+
       const [productsRes, variantsRes] = await Promise.all([
-        supabase.from("products").select("id, product_name, product_image_url").in("id", productIds),
-        variantIds.length ? supabase.from("product_variants").select("id, variant_name, variant_image_url").in("id", variantIds) : { data: [] }
+        supabase.from("products").select("id, product_name, product_image_url, stock").in("id", productIds),
+        variantIds.length
+          ? supabase.from("product_variants").select("id, variant_name, variant_image_url, variant_stock").in("id", variantIds)
+          : { data: [] },
       ]);
-      
+
       if (productsRes.error) throw new Error("Failed to fetch products");
-      
+
       const products = productsRes.data || [];
       const variants = variantsRes.data || [];
-      
-      return items.map(item => {
-        const product = products.find(p => p.id === item.product_id);
-        const variant = variants.find(v => v.id === item.variant_id);
+
+      return items.map((item) => {
+        const product = products.find((p) => p.id === item.product_id);
+        const variant = variants.find((v) => v.id === item.variant_id);
         return {
           product_name: product?.product_name || "Unknown Product",
           variant_name: variant?.variant_name || null,
           quantity: item.quantity,
           total_price: item.price_per_item * item.quantity,
-          product_image_url: variant?.variant_image_url || product?.product_image_url,
+          product_image_url: variant?.variant_image_url || safeParseImageUrl(product?.product_image_url) || null,
         };
       });
+    };
+
+    const restoreStock = async (orderItems) => {
+      for (const item of orderItems) {
+        if (item.variant_id) {
+          // Restore stock to product_variants
+          const { data: variant, error: variantError } = await supabase
+            .from("product_variants")
+            .select("variant_stock")
+            .eq("id", item.variant_id)
+            .single();
+
+          if (variantError || !variant) {
+            console.error(`❌ Failed to fetch variant ${item.variant_id}:`, variantError?.message);
+            throw new Error("Failed to fetch variant for stock restoration");
+          }
+
+          const newStock = (variant.variant_stock || 0) + item.quantity;
+          const { error: updateError } = await supabase
+            .from("product_variants")
+            .update({ variant_stock: newStock })
+            .eq("id", item.variant_id);
+
+          if (updateError) {
+            console.error(`❌ Failed to restore stock for variant ${item.variant_id}:`, updateError.message);
+            throw new Error("Failed to restore variant stock");
+          }
+          console.log(`✅ Restored ${item.quantity} to variant ${item.variant_id} stock`);
+        } else {
+          // Restore stock to products
+          const { data: product, error: productError } = await supabase
+            .from("products")
+            .select("stock")
+            .eq("id", item.product_id)
+            .single();
+
+          if (productError || !product) {
+            console.error(`❌ Failed to fetch product ${item.product_id}:`, productError?.message);
+            throw new Error("Failed to fetch product for stock restoration");
+          }
+
+          const newStock = (product.stock || 0) + item.quantity;
+          const { error: updateError } = await supabase
+            .from("products")
+            .update({ stock: newStock })
+            .eq("id", item.product_id);
+
+          if (updateError) {
+            console.error(`❌ Failed to restore stock for product ${item.product_id}:`, updateError.message);
+            throw new Error("Failed to restore product stock");
+          }
+          console.log(`✅ Restored ${item.quantity} to product ${item.product_id} stock`);
+        }
+      }
     };
 
     const determineNewStatus = (order, action, barcodeId) => {
@@ -745,13 +907,18 @@ router.put("/orders/:id/status", async (req, res) => {
 
       const commonActions = {
         accept: () => {
+          if (order.payment_method === "digital" && order.status !== "processing") {
+            throw new Error("⚠️ Order dengan pembayaran digital hanya bisa diterima dari status 'processing'.");
+          }
+          if (order.payment_method === "cod" && order.status !== "pending") {
+            throw new Error("⚠️ Order dengan pembayaran COD hanya bisa diterima dari status 'pending'.");
+          }
           status = "sedang di kemas";
           payload.confirm_deadline = null;
         },
         cancel: () => {
           status = "dibatalkan";
           payload.cancel_reason = "❌ Dibatalkan oleh seller.";
-          // Jika cancel sebelum payment confirmed, refund jika perlu
           if (order.payment_status === "paid") {
             payload.refund_requested = true;
           }
@@ -770,18 +937,15 @@ router.put("/orders/:id/status", async (req, res) => {
           }
           status = "diterima";
           payload.confirm_by_buyers_deadline = now.plus({ hours: 5 }).toISO();
-          // 🚨 CRITICAL: Saat diterima, move balance dari holding ke withdrawable
-          payload.order_completed = true;
         }
       } else if (order.pickup_method === "diantar") {
         if (action === "ship") {
           status = "sedang di antar";
           payload.delivery_deadline = now.plus({ hours: 12 }).toISO();
-          payload.awb_number = req.body.awb_number || null; // Optional AWB
+          payload.awb_number = req.body.awb_number || null;
         } else if (action === "complete") {
           status = "diterima";
           payload.confirm_by_buyers_deadline = now.plus({ hours: 5 }).toISO();
-          // 🚨 CRITICAL: Saat diterima, move balance dari holding ke withdrawable
           payload.order_completed = true;
         }
       }
@@ -793,187 +957,26 @@ router.put("/orders/:id/status", async (req, res) => {
       return { status, payload };
     };
 
-    const validateStatusFlow = (current, next) => {
+    const validateStatusFlow = (order, newStatus) => {
       const statusFlow = {
         pending: ["sedang di kemas", "dibatalkan"],
+        processing: ["sedang di kemas", "dibatalkan"],
         "sedang di kemas": ["siap di ambil", "sedang di antar", "dibatalkan"],
         "siap di ambil": ["diterima", "dibatalkan"],
         "sedang di antar": ["diterima", "dibatalkan"],
       };
-      return statusFlow[current]?.includes(next) || false;
+      return statusFlow[order.status]?.includes(newStatus) || false;
     };
 
-    // ===== Generate PDF Function (untuk pickup sendiri) =====
-    const generatePDF = async (order, productDetails) => {
-      try {
-        const qrData = JSON.stringify({
-          orderId: order.id,
-          sellerId: sellerInfo.id,
-          timestamp: order.updated_at,
-        });
-        const qrCode = await QRCode.toDataURL(qrData, { width: 100 });
-
-        let logoBuffer;
-        try {
-          const logoUrl = "https://hihfiptclwrwuklojdec.supabase.co/storage/v1/object/public/store-photos/BG-Logo-Aplikasi.png";
-          const response = await axios.get(logoUrl, { responseType: "arraybuffer" });
-          logoBuffer = Buffer.from(response.data);
-        } catch (err) {
-          console.warn("⚠️ Failed to fetch logo, using without logo");
-        }
-
-        // Parse addresses safely
-        let buyerAddress = {};
-        let sellerAddress = {};
-        try {
-          buyerAddress = typeof order.buyer_address === "string" 
-            ? JSON.parse(order.buyer_address) 
-            : (order.buyer_address || {});
-          sellerAddress = {
-            store_address: order.seller.store_address,
-            kelurahan: order.seller.kelurahan,
-            kecamatan: order.seller.kecamatan,
-            kabupaten: order.seller.kabupaten,
-            provinsi: order.seller.provinsi,
-          };
-        } catch (err) {
-          console.error("Failed to parse addresses:", err.message);
-        }
-
-        const buyerFullAddress = [
-          buyerAddress.alamat_lengkap,
-          buyerAddress.kelurahan,
-          buyerAddress.kecamatan,
-          buyerAddress.kota_kabupaten,
-          buyerAddress.provinsi,
-          buyerAddress.kode_pos,
-        ].filter(Boolean).join(", ");
-
-        const sellerFullAddress = [
-          sellerAddress.store_address,
-          sellerAddress.kelurahan,
-          sellerAddress.kecamatan,
-          sellerAddress.kabupaten,
-          sellerAddress.provinsi,
-        ].filter(Boolean).join(", ");
-
-        return new Promise((resolve, reject) => {
-          const doc = new PDFDocument({ size: [252, 400], margin: 10 });
-          const buffers = [];
-          doc.on("data", buffers.push.bind(buffers));
-          doc.on("end", () => resolve(Buffer.concat(buffers)));
-          doc.on("error", reject);
-
-          // Border
-          doc.lineWidth(1).rect(18, 18, 216, 360).strokeColor("#d1d5db").stroke();
-
-          // Header
-          let yPos = 20;
-          if (logoBuffer) {
-            doc.image(logoBuffer, 20, yPos, { width: 30, height: 30 });
-            yPos += 35;
-          }
-          doc.fontSize(14).font("Helvetica-Bold").fillColor("#1e40af").text("SHIPPING LABEL", 55, yPos);
-          yPos += 17;
-          doc.fontSize(8).font("Helvetica").fillColor("#6b7280").text(`Order ID: ${order.id}`, 55, yPos);
-          yPos += 17;
-
-          // Pickup Method Badge
-          doc.roundedRect(180, 20, 50, 20, 4).fillColor("#dbeafe").fill();
-          doc.fontSize(9).font("Helvetica-Bold").fillColor("#1e40af").text(
-            order.pickup_method.toUpperCase(), 185, 28, { align: "center", width: 40 }
-          );
-
-          doc.moveTo(20, yPos + 5).lineTo(232, yPos + 5).lineWidth(1).strokeColor("#d1d5db").stroke();
-          yPos += 15;
-
-          // Receiver (untuk pickup sendiri, ini adalah instruksi toko)
-          doc.fontSize(9).font("Helvetica-Bold").fillColor("#1d4ed8").text("Toko Pengambilan", 20, yPos);
-          yPos += 12;
-          doc.fontSize(10).font("Helvetica-Bold").fillColor("#000").text(
-            order.seller.store_name || "Toko Seller", 25, yPos, { width: 200 }
-          );
-          yPos += 12;
-          const addrHeight = doc.heightOfString(sellerFullAddress, { width: 200 });
-          doc.fontSize(7).font("Helvetica").text(sellerFullAddress, 25, yPos, { width: 200 });
-          yPos += addrHeight + 8;
-
-          // Product Details
-          doc.fontSize(9).font("Helvetica-Bold").fillColor("#1d4ed8").text("Daftar Produk", 20, yPos);
-          yPos += 12;
-          
-          doc.roundedRect(20, yPos, 205, 80, 4).strokeColor("#d1d5db").stroke();
-          let itemY = yPos + 5;
-          
-          productDetails.slice(0, 3).forEach((item, index) => { // Max 3 items
-            if (itemY > yPos + 75) return; // Prevent overflow
-            
-            const lineHeight = item.variant_name ? 20 : 14;
-            if (itemY + lineHeight > yPos + 75) return;
-            
-            doc.fontSize(8).font("Helvetica-Bold").fillColor("#000").text(
-              item.product_name, 25, itemY, { width: 140 }
-            );
-            if (item.variant_name) {
-              doc.fontSize(7).font("Helvetica").fillColor("#6b7280").text(
-                item.variant_name, 25, itemY + 10, { width: 140 }
-              );
-            }
-            doc.fontSize(8).font("Helvetica-Bold").fillColor("#000").text(
-              `x${item.quantity}`, 175, itemY, { align: "right", width: 45 }
-            );
-            itemY += lineHeight + 2;
-          });
-
-          yPos += 95;
-
-          // Prices
-          if (yPos + 60 < 350) {
-            doc.roundedRect(20, yPos, 95, 25, 4).fillColor("#dbeafe").fill();
-            doc.fontSize(7).fillColor("#1d4ed8").text("Total Harga", 25, yPos + 5);
-            doc.fontSize(9).font("Helvetica-Bold").fillColor("#1e40af").text(
-              `Rp ${Number(order.total_price).toLocaleString()}`, 25, yPos + 12
-            );
-
-            if (order.delivery_fee > 0) {
-              doc.roundedRect(130, yPos, 95, 25, 4).fillColor("#dbeafe").fill();
-              doc.fontSize(7).fillColor("#1d4ed8").text("Ongkir", 135, yPos + 5);
-              doc.fontSize(9).font("Helvetica-Bold").fillColor("#1e40af").text(
-                `Rp ${Number(order.delivery_fee).toLocaleString()}`, 135, yPos + 12
-              );
-            }
-            yPos += 35;
-          }
-
-          // Footer & QR
-          doc.moveTo(20, Math.max(yPos, 310)).lineTo(232, Math.max(yPos, 310))
-             .dash(5, { space: 5 }).lineWidth(1).strokeColor("#93c5fd").stroke();
-          
-          const footerY = Math.max(yPos + 5, 315);
-          doc.fontSize(8).fillColor("#6b7280").text(
-            `Dicetak: ${DateTime.now().setZone("Asia/Jakarta").toFormat("dd MMM yyyy HH:mm")}`, 
-            20, footerY
-          );
-
-          if (qrCode && footerY + 55 < 380) {
-            doc.image(qrCode, 178, footerY, { width: 50, height: 50 });
-            doc.fontSize(7).fillColor("#6b7280").text(
-              "Scan QR untuk\nverifikasi", 178, footerY + 55, { align: "center", width: 50 }
-            );
-          }
-
-          doc.end();
-        });
-      } catch (err) {
-        console.error("❌ PDF Generation error:", err.message);
-        throw err;
-      }
-    };
-
-    // ===== MAIN FLOW =====
+    // MAIN FLOW
     console.log(`🔄 Fetching order ${orderId}...`);
     const order = await fetchOrder();
     console.log(`✅ Order found: ${order.status} → ${action}`);
+
+    if (!order.buyer?.id) {
+      console.error("❌ Order missing buyer_id:", orderId);
+      return res.status(400).json({ message: "❌ Order tidak memiliki informasi pembeli." });
+    }
 
     const orderItems = await fetchOrderItems();
     const productDetails = await fetchProductDetails(orderItems);
@@ -1000,7 +1003,7 @@ router.put("/orders/:id/status", async (req, res) => {
       });
     }
 
-    if (!validateStatusFlow(order.status, newStatus)) {
+    if (!validateStatusFlow(order, newStatus)) {
       return res.status(400).json({
         message: `⚠️ Tidak bisa berpindah dari '${order.status}' ke '${newStatus}' secara langsung.`,
       });
@@ -1009,7 +1012,7 @@ router.put("/orders/:id/status", async (req, res) => {
     // Prepare update payload
     updatePayload.status = newStatus;
     updatePayload.updated_at = DateTime.now().setZone("Asia/Jakarta").toISO();
-    
+
     // Seller address for delivery
     updatePayload.seller_address = {
       store_name: order.seller.store_name,
@@ -1029,14 +1032,73 @@ router.put("/orders/:id/status", async (req, res) => {
       .eq("id", orderId)
       .select(`
         *,
-        buyer:users(nama_penerima, no_telepon, email, username),
+        buyer:users(id, nama_penerima, no_telepon, email, username),
         seller:sellers(id, email, store_name)
       `)
       .single();
 
     if (updateError || !updatedOrder) {
       console.error("❌ Update error:", updateError?.message);
-      return res.status(500).json({ message: "❌ Gagal update status order." });
+      return res.status(500).json({ message: "❌ Gagal update status order.", error: updateError?.message });
+    }
+
+    // Handle refund and stock restoration if canceled
+    if (newStatus === "dibatalkan" && updatedOrder.payment_status === "paid") {
+      const grossAmount = Number(updatedOrder.total_price ?? 0);
+      const platformFee = 0; // Sesuaikan jika ada fee
+      const netAmount = grossAmount - platformFee;
+
+      if (netAmount <= 0) {
+        console.warn(`⚠️ Net amount for refund is 0 or negative for order ${orderId}. Skipping refund.`);
+      } else {
+        try {
+          // Debit dari seller balance
+          await withdrawSellerBalance(updatedOrder.seller.id, netAmount, {
+            orderId: updatedOrder.id,
+            metadata: { source: "seller_cancel_refund_debit" },
+          });
+          console.log(`✅ Debited seller ${updatedOrder.seller.id} amount ${netAmount}`);
+
+          // Credit ke user balance
+          await mintUserBalance(updatedOrder.buyer.id, netAmount, {
+            orderId: updatedOrder.id,
+            metadata: { source: "seller_cancel_refund_credit" },
+          });
+          console.log(`✅ Credited user ${updatedOrder.buyer.id} amount ${netAmount}`);
+
+          // Update order refund status
+          await supabase
+            .from("orders")
+            .update({
+              refund_status: "completed",
+              refunded_at: new Date().toISOString(),
+              refund_requested: false,
+            })
+            .eq("id", updatedOrder.id);
+          console.log(`✅ Updated refund status for order ${orderId}`);
+        } catch (refundErr) {
+          console.error(`❌ Refund failed for order ${orderId}:`, refundErr.message);
+          await supabase
+            .from("orders")
+            .update({
+              refund_status: "failed",
+              refund_requested: true,
+            })
+            .eq("id", updatedOrder.id);
+          return res.status(500).json({ message: "❌ Gagal memproses refund.", error: refundErr.message });
+        }
+      }
+    }
+
+    // Restore stock if canceled
+    if (newStatus === "dibatalkan") {
+      try {
+        await restoreStock(orderItems);
+        console.log(`✅ Stock restored for order ${orderId}`);
+      } catch (stockErr) {
+        console.error(`❌ Stock restoration failed for order ${orderId}:`, stockErr.message);
+        return res.status(500).json({ message: "❌ Gagal mengembalikan stok.", error: stockErr.message });
+      }
     }
 
     // Update terjual batch jika order diterima
@@ -1053,48 +1115,48 @@ router.put("/orders/:id/status", async (req, res) => {
       } catch (rpcErr) {
         console.error("❌ RPC error:", rpcErr.message);
       }
-
-      // 🚨 CRITICAL: Handle wallet balance movement saat order completed
-      await handleOrderCompletion(sellerInfo.id, orderId, updatedOrder);
     }
 
     // Invalidate cache
     orderCache.del([`order:${orderId}-${sellerInfo.id}`, `order-items:${orderId}`]);
 
-    // Generate PDF if needed (hanya untuk pickup sendiri)
-    let pdfBuffer = null;
-    let pdfBase64 = null;
-    if (newStatus === "siap di ambil" && order.pickup_method === "diambil") {
-      try {
-        console.log("📄 Generating PDF for pickup...");
-        pdfBuffer = await generatePDF(updatedOrder, productDetails);
-        pdfBase64 = pdfBuffer.toString('base64');
-        console.log("✅ PDF generated successfully");
-      } catch (pdfErr) {
-        console.error("❌ PDF generation failed:", pdfErr.message);
-      }
+    // Prepare data for email notification
+    const emailPayload = {
+      order_id: orderId,
+      products: productDetails,
+      buyer_email: updatedOrder.buyer?.email,
+      seller_email: updatedOrder.seller.email,
+      buyer_username: updatedOrder.buyer?.username,
+      seller_username: sellerInfo.username,
+      pickup_method: order.pickup_method,
+      new_status: newStatus,
+      seller_address: updatePayload.seller_address,
+      cancel_reason: updatePayload.cancel_reason || null,
+      total_price: updatedOrder.total_price,
+      delivery_fee: updatedOrder.delivery_fee,
+      buyer_address: updatedOrder.buyer_address,
+      updated_at: updatedOrder.updated_at,
+      created_at: updatedOrder.created_at,
+      ...(newStatus === "dibatalkan" && updatedOrder.refund_status === "completed" && {
+        refund_amount: updatedOrder.total_price,
+        refund_status: "completed",
+      }),
+    };
+
+    // Background: Kirim notifikasi email
+    let pdfAvailable = false;
+    if ((newStatus === "sedang di kemas" || newStatus === "siap di ambil" || newStatus === "diterima") && order.pickup_method === "diambil") {
+      pdfAvailable = true;
     }
 
-    // 🚀 Background: Kirim notifikasi email
     (async () => {
       try {
-        await axios.post(`${SEND_URL}/send-email-order`, {
-          order_id: orderId,
-          products: productDetails,
-          buyer_email: updatedOrder.buyer?.email,
-          seller_email: updatedOrder.seller.email,
-          buyer_username: updatedOrder.buyer?.username,
-          seller_username: sellerInfo.username,
-          pickup_method: order.pickup_method,
-          new_status: newStatus,
-          seller_address: updatePayload.seller_address,
-          cancel_reason: updatePayload.cancel_reason || null,
-          pdf_base64: pdfBase64, // Kirim sebagai base64 untuk attachment
-          ...(newStatus === "diterima" && { balance_notification: true }),
-        });
-        console.log("📧 Email notification sent");
+        console.log("📧 [EMAIL] Preparing to send email notification for order:", orderId);
+        console.log("📧 [EMAIL] Email payload:", emailPayload);
+        await axios.post(`${SEND_URL}/send-email-order`, emailPayload);
+        console.log("✅ [EMAIL] Email notification request sent successfully");
       } catch (emailErr) {
-        console.error("❌ Failed to send email:", emailErr.response?.data || emailErr.message);
+        console.error("❌ [EMAIL] Failed to send email:", emailErr.response?.data || emailErr.message);
       }
     })();
 
@@ -1107,7 +1169,7 @@ router.put("/orders/:id/status", async (req, res) => {
       message: `✅ Status order berhasil diubah ke '${newStatus}'`,
       order: updatedOrder,
       processing_time: `${processingTime}s`,
-      ...(pdfBase64 && { pdf_available: true }),
+      ...(pdfAvailable && { pdf_available: true }),
     });
 
   } catch (err) {
@@ -1116,11 +1178,10 @@ router.put("/orders/:id/status", async (req, res) => {
     console.error(`⏱ Total time: ${((endTime - startTime) / 1000).toFixed(2)}s`);
     return res.status(500).json({
       message: "❌ Terjadi kesalahan server.",
-      error: process.env.NODE_ENV === 'development' ? err.message : "Internal server error",
+      error: process.env.NODE_ENV === "development" ? err.message : "Internal server error",
     });
   }
 });
-
 // -----------------------------
 // Handle Order Completion - Move balance to withdrawable
 // -----------------------------
@@ -1181,37 +1242,5 @@ async function handleOrderCompletion(sellerId, orderId, order) {
   }
 }
 
-// -----------------------------
-// Get Seller Balance
-// -----------------------------
-router.get("/balance", async (req, res) => {
-  try {
-    const sellerInfo = req.cookies?.seller_info ? JSON.parse(req.cookies.seller_info) : null;
-    if (!sellerInfo?.id) {
-      return res.status(401).json({ message: "❌ Harus login sebagai seller." });
-    }
-
-    const balance = await getSellerBalance(sellerInfo.id);
-    const transactions = await supabase
-      .from("seller_balance_transactions")
-      .select("*, order:orders!inner(id, status, total_price, created_at)")
-      .eq("seller_id", sellerInfo.id)
-      .order("timestamp", { ascending: false })
-      .limit(10);
-
-    return res.status(200).json({
-      balance: {
-        total: balance.balance,
-        withdrawable: balance.withdrawable_balance,
-        pending: balance.balance - balance.withdrawable_balance,
-      },
-      recent_transactions: transactions.data || [],
-    });
-
-  } catch (err) {
-    console.error("❌ Get balance error:", err.message);
-    return res.status(500).json({ message: "❌ Gagal mengambil data balance." });
-  }
-});
 
 module.exports = router;

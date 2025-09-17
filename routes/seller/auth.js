@@ -538,6 +538,18 @@ router.post("/reset-password", detectSpam, verifyCaptcha, async (req, res) => {
 });
 
 
+//Multer setup for store image
+const uploadStoreImage = multer({
+  limits: { fileSize: 5 * 1024 * 1024 }, // max 5 MB
+  fileFilter: (req, file, cb) => {
+    if (file.mimetype === "image/jpeg" || file.mimetype === "image/png") {
+      cb(null, true);
+    } else {
+      cb(new Error("Gambar toko harus JPEG atau PNG"));
+    }
+  },
+});
+
 // ====================== UPDATE USER ======================
 // Helper ambil nama wilayah (sama persis seperti di user)
 async function getWilayahName(url, id) {
@@ -549,9 +561,11 @@ async function getWilayahName(url, id) {
   return found.name;
 }
 
+
+// PUT /seller/update/:id (Update Seller)
 router.put(
   "/seller/update/:id",
-  upload.single("store_image_url"),
+  uploadStoreImage.single("store_image_url"),
   async (req, res) => {
     try {
       console.log("👉 Mulai proses update seller");
@@ -597,23 +611,45 @@ router.put(
         role,
         is_delivery_available,
         delivery_fee,
+        pin,
+        bankCode,
+        accountHolderName,
+        accountNumber,
       } = body;
 
-      const updatePayload = {};
+      // Validate PIN if provided
+      if (pin && (pin.toString().length < 4 || pin.toString().length > 6)) {
+        return res.status(400).json({ error: "⚠️ PIN harus 4-6 digit." });
+      }
 
-      if (email) updatePayload.email = email;
-      if (name) updatePayload.name = name;
-      if (business_name) updatePayload.business_name = business_name;
-      if (phone) updatePayload.phone = phone;
-      if (store_name) updatePayload.store_name = store_name;
-      if (store_address) updatePayload.store_address = store_address;
-      if (latitude) updatePayload.latitude = latitude;
-      if (longitude) updatePayload.longitude = longitude;
-      if (role) updatePayload.role = role;
+      // Validate bank fields if any are provided
+      if (
+        (bankCode || accountHolderName || accountNumber) &&
+        !(bankCode && accountHolderName && accountNumber)
+      ) {
+        return res.status(400).json({
+          error:
+            "⚠️ bankCode, accountHolderName, dan accountNumber harus diisi bersama-sama jika salah satu disediakan.",
+        });
+      }
+
+      const updateSellerPayload = {};
+      const updateBalancePayload = {};
+
+      // Populate seller payload
+      if (email) updateSellerPayload.email = email;
+      if (name) updateSellerPayload.name = name;
+      if (business_name) updateSellerPayload.business_name = business_name;
+      if (phone) updateSellerPayload.phone = phone;
+      if (store_name) updateSellerPayload.store_name = store_name;
+      if (store_address) updateSellerPayload.store_address = store_address;
+      if (latitude) updateSellerPayload.latitude = parseFloat(latitude);
+      if (longitude) updateSellerPayload.longitude = parseFloat(longitude);
+      if (role) updateSellerPayload.role = role;
       if (typeof is_delivery_available !== "undefined")
-        updatePayload.is_delivery_available =
-          is_delivery_available === "true" || is_delivery_available === true;
-      if (delivery_fee) updatePayload.delivery_fee = delivery_fee;
+        updateSellerPayload.is_delivery_available =
+          String(is_delivery_available).toLowerCase() === "true";
+      if (delivery_fee) updateSellerPayload.delivery_fee = parseFloat(delivery_fee);
 
       // === Upload / Replace Gambar Toko ===
       if (req.file) {
@@ -643,50 +679,88 @@ router.put(
           .from("store-photos")
           .getPublicUrl(filename);
 
-        updatePayload.store_image_url = publicUrl.publicUrl;
+        updateSellerPayload.store_image_url = publicUrl.publicUrl;
       }
 
       // === Update wilayah ===
       if (provinsi_id) {
-        updatePayload.provinsi = await getWilayahName(
+        updateSellerPayload.provinsi = await getWilayahName(
           "https://www.emsifa.com/api-wilayah-indonesia/api/provinces.json",
           provinsi_id
         );
       }
       if (kabupaten_id && provinsi_id) {
-        updatePayload.kabupaten = await getWilayahName(
+        updateSellerPayload.kabupaten = await getWilayahName(
           `https://www.emsifa.com/api-wilayah-indonesia/api/regencies/${provinsi_id}.json`,
           kabupaten_id
         );
       }
       if (kecamatan_id && kabupaten_id) {
-        updatePayload.kecamatan = await getWilayahName(
+        updateSellerPayload.kecamatan = await getWilayahName(
           `https://www.emsifa.com/api-wilayah-indonesia/api/districts/${kabupaten_id}.json`,
           kecamatan_id
         );
       }
       if (kelurahan_id && kecamatan_id) {
-        updatePayload.kelurahan = await getWilayahName(
+        updateSellerPayload.kelurahan = await getWilayahName(
           `https://www.emsifa.com/api-wilayah-indonesia/api/villages/${kecamatan_id}.json`,
           kelurahan_id
         );
       }
 
-      console.log("📤 Payload final yang akan diupdate:", updatePayload);
-
-      // === Update DB seller ===
-      const { data, error } = await supabase
-        .from("sellers")
-        .update(updatePayload)
-        .eq("id", sellerId)
-        .select();
-
-      if (error) {
-        console.error("❌ Gagal update seller di DB:", error);
-        return res.status(400).json({ error: error.message });
+      // Validate wilayah dependencies
+      if (
+        (kelurahan_id && !kecamatan_id) ||
+        (kecamatan_id && !kabupaten_id) ||
+        (kabupaten_id && !provinsi_id)
+      ) {
+        return res.status(400).json({
+          error: "Data wilayah tidak lengkap. Harus menyertakan provinsi, kabupaten, kecamatan, dan kelurahan secara berurutan.",
+        });
       }
 
-      console.log("✅ Data seller berhasil diperbarui:", data);
+      // === Populate balance payload ===
+      if (pin) {
+        updateBalancePayload.seller_pin_hash = await bcrypt.hash(pin.toString(), 12);
+      }
+      if (bankCode) updateBalancePayload.bank_code = bankCode;
+      if (accountHolderName) updateBalancePayload.account_holder_name = accountHolderName;
+      if (accountNumber) updateBalancePayload.account_number = accountNumber;
+
+      console.log("📤 Payload final untuk sellers:", updateSellerPayload);
+      console.log("📤 Payload final untuk seller_balances:", updateBalancePayload);
+
+      // === Update DB seller ===
+      if (Object.keys(updateSellerPayload).length > 0) {
+        const { data: sellerData, error: sellerError } = await supabase
+          .from("sellers")
+          .update(updateSellerPayload)
+          .eq("id", sellerId)
+          .select();
+
+        if (sellerError) {
+          console.error("❌ Gagal update seller di DB:", sellerError);
+          return res.status(400).json({ error: sellerError.message });
+        }
+
+        console.log("✅ Data seller berhasil diperbarui:", sellerData);
+      }
+
+      // === Update DB seller_balances ===
+      if (Object.keys(updateBalancePayload).length > 0) {
+        const { data: balanceData, error: balanceError } = await supabase
+          .from("seller_balances")
+          .update(updateBalancePayload)
+          .eq("seller_id", sellerId)
+          .select();
+
+        if (balanceError) {
+          console.error("❌ Gagal update seller_balances di DB:", balanceError);
+          return res.status(400).json({ error: balanceError.message });
+        }
+
+        console.log("✅ Data seller_balances berhasil diperbarui:", balanceData);
+      }
 
       // === Sinkronisasi seller_name di tabel products ===
       if (name) {
@@ -698,7 +772,7 @@ router.put(
 
         if (productUpdateError) {
           console.error("⚠️ Gagal sinkronisasi seller_name di products:", productUpdateError);
-          // jangan return error, biarkan update seller tetap berhasil
+          // Jangan return error, biarkan update seller tetap berhasil
         } else {
           console.log("✅ Semua produk berhasil diupdate seller_name.");
         }
@@ -706,7 +780,10 @@ router.put(
 
       res.json({
         message: "✅ Data toko berhasil diperbarui",
-        data,
+        data: {
+          seller: updateSellerPayload,
+          balance: updateBalancePayload,
+        },
       });
     } catch (err) {
       console.error("💥 Error server:", err);

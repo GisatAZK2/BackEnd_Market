@@ -151,7 +151,7 @@ sellerRouter.use("/promoteseller", promoteproductseller);
 sellerRouter.use("/ratingseller", ratingselelr);
 sellerRouter.use("/statsSeller", StatistikSeller);
 sellerRouter.use("/awbseller", awblabelseller);
-sellerRouter.use("/withdrawpayment", paymentseller);
+sellerRouter.use("/payment", paymentseller);
 sellerRouter.get("/test", (req, res) => {
   res.json({ message: "Seller V1 API aktif 🚀" });
 });
