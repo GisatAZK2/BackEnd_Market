@@ -29,6 +29,7 @@ const cart = require("./routes/cart");
 const ratingcustomer = require("./routes/ratingcustomer.js");
 const discount = require("./routes/discount");
 const sellerWithProductsRoutes = require("./routes/seller");
+const paymentbuyers = require("./routes/finance.js");
 const { router: wilayah } = require("./utils/wilayahutils");
 
 // === Seller sub-routes ===
@@ -139,6 +140,7 @@ app.use("/cart", cache("10 seconds"), cart);
 app.use("/sticker", sticker);
 app.use("/discount", discount);
 app.use("/rating", ratingcustomer);
+app.use("/paymentuser", paymentbuyers);
 app.use("/seller", cache("10 seconds"), sellerWithProductsRoutes);
 
 // === Seller V1 Routes ===

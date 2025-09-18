@@ -395,12 +395,6 @@ router.get("/balance", async (req, res) => {
     }
 
     const balance = await getSellerBalance(sellerInfo.id);
-    const transactions = await supabase
-      .from("seller_balance_transactions")
-      .select("*, order:orders!inner(id, status, total_price, created_at)")
-      .eq("seller_id", sellerInfo.id)
-      .order("timestamp", { ascending: false })
-      .limit(10);
 
     return res.status(200).json({
       balance: {
@@ -408,7 +402,6 @@ router.get("/balance", async (req, res) => {
         withdrawable: balance.withdrawable_balance,
         pending: balance.balance - balance.withdrawable_balance,
       },
-      recent_transactions: transactions.data || [],
     });
 
   } catch (err) {

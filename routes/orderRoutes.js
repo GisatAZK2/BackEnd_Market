@@ -110,44 +110,46 @@ async function mintSellerBalance(sellerId, amount, opts = {}) {
   });
   return newBalance;
 }
-
-async function withdrawSellerBalance(sellerId, amount, opts = {}) {
-  if (amount <= 0) throw new Error("Amount harus > 0");
-  const current = await getSellerBalance(sellerId);
-  if (Number(current) < Number(amount)) {
-    throw new Error("Insufficient funds");
-  }
-  const newBalance = Number(current) - Number(amount);
-  await upsertSellerBalance(sellerId, newBalance);
-  await recordSellerTransaction({
-    sellerId,
-    amount,
-    type: "debit",
-    orderId: opts.orderId || null,
-    metadata: opts.metadata || {},
-  });
-  return newBalance;
-}
-
 // Helper DB wallet operations for users
 async function getUserBalance(userId) {
   const { data, error } = await supabase
     .from("user_balances")
-    .select("balance")
+    .select("balance, withdrawable_balance, user_pin_hash, bank_code, account_holder_name, account_number")
     .eq("user_id", userId)
     .single();
 
   if (error && error.code === "PGRST116") {
-    return 0;
+    return {
+      balance: 0,
+      withdrawable_balance: 0,
+      user_pin_hash: null,
+      bank_code: null,
+      account_holder_name: null,
+      account_number: null,
+    };
   }
   if (error) throw error;
-  return Number(data?.balance ?? 0);
+  return {
+    balance: Number(data?.balance ?? 0),
+    withdrawable_balance: Number(data?.withdrawable_balance ?? 0),
+    user_pin_hash: data?.user_pin_hash,
+    bank_code: data?.bank_code,
+    account_holder_name: data?.account_holder_name,
+    account_number: data?.account_number,
+  };
 }
 
-async function upsertUserBalance(userId, newBalance) {
+async function upsertUserBalance(userId, newBalance, newWithdrawableBalance) {
   const { data, error } = await supabase
     .from("user_balances")
-    .upsert({ user_id: userId, balance: newBalance }, { onConflict: "user_id" })
+    .upsert(
+      {
+        user_id: userId,
+        balance: newBalance,
+        withdrawable_balance: newWithdrawableBalance,
+      },
+      { onConflict: "user_id" }
+    )
     .select()
     .single();
   if (error) throw error;
@@ -178,14 +180,31 @@ async function recordUserTransaction({ userId, amount, type, orderId = null, met
   return data;
 }
 
+async function mintUserBalance(userId, amount, opts = {}) {
+  if (amount <= 0) throw new Error("Amount harus > 0");
+  const current = await getUserBalance(userId);
+  const newBalance = Number(current.balance) + Number(amount);
+  const newWithdrawableBalance = Number(current.withdrawable_balance) + Number(amount);
+  await upsertUserBalance(userId, newBalance, newWithdrawableBalance);
+  await recordUserTransaction({
+    userId,
+    amount,
+    type: "credit",
+    orderId: opts.orderId || null,
+    metadata: opts.metadata || {},
+  });
+  return newBalance;
+}
+
 async function withdrawUserBalance(userId, amount, opts = {}) {
   if (amount <= 0) throw new Error("Amount harus > 0");
   const current = await getUserBalance(userId);
-  if (Number(current) < Number(amount)) {
-    throw new Error("Insufficient funds");
+  if (Number(current.withdrawable_balance) < Number(amount)) {
+    throw new Error("Insufficient withdrawable funds");
   }
-  const newBalance = Number(current) - Number(amount);
-  await upsertUserBalance(userId, newBalance);
+  const newBalance = Number(current.balance) - Number(amount);
+  const newWithdrawableBalance = Number(current.withdrawable_balance) - Number(amount);
+  await upsertUserBalance(userId, newBalance, newWithdrawableBalance);
   await recordUserTransaction({
     userId,
     amount,
@@ -416,9 +435,9 @@ router.get("/received", async (req, res) => {
   }
 });
 
-
-
-// Checkout Route
+// =====================================
+// 🛒 POST /cart/checkout
+// =====================================
 router.post("/cart/checkout", async (req, res) => {
   const startTime = Date.now();
   console.log("===== 🛒 [CHECKOUT ROUTE DIPANGGIL] =====");
@@ -796,10 +815,10 @@ router.post("/cart/checkout", async (req, res) => {
 
           // Check user balance
           const userBalance = await getUserBalance(userInfo.id);
-          if (userBalance < totalPrice) {
+          if (userBalance.balance < totalPrice) {
             console.error(`❌ Insufficient balance for user ${userInfo.id} on order ${order.id}`);
             return res.status(400).json({
-              message: `⚠️ Saldo tidak cukup. Saldo saat ini: ${userBalance}, dibutuhkan: ${totalPrice}.`,
+              message: `⚠️ Saldo tidak cukup. Saldo saat ini: ${userBalance.balance}, dibutuhkan: ${totalPrice}.`,
             });
           }
 
