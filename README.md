@@ -1,6 +1,6 @@
 # Dokumentasi API Backend
 
-Selamat datang di dokumentasi API Backend untuk aplikasi e-commerce. API ini menggunakan endpoint dengan basis URL `backencihuyy.up.railway.app`. Rute untuk seller menggunakan prefix `/seller/v1`, sedangkan rute untuk pembeli tidak menggunakan prefix. Berikut adalah penjelasan mengenai rute-rute utama yang telah diperbarui, termasuk penambahan field seperti `bankCode`, `pin`, dan lainnya, serta contoh request dan script Postman untuk bagian keuangan.
+Selamat datang di dokumentasi API Backend untuk aplikasi e-commerce. API ini menggunakan endpoint dengan basis URL `https://backendcihuyy.up.railway.app`. Rute untuk seller menggunakan prefix `/seller/v1`, sedangkan rute untuk pembeli tidak menggunakan prefix. Berikut adalah penjelasan mengenai rute-rute utama yang telah diperbarui, termasuk penambahan field seperti `bankCode`, `pin`, dan lainnya, serta contoh request dan script Postman untuk bagian keuangan.
 
 ## Daftar Isi
 1. [Rute Seller](#rute-seller)
