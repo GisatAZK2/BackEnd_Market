@@ -12,6 +12,7 @@ const {
 // Environment variables
 const SEND_URL = process.env.SEND_SERVICE_URL;
 const XENDIT_SECRET_KEY = process.env.XENDIT_SECRET_KEY;
+const FRONTEND_URLS = process.env.FRONTEND_URL.split(","); 
 const BASE_URL = FRONTEND_URLS[0]; 
 const CRYPTO_SECRET_KEY =
   process.env.CRYPTO_SECRET_KEY || "please_set_a_real_secret_in_env";
