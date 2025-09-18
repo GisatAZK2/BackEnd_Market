@@ -99,8 +99,6 @@ Selamat datang di dokumentasi API Backend untuk aplikasi e-commerce. API ini men
 ```json
 {
   "action": "accept",
-  "barcodeId": "12345",
-  "awb_number": "TRX123456789"
 }
 ```
 **Aksi yang Didukung**:
