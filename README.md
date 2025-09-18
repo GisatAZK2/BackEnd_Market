@@ -1,329 +1,350 @@
-# Dokumentasi API Promosi Penjual dan Diskon Pelanggan
+# Dokumentasi API Backend
 
-API ini menyediakan fitur untuk mengelola promosi penjual dan diskon pelanggan melalui rute-rute yang terpisah untuk penjual dan pelanggan. API ini dibangun menggunakan Express.js dan Supabase sebagai database. Berikut adalah penjelasan rute yang tersedia untuk penjual dan pelanggan.
+Selamat datang di dokumentasi API Backend untuk aplikasi e-commerce. API ini menggunakan endpoint dengan basis URL `backencihuyy.up.railway.app`. Rute untuk seller menggunakan prefix `/seller/v1`, sedangkan rute untuk pembeli tidak menggunakan prefix. Berikut adalah penjelasan mengenai rute-rute utama yang telah diperbarui, termasuk penambahan field seperti `bankCode`, `pin`, dan lainnya, serta contoh request dan script Postman untuk bagian keuangan.
 
-## Base URL
-- **Penjual**: `backendcihuyy.up.railway.app/seller/V1/promoteseller`
-- **Pelanggan**: `backendcihuyy.up.railway.app/discount/`
+## Daftar Isi
+1. [Rute Seller](#rute-seller)
+   - [Update Seller](#update-seller)
+   - [Pendaftaran Seller](#pendaftaran-seller)
+   - [Update Status Order](#update-status-order)
+   - [Keuangan Seller](#keuangan-seller)
+2. [Rute Pembeli](#rute-pembeli)
+   - [Checkout](#checkout)
+   - [Keuangan Pembeli](#keuangan-pembeli)
+   - [Update User](#update-user)
 
-## Deskripsi Umum
-API ini memungkinkan:
-- **Penjual**: Mendaftarkan produk ke event promosi, mengelola produk dalam event, menghapus produk dari event, serta melihat daftar produk yang tersedia untuk event.
-- **Pelanggan**: Melihat daftar event promosi dan detail event tertentu beserta produk yang terkait.
+## Rute Seller
 
-## Rute Penjual
-Berikut adalah endpoint yang tersedia untuk penjual di bawah base URL `backendcihuyy.up.railway.app/seller/V1/promoteseller`.
+### Update Seller
+**Endpoint**: `PUT /seller/v1/auth/seller/update/:id`  
+**Deskripsi**: Mengupdate data seller, termasuk informasi toko, alamat, dan data bank. Mendukung upload gambar toko dan validasi PIN serta data bank.  
+**Fitur Baru**:
+- Penambahan field `bankCode`, `pin`, `accountHolderName`, dan `accountNumber`.
+- Validasi PIN (4-6 digit).
+- Validasi data bank harus diisi bersama-sama jika salah satu disediakan.
+- Sinkronisasi `seller_name` ke tabel `products` jika nama diubah.
 
-### 1. **POST /event/register**
-Mendaftarkan produk ke event promosi.
-
-- **Deskripsi**: Menambahkan produk atau varian produk ke event tertentu dengan memeriksa aturan seperti kategori, stok minimum, dan diskon minimum.
-- **Body**:
-  ```json
-  {
-    "event_id": "string",
-    "products": [
-      {
-        "product_id": "string",
-        "variant_id": "string | null",
-        "event_stock": number,
-        "discount_percentage": number
-      }
-    ]
-  }
-  ```
-- **Respons Sukses**:
-  ```json
-  {
-    "message": "✅ Produk berhasil didaftarkan ke event",
-    "accepted": [{ seller_id, event_id, product_id, variant_id, event_discount, event_stock }],
-    "rejected": [{ product_id, variant_id, reason }]
-  }
-  ```
-- **Respons Gagal**:
-  - 401: Harus login sebagai penjual.
-  - 400: Data tidak lengkap atau tidak ada produk yang memenuhi aturan.
-  - 404: Event tidak ditemukan.
-  - 500: Gagal mendaftarkan produk.
-
-### 2. **GET /events/seller**
-Mengambil daftar event dengan jumlah penjual terdaftar dan status event.
-
-- **Deskripsi**: Mengembalikan daftar semua event dengan informasi jumlah penjual yang mendaftar dan status event (upcoming, active, ended).
-- **Respons Sukses**:
-  ```json
-  {
-    "message": "✅ Daftar event untuk seller dengan jumlah seller terdaftar",
-    "data": [
-      {
-        "id": "string",
-        "start_time": "string",
-        "end_time": "string",
-        "seller_count": number,
-        "status": "upcoming | active | ended",
-        ...
-      }
-    ]
-  }
-  ```
-- **Respons Gagal**:
-  - 500: Gagal mengambil daftar event.
-
-
-### 3. PUT `/event/:eventId/products`
-Endpoint ini digunakan untuk memperbarui stok dan/atau diskon produk dalam event secara batch.
-
-#### Parameter
-- **Path Parameters**:
-  - `eventId`: ID dari event yang produknya akan diperbarui.
-- **Body** (JSON):
-  ```json
-  {
-    "items": [
-      {
-        "product_id": "string",
-        "variant_id": "string" (opsional),
-        "stock": number (opsional),
-        "event_discount": number (opsional)
-      }
-    ]
-  }
-  ```
-
-#### Autentikasi
-- Tidak ada autentikasi eksplisit dalam kode, tetapi dianjurkan untuk menambahkan validasi seller.
-
-#### Contoh Request
-```bash
-PUT /event/123/products
-```
-**Body**:
+**Contoh Request Body**:
 ```json
 {
-  "items": [
-    {
-      "product_id": "456",
-      "variant_id": "789",
-      "stock": 50,
-      "event_discount": 10
-    },
-    {
-      "product_id": "101",
-      "stock": 100
-    }
-  ]
+  "email": "seller@example.com",
+  "name": "Nama Seller",
+  "business_name": "Nama Bisnis",
+  "phone": "081234567890",
+  "store_name": "Toko Seller",
+  "store_address": "Jl. Contoh No. 123",
+  "provinsi_id": "1",
+  "kabupaten_id": "101",
+  "kecamatan_id": "1001",
+  "kelurahan_id": "10001",
+  "latitude": "-6.123456",
+  "longitude": "106.123456",
+  "is_delivery_available": "true",
+  "delivery_fee": "15000",
+  "pin": "123456",
+  "bankCode": "BCA",
+  "accountHolderName": "Nama Pemilik Rekening",
+  "accountNumber": "1234567890"
+}
+```
+**Catatan**:
+- File gambar toko diunggah melalui `store_image_url` menggunakan `multipart/form-data`.
+- Validasi wilayah memastikan urutan pengisian (`provinsi_id` → `kabupaten_id` → `kecamatan_id` → `kelurahan_id`).
+
+### Pendaftaran Seller
+**Endpoint**: `POST /seller/v1/forum-pendaftaran/seller`  
+**Deskripsi**: Mendaftarkan seller baru, termasuk informasi toko, alamat, dan data bank. Menggunakan upload gambar toko dan pengiriman OTP untuk verifikasi email.  
+**Fitur Baru**:
+- Penambahan field `pin`, `bankCode`, `accountHolderName`, dan `accountNumber` sebagai wajib.
+- Validasi PIN (4-6 digit).
+- Validasi semua field wajib, termasuk koordinat dan data bank.
+
+**Contoh Request Body**:
+```json
+{
+  "email": "new.seller@example.com",
+  "name": "Nama Seller",
+  "businessName": "Nama Bisnis",
+  "phone": "081234567890",
+  "storeName": "Toko Baru",
+  "storeAddress": "Jl. Baru No. 1",
+  "provinsi_id": "1",
+  "kota_id": "101",
+  "kecamatan_id": "1001",
+  "kelurahan_id": "10001",
+  "latitude": "-6.123456",
+  "longitude": "106.123456",
+  "is_delivery_available": "true",
+  "delivery_fee": "15000",
+  "password": "P@ssw0rd123",
+  "pin": "123456",
+  "bankCode": "BCA",
+  "accountHolderName": "Nama Pemilik",
+  "accountNumber": "1234567890"
+}
+```
+**Catatan**:
+- Gambar toko diunggah melalui `storeImage` menggunakan `multipart/form-data`.
+- Password harus memenuhi kriteria keamanan (min. 8 karakter, huruf besar, kecil, angka, dan simbol).
+
+### Update Status Order
+**Endpoint**: `PUT /seller/v1/order/orders/:id/status`  
+**Deskripsi**: Mengupdate status pesanan seller dengan validasi alur status dan penanganan refund serta pengembalian stok untuk pembatalan.  
+**Fitur Baru**:
+- Penambahan logika refund otomatis saat pembatalan untuk pembayaran digital.
+- Pengembalian stok produk/varian saat status menjadi `dibatalkan`.
+- Notifikasi email dengan detail produk dan alamat seller.
+
+**Contoh Request Body**:
+```json
+{
+  "action": "accept",
+  "barcodeId": "12345",
+  "awb_number": "TRX123456789"
+}
+```
+**Aksi yang Didukung**:
+- `accept`: Menerima pesanan (dari `pending` atau `processing`).
+- `cancel`: Membatalkan pesanan (dengan refund jika sudah dibayar).
+- `ready`: Menandakan pesanan siap diambil (untuk `pickup_method: diambil`).
+- `ship`: Mengirim pesanan (untuk `pickup_method: diantar`).
+- `complete`: Menyelesaikan pesanan (dari `siap di ambil` atau `sedang di antar`).
+
+**Catatan**:
+- Validasi alur status memastikan transisi yang valid (misalnya, dari `pending` hanya ke `sedang di kemas` atau `dibatalkan`).
+- Cache digunakan untuk mengurangi query database.
+
+### Keuangan Seller
+**Endpoint**:
+- `POST /seller/v1/payment/withdraw/batch`: Melakukan penarikan saldo seller ke rekening bank.
+- `GET /seller/v1/payment/withdrawals`: Mengambil riwayat penarikan saldo.
+- `GET /seller/v1/payment/transactions`: Mengambil riwayat transaksi saldo.
+- `GET /seller/v1/payment/balance`: Mengambil informasi saldo seller.
+- `POST /seller/v1/payment/set-pin`: Mengatur atau mengubah PIN seller.
+
+**Fitur Baru**:
+- Penarikan saldo menggunakan Xendit dengan validasi PIN dan signature.
+- Penyimpanan riwayat transaksi dan penarikan di tabel `seller_balance_transactions` dan `seller_withdrawals`.
+- Validasi PIN (4-6 digit) dan otorisasi menggunakan `seller_info` dari cookies.
+
+**Contoh Request Body (Withdraw)**:
+```json
+{
+  "seller_id": "{{seller_id}}",
+  "amount": {{amount}},
+  "bank_code": "{{bank_code}}",
+  "account_number": "{{account_number}}",
+  "channel_properties": {
+    "account_holder_name": "{{account_holder_name}}"
+  },
+  "timestamp": {{timestamp}},
+  "signature": "{{signature}}"
 }
 ```
 
-#### Response
-- **Sukses** (200):
-  ```json
-  {
-    "results": [
-      {
-        "product_id": "456",
-        "variant_id": "789",
-        "success": true,
-        "message": "✅ Data event berhasil diperbarui",
-        "old_stock": 30,
-        "new_stock": 50,
-        "old_discount": 5,
-        "new_discount": 10
-      },
-      {
-        "product_id": "101",
-        "success": true,
-        "message": "✅ Data event berhasil diperbarui",
-        "old_stock": 80,
-        "new_stock": 100,
-        "old_discount": 0,
-        "new_discount": 0
-      }
-    ]
-  }
-  ```
-- **Error**:
-  - 400: Jika `items` bukan array atau kosong, stok tidak valid, atau produk memiliki varian tetapi `variant_id` tidak diberikan.
-  - 500: Jika terjadi kesalahan server.
+**Script Postman untuk Withdraw Seller**:
+```javascript
+// Fungsi stableStringify (harus sama dengan di backend)
+function stableStringify(obj) {
+  if (obj === null || typeof obj !== "object") return JSON.stringify(obj);
+  if (Array.isArray(obj)) return `[${obj.map(stableStringify).join(",")}]`;
+  const keys = Object.keys(obj).sort();
+  return `{${keys.map((k) => JSON.stringify(k) + ":" + stableStringify(obj[k])).join(",")}}`;
+}
 
-#### Catatan
-- Pembaruan stok akan otomatis menyesuaikan stok di tabel `products` atau `product_variants`.
-- Jika stok tidak mencukupi, pembaruan akan gagal untuk item tersebut.
-- Logging disediakan untuk debugging (lihat `console.log` dalam kode).
+// === Data request ===
+const sellerId = "34882968-93c6-4408-9619-8ebbd022fe27";        // ganti sesuai DB / cookies
+const amount = 3000;                 // contoh nominal
+const bankCode = "BNI";            // contoh kode bank
+const accountNumber = "1234567890";   // contoh nomor rekening
+const accountHolderName = "Amba Dev"; // contoh nama
+const ts = Date.now();
 
+// payload untuk signature
+const payload = {
+  sellerId,
+  amount,
+  bankCode,
+  accountNumber,
+  accountHolderName,
+  timestamp: ts
+};
 
+const jsonPayload = stableStringify(payload);
 
-### 4. **GET /event/:eventId/available-products**
-Mengambil daftar produk yang tersedia untuk ditambahkan ke event.
+// ambil secret dari environment variable Postman
+const secret = pm.environment.get("WITHDRAW_SECRET");
 
-- **Deskripsi**: Mengembalikan produk milik penjual yang belum terdaftar di event tertentu, lengkap dengan informasi varian, stok, dan diskon.
-- **Parameter**: `eventId` (string)
-- **Respons Sukses**:
-  ```json
-  {
-    "message": "✅ Produk yang tersedia untuk ditambahkan ke event",
-    "count": number,
-    "data": [
-      {
-        "id": "string",
-        "product_name": "string",
-        "product_price": number,
-        "stock": number,
-        ...
-      }
-    ]
-  }
-  ```
-- **Respons Gagal**:
-  - 401: Harus login sebagai penjual.
-  - 500: Gagal mengambil produk.
+// generate signature pakai CryptoJS (built-in Postman)
+const signature = CryptoJS.HmacSHA256(jsonPayload, secret).toString(CryptoJS.enc.Hex);
 
-### 5. DELETE `/event/:eventId/product/:productId`
-Endpoint ini digunakan untuk menghapus produk atau varian tertentu dari event.
+// simpan ke environment variable Postman
+pm.environment.set("seller_id", sellerId);
+pm.environment.set("amount", amount);
+pm.environment.set("bank_code", bankCode);
+pm.environment.set("account_number", accountNumber);
+pm.environment.set("account_holder_name", accountHolderName);
+pm.environment.set("timestamp", ts);
+pm.environment.set("signature", signature);
+```
 
-#### Parameter
-- **Path Parameters**:
-  - `eventId`: ID dari event yang ingin dihapus produknya.
-  - `productId`: ID dari produk yang akan dihapus. Gunakan `all` untuk menghapus semua produk seller dari event.
-- **Query Parameters**:
-  - `mode`: (opsional) Mode penghapusan, nilai yang valid: `product` (hapus produk beserta semua variannya) atau `variant` (hapus varian spesifik).
-  - `variantId`: (opsional, wajib jika `mode=variant`) ID dari varian produk yang akan dihapus.
+**Catatan**:
+- Pastikan environment variable `WITHDRAW_SECRET` sudah diset di Postman.
+- Signature dihasilkan menggunakan HMAC-SHA256 dengan payload yang disusun menggunakan `stableStringify`.
+- Response akan mencakup status penarikan dan detail transaksi dari Xendit.
 
-#### Autentikasi
-- Memerlukan cookie `seller_info` yang berisi informasi seller dalam format JSON.
-- Seller harus login untuk mengakses endpoint ini.
+## Rute Pembeli
 
-#### Contoh Request
-1. **Hapus semua produk seller dari event**:
-   ```bash
-   DELETE /event/123/product/all
-   ```
-2. **Hapus produk tertentu (tanpa varian)**:
-   ```bash
-   DELETE /event/123/product/456
-   ```
-3. **Hapus produk beserta semua variannya**:
-   ```bash
-   DELETE /event/123/product/456?mode=product
-   ```
-4. **Hapus varian spesifik**:
-   ```bash
-   DELETE /event/123/product/456?mode=variant&variantId=789
-   ```
+### Checkout
+**Endpoint**: `POST /cart/checkout`  
+**Deskripsi**: Memproses checkout dari keranjang belanja, termasuk validasi alamat, pembayaran, dan pembuatan pesanan.  
+**Fitur Baru**:
+- Penambahan metode pembayaran `balance` untuk menggunakan saldo user.
+- Otomatisasi pembaruan alamat jika disediakan dalam request.
+- Snapshot item pesanan disimpan di `order_item_details` dan `order_details_items`.
 
-#### Response
-- **Sukses** (200):
-  ```json
-  {
-    "message": "✅ Produk dihapus dari event (event_stock dikembalikan otomatis oleh trigger)"
-  }
-  ```
-- **Error**:
-  - 401: Jika seller belum login.
-  - 403: Jika produk bukan milik seller.
-  - 400: Jika parameter tidak valid (misalnya mode salah atau variantId tidak diberikan).
-  - 500: Jika terjadi kesalahan server.
-
-#### Catatan
-- Penghapusan stok event akan otomatis mengembalikan stok ke tabel `products` atau `product_variants` melalui trigger di database.
-- Validasi dilakukan untuk memastikan produk atau varian milik seller.
-
----
-
-
-### 6. **GET /event/:eventId**
-Mengambil detail event untuk penjual.
-
-- **Deskripsi**: Mengembalikan detail event beserta produk yang terkait, dengan filter berdasarkan penjual jika login.
-- **Parameter**: `eventId` (string)
-- **Respons Sukses**:
-  ```json
-  {
-    "message": "✅ Detail event flash sale",
-    "event": {
-      "id": "string",
-      "start_time": "string",
-      "end_time": "string",
-      "rules": "string | null",
-      "products": [
-        {
-          "id": "string",
-          "product_name": "string",
-          "product_price": number,
-          "event_stock": number,
-          ...
-        }
-      ]
+**Contoh Request Body**:
+```json
+{
+  "itemsToCheckout": [
+    {
+      "productId": "product-uuid",
+      "variantId": "variant-uuid",
+      "qty": 2,
+      "pickupMethod": "diantar"
     }
+  ],
+  "pickupMethod": "diantar",
+  "paymentMethod": "digital",
+  "address": {
+    "nama_penerima": "Nama Penerima",
+    "no_telepon": "081234567890",
+    "alamat_lengkap": "Jl. Contoh No. 123",
+    "kode_pos": "12345",
+    "provinsi_id": "1",
+    "kota_id": "101",
+    "kecamatan_id": "1001",
+    "kelurahan_id": "10001"
   }
-  ```
-- **Respons Gagal**:
-  - 404: Event tidak ditemukan.
-  - 500: Gagal mengambil detail event.
+}
+```
+**Catatan**:
+- Metode pembayaran: `cod`, `digital`, atau `balance`.
+- Alamat wajib lengkap jika ada item dengan `pickupMethod: diantar`.
 
-## Rute Pelanggan
-Berikut adalah endpoint yang tersedia untuk pelanggan di bawah base URL `backendcihuyy.up.railway.app/discount/`.
+### Keuangan Pembeli
+**Endpoint**:
+- `POST /paymentuser/set-pin`: Mengatur atau mengubah PIN pembeli.
+- `POST /paymentuser/withdraw/batch`: Melakukan penarikan saldo pembeli ke rekening bank.
+- `GET /paymentuser/withdrawals`: Mengambil riwayat penarikan saldo.
+- `GET /paymentuser/transactions`: Mengambil riwayat transaksi saldo.
+- `GET /paymentuser/balance`: Mengambil informasi saldo pembeli.
 
-### 1. **GET /event/list**
-Mengambil daftar event untuk pelanggan.
+**Fitur Baru**:
+- Penarikan saldo menggunakan Xendit dengan validasi PIN dan signature.
+- Penyimpanan riwayat transaksi dan penarikan di tabel `user_balance_transactions` dan `user_withdrawals`.
+- Validasi PIN (4-6 digit) dan otorisasi menggunakan `user_info` dari cookies.
 
-- **Deskripsi**: Mengembalikan daftar semua event dengan status (upcoming, active, ended).
-- **Respons Sukses**:
-  ```json
-  {
-    "message": "✅ Daftar event untuk customer",
-    "data": [
-      {
-        "id": "string",
-        "start_time": "string",
-        "end_time": "string",
-        "status": "upcoming | active | ended",
-        ...
-      }
-    ]
-  }
-  ```
-- **Respons Gagal**:
-  - 500: Gagal mengambil daftar event.
+**Contoh Request Body (Withdraw)**:
+```json
+{
+  "user_id": "{{user_id}}",
+  "amount": {{amount}},
+  "bank_code": "{{bank_code}}",
+  "account_number": "{{account_number}}",
+  "account_holder_name": "{{account_holder_name}}",
+  "pin": "1234",
+  "timestamp": {{timestamp}},
+  "signature": "{{signature}}"
+}
+```
 
-### 2. **GET /event/:eventId**
-Mengambil detail event untuk pelanggan.
+**Script Postman untuk Withdraw Pembeli**:
+```javascript
+// Fungsi stableStringify (harus sama dengan di backend)
+function stableStringify(obj) {
+  if (obj === null || typeof obj !== "object") return JSON.stringify(obj);
+  if (Array.isArray(obj)) return `[${obj.map(stableStringify).join(",")}]`;
+  const keys = Object.keys(obj).sort();
+  return `{${keys.map((k) => JSON.stringify(k) + ":" + stableStringify(obj[k])).join(",")}}`;
+}
 
-- **Deskripsi**: Mengembalikan detail event beserta produk yang terkait, termasuk informasi varian, stok, dan diskon.
-- **Parameter**: `eventId` (string)
-- **Respons Sukses**:
-  ```json
-  {
-    "message": "✅ Detail event flash sale",
-    "event": {
-      "id": "string",
-      "start_time": "string",
-      "end_time": "string",
-      "rules": "string | null",
-      "products": [
-        {
-          "id": "string",
-          "product_name": "string",
-          "product_price": number,
-          "event_stock": number,
-          ...
-        }
-      ]
-    }
-  }
-  ```
-- **Respons Gagal**:
-  - 404: Event tidak ditemukan.
-  - 500: Gagal mengambil detail event.
+// === Data request ===
+const userId = "64d67463-148f-4490-a23a-134f199dfa7e";        // ganti sesuai DB/ cookies
+const amount = 3000;                 // contoh nominal
+const bankCode = "BCA";            // contoh kode bank
+const accountNumber = "1234567890";   // contoh nomor rekening
+const accountHolderName = "John Doe"; // contoh nama
+const ts = Date.now();
 
-## Catatan Tambahan
-- **Autentikasi Penjual**: Semua rute penjual memerlukan cookie `seller_info` yang berisi informasi penjual (ID penjual). Jika tidak ada, akan mengembalikan error 401.
-- **Manajemen Stok**: Penambahan atau pengurangan stok event akan memperbarui stok produk/varian di database. Penghapusan produk dari event akan mengembalikan stok secara otomatis melalui trigger.
-- **Format Tanggal**: Menggunakan `DateTime` dari library Luxon untuk menentukan status event berdasarkan `start_time` dan `end_time`.
-- **Fungsi Tambahan**: Fungsi `attachVariantsStockDiscountWithRealDiscount` digunakan untuk memperkaya data produk dengan informasi varian, stok, dan diskon.
+// payload untuk signature
+const payload = {
+  userId,
+  amount,
+  bankCode,
+  accountNumber,
+  accountHolderName,
+  timestamp: ts
+};
 
-## Cara Menjalankan
-1. Pastikan Anda memiliki akses ke Supabase dan konfigurasikan kredensialnya.
-2. Jalankan server Express.js di lingkungan Node.js.
-3. Gunakan base URL yang sesuai untuk mengakses endpoint penjual atau pelanggan.
-4. Pastikan cookie `seller_info` tersedia untuk rute penjual.
+const jsonPayload = stableStringify(payload);
+
+// ambil secret dari environment variable Postman
+const secret = pm.environment.get("WITHDRAW_SECRET");
+
+// generate signature pakai CryptoJS (built-in Postman)
+const signature = CryptoJS.HmacSHA256(jsonPayload, secret).toString(CryptoJS.enc.Hex);
+
+// simpan ke environment variable Postman
+pm.environment.set("user_id", userId);
+pm.environment.set("amount", amount);
+pm.environment.set("bank_code", bankCode);
+pm.environment.set("account_number", accountNumber);
+pm.environment.set("account_holder_name", accountHolderName);
+pm.environment.set("timestamp", ts);
+pm.environment.set("signature", signature);
+```
+
+**Catatan**:
+- Pastikan environment variable `WITHDRAW_SECRET` sudah diset di Postman.
+- PIN harus sesuai dengan yang diset di `POST /paymentuser/set-pin`.
+- Signature dihasilkan menggunakan HMAC-SHA256 dengan payload yang disusun menggunakan `stableStringify`.
+
+### Update User
+**Endpoint**: `PUT /auth/user/:id`  
+**Deskripsi**: Mengupdate data pembeli, termasuk informasi alamat, avatar, dan data rekening.  
+**Fitur Baru**:
+- Penambahan field `user_pin`, `bank_code`, `account_holder_name`, dan `account_number` untuk keperluan penarikan saldo.
+- Validasi wilayah menggunakan API eksternal untuk memastikan data alamat valid.
+
+**Contoh Request Body**:
+```json
+{
+  "username": "newusername",
+  "password": "NewP@ssw0rd123",
+  "nama_penerima": "Nama Penerima",
+  "no_telepon": "081234567890",
+  "alamat_lengkap": "Jl. Baru No. 1",
+  "kode_pos": "12345",
+  "provinsi_id": "1",
+  "kota_id": "101",
+  "kecamatan_id": "1001",
+  "kelurahan_id": "10001",
+  "user_pin": "123456",
+  "bank_code": "BCA",
+  "account_holder_name": "Nama Pemilik",
+  "account_number": "1234567890"
+}
+```
+**Catatan**:
+- Avatar diunggah melalui `multipart/form-data`.
+- Password harus memenuhi kriteria keamanan jika diubah.
+
+## Catatan Umum
+- **Otentikasi**: Semua rute memerlukan cookies (`seller_info` atau `user_info`) untuk otorisasi.
+- **Validasi Wilayah**: Menggunakan API `https://www.emsifa.com/api-wilayah-indonesia` untuk validasi dan pengambilan nama wilayah.
+- **Pembayaran**: Menggunakan Xendit untuk pembayaran digital dan penarikan saldo.
+- **Error Handling**: Setiap rute memiliki penanganan error dengan pesan yang jelas dan kode status HTTP yang sesuai.
+- **Cache**: Beberapa rute menggunakan cache untuk mengoptimalkan performa (misalnya, data produk dan seller).
+
+Untuk informasi lebih lanjut atau bantuan, hubungi tim pengembang melalui [support@example.com](mailto:support@example.com).
