@@ -12,7 +12,7 @@ const {
 // Environment variables
 const SEND_URL = process.env.SEND_SERVICE_URL;
 const XENDIT_SECRET_KEY = process.env.XENDIT_SECRET_KEY;
-const FRONTEND_URL = process.env.FRONTEND_URL;
+const BASE_URL = FRONTEND_URLS[0]; 
 const CRYPTO_SECRET_KEY =
   process.env.CRYPTO_SECRET_KEY || "please_set_a_real_secret_in_env";
 
@@ -767,7 +767,7 @@ router.post("/cart/checkout", async (req, res) => {
       let paymentUrl = null;
       let paymentStatus = order.payment_status || "pending";
 
-      if (paymentMethod.toLowerCase() === "digital") {
+      if (paymentMethod.toLowerCase() === "digital") { 
         try {
           const invoiceRes = await axios.post(
             "https://api.xendit.co/v2/invoices",
@@ -775,8 +775,8 @@ router.post("/cart/checkout", async (req, res) => {
               external_id: `order-${order.id}`,
               amount: Number(order.total_price),
               description: `Pembayaran order ${order.id}`,
-              success_redirect_url: `${FRONTEND_URL}/success.html?order_id=${order.id}`,
-              failure_redirect_url: `${FRONTEND_URL}/failure.html?order_id=${order.id}`,
+              success_redirect_url: `${BASE_URL}/success?order_id=${order.id}`,
+              failure_redirect_url: `${BASE_URL}/failure?order_id=${order.id}`,
               currency: "IDR",
             },
             { auth: { username: XENDIT_SECRET_KEY, password: "" } }
