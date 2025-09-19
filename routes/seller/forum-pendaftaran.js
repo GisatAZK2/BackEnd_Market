@@ -47,7 +47,10 @@ router.post(
   async (req, res) => {
     try {
       console.log("📥 Request body:", req.body);
-      console.log("📸 File upload:", req.file ? req.file.originalname : "❌ Tidak ada file");
+      console.log(
+        "📸 File upload:",
+        req.file ? req.file.originalname : "❌ Tidak ada file"
+      );
 
       const {
         email,
@@ -66,13 +69,14 @@ router.post(
         delivery_fee,
         password,
         username,
+        // opsional
         pin,
         bankCode,
         accountHolderName,
         accountNumber,
       } = req.body;
 
-      // Validate required fields
+      // === Validate required fields (tanpa pin & bank info)
       if (
         !email ||
         !name ||
@@ -88,16 +92,12 @@ router.post(
         !longitude ||
         typeof is_delivery_available === "undefined" ||
         !req.file ||
-        !password ||
-        !pin ||
-        !bankCode ||
-        !accountHolderName ||
-        !accountNumber
+        !password
       ) {
         console.log("❌ Validasi gagal, ada field kosong");
         return res.status(400).json({
           error:
-            "Semua field wajib diisi termasuk gambar, koordinat, password, PIN, bankCode, accountHolderName, dan accountNumber.",
+            "Semua field wajib diisi termasuk gambar, koordinat, dan password.",
         });
       }
 
@@ -116,9 +116,9 @@ router.post(
         return res.status(400).json({ error: "Koordinat tidak valid." });
       }
 
-      // Validate password strength
+      // === Validate password strength
       if (
-        password.length < 8 ||
+        password.length < 1 ||
         !/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$/.test(
           password
         )
@@ -129,13 +129,17 @@ router.post(
           .json({ error: "Password tidak memenuhi persyaratan keamanan." });
       }
 
-      // Validate PIN (4-6 digits)
-      if (!pin || pin.toString().length < 4 || pin.toString().length > 6) {
-        console.log("❌ PIN tidak valid:", pin);
-        return res.status(400).json({ error: "PIN harus 4-6 digit." });
+      // === PIN opsional (kalau ada → wajib 4-6 digit)
+      let hashedPin = null;
+      if (pin) {
+        if (pin.toString().length < 4 || pin.toString().length > 6) {
+          console.log("❌ PIN tidak valid:", pin);
+          return res.status(400).json({ error: "PIN harus 4-6 digit." });
+        }
+        hashedPin = await bcrypt.hash(pin.toString(), 12);
       }
 
-      // Ambil nama wilayah
+      // === Ambil nama wilayah
       const provinsi = await getWilayahName(
         "https://www.emsifa.com/api-wilayah-indonesia/api/provinces.json",
         provinsi_id
@@ -158,7 +162,7 @@ router.post(
         return res.status(400).json({ error: "Data wilayah tidak valid." });
       }
 
-      // Cek email di sellers
+      // === Cek email di sellers
       console.log("🔍 Cek email seller:", email);
       const { data: existingSeller } = await supabase
         .from("sellers")
@@ -173,7 +177,7 @@ router.post(
           .json({ error: "Email sudah terdaftar sebagai seller." });
       }
 
-      // Cek email di users
+      // === Cek email di users
       console.log("🔍 Cek email user:", email);
       const { data: existingUser } = await supabase
         .from("users")
@@ -188,7 +192,7 @@ router.post(
           .json({ error: "Email sudah digunakan. Silakan gunakan email lain." });
       }
 
-      // Upload store image
+      // === Upload store image
       console.log("📤 Upload store image...");
       const fileExt = path.extname(req.file.originalname);
       const fileName = `store_${uuidv4()}${fileExt}`;
@@ -218,9 +222,8 @@ router.post(
       const storeImageUrl = publicUrlData.publicUrl;
       console.log("✅ Store image URL:", storeImageUrl);
 
-      // Hash the provided password
+      // === Hash the provided password
       const hashedPassword = await bcrypt.hash(password, 10);
-      const hashedPin = await bcrypt.hash(pin.toString(), 12);
       const finalUsername =
         username && username.trim() !== ""
           ? username.trim()
@@ -229,7 +232,7 @@ router.post(
       const expiresAt = new Date(Date.now() + 5 * 60 * 1000).toISOString();
       console.log("🔑 Username:", finalUsername, "OTP:", otpCode);
 
-      // Upload default avatar
+      // === Upload default avatar
       console.log("📤 Upload default avatar...");
       const defaultImagePath = path.join(__dirname, "../assets/user.png");
       const avatarFilename = `avatar_default_${Date.now()}.webp`;
@@ -258,7 +261,7 @@ router.post(
       const avatarUrl = avatarUrlData.publicUrl;
       console.log("✅ Avatar URL:", avatarUrl);
 
-      // Simpan seller
+      // === Simpan seller
       console.log("💾 Simpan seller...");
       const { data: newSeller, error: insertError } = await supabase
         .from("sellers")
@@ -292,7 +295,7 @@ router.post(
           .json({ error: "Gagal menyimpan seller ke database." });
       }
 
-      // Simpan user
+      // === Simpan user
       console.log("💾 Simpan user...");
       const { error: userInsertError } = await supabase.from("users").insert([
         {
@@ -313,20 +316,20 @@ router.post(
           .json({ error: "Gagal menyimpan user ke database." });
       }
 
-      // Simpan seller balance
+      // === Simpan seller balance
       console.log("💾 Simpan seller balance...");
+      const balancePayload = {
+        seller_id: newSeller.id,
+        withdrawable_balance: 0,
+      };
+      if (hashedPin) balancePayload.seller_pin_hash = hashedPin;
+      if (bankCode) balancePayload.bank_code = bankCode;
+      if (accountHolderName) balancePayload.account_holder_name = accountHolderName;
+      if (accountNumber) balancePayload.account_number = accountNumber;
+
       const { error: balanceInsertError } = await supabase
         .from("seller_balances")
-        .insert([
-          {
-            seller_id: newSeller.id,
-            withdrawable_balance: 0,
-            seller_pin_hash: hashedPin,
-            bank_code: bankCode,
-            account_holder_name: accountHolderName,
-            account_number: accountNumber,
-          },
-        ]);
+        .insert([balancePayload]);
 
       if (balanceInsertError) {
         console.log("❌ Gagal simpan balance:", balanceInsertError);
@@ -335,7 +338,7 @@ router.post(
           .json({ error: "Gagal menyimpan saldo seller ke database." });
       }
 
-      // Kirim OTP
+      // === Kirim OTP
       console.log("📧 Kirim OTP ke email:", email);
       await axios.post(`${process.env.SEND_SERVICE_URL}/send-email`, {
         type: "otp",
@@ -351,9 +354,7 @@ router.post(
       });
     } catch (error) {
       console.error("❌ Register seller error:", error);
-      return res
-        .status(500)
-        .json({ error: "Terjadi kesalahan pada server." });
+      return res.status(500).json({ error: "Terjadi kesalahan pada server." });
     }
   }
 );
