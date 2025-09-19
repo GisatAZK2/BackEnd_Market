@@ -69,14 +69,14 @@ router.post(
         delivery_fee,
         password,
         username,
-        // opsional
+        // opsional (PIN & bank)
         pin,
         bankCode,
         accountHolderName,
         accountNumber,
       } = req.body;
 
-      // === Validate required fields (tanpa pin & bank info)
+      // === Validate required fields
       if (
         !email ||
         !name ||
@@ -118,7 +118,7 @@ router.post(
 
       // === Validate password strength
       if (
-        password.length < 1 ||
+        password.length < 8 ||
         !/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$/.test(
           password
         )
@@ -129,7 +129,7 @@ router.post(
           .json({ error: "Password tidak memenuhi persyaratan keamanan." });
       }
 
-      // === PIN opsional (kalau ada → wajib 4-6 digit)
+      // === PIN opsional
       let hashedPin = null;
       if (pin) {
         if (pin.toString().length < 4 || pin.toString().length > 6) {
@@ -316,7 +316,7 @@ router.post(
           .json({ error: "Gagal menyimpan user ke database." });
       }
 
-      // === Simpan seller balance
+      // === Simpan seller balance (optional pin & bank)
       console.log("💾 Simpan seller balance...");
       const balancePayload = {
         seller_id: newSeller.id,
