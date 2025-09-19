@@ -388,7 +388,7 @@ router.post("/login", detectSpam, verifyCaptcha, async (req, res) => {
 });
 
 
-// GET Seller profile + total followers
+// GET Seller profile + total followers + account bank
 router.get("/profile/:id", async (req, res) => {
   try {
     let sellerId;
@@ -408,15 +408,29 @@ router.get("/profile/:id", async (req, res) => {
       }
     }
 
-    // Ambil semua kolom biar fleksibel
-    const { data: seller, error } = await supabase
+    // Ambil data seller
+    const { data: seller, error: sellerError } = await supabase
       .from("sellers")
       .select("*")
       .eq("id", sellerId)
       .single();
 
-    if (error || !seller) {
+    if (sellerError || !seller) {
       return res.status(404).json({ error: "Seller tidak ditemukan." });
+    }
+
+    // Ambil data rekening dari seller_balances
+    const { data: balance, error: balanceError } = await supabase
+      .from("seller_balances")
+      .select("bank_code, account_number, account_holder_name, seller_pin_hash")
+      .eq("seller_id", sellerId)
+      .single();
+
+    if (balanceError) {
+      return res.status(500).json({
+        error: "Gagal mengambil data rekening seller.",
+        detail: balanceError.message,
+      });
     }
 
     // Gabungkan alamat
@@ -429,7 +443,7 @@ router.get("/profile/:id", async (req, res) => {
       .filter(Boolean)
       .join(", ");
 
-    // Hitung jumlah followers seller ini
+    // Hitung jumlah followers
     const { count: totalFollowers, error: followerError } = await supabase
       .from("follows")
       .select("*", { count: "exact", head: true })
@@ -442,7 +456,7 @@ router.get("/profile/:id", async (req, res) => {
       });
     }
 
-    // (Opsional) ambil daftar user yang follow seller ini
+    // Ambil daftar followers
     const { data: followers, error: followersError } = await supabase
       .from("follows")
       .select(`
@@ -464,6 +478,7 @@ router.get("/profile/:id", async (req, res) => {
         alamat_lengkap_combine,
         total_followers: totalFollowers || 0,
         followers: followers?.map((f) => f.users) || [],
+        bank_info: balance || null, // kalau belum ada record, null
       },
     });
   } catch (err) {
