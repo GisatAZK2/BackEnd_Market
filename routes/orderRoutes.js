@@ -9,24 +9,71 @@ const NodeCache = require("node-cache");
 const {
   attachVariantsStockDiscountWithRealDiscount
 } = require("../utils/applyDiscountAndVariants");
+
+// ==============================
 // Environment variables
+// ==============================
 const SEND_URL = process.env.SEND_SERVICE_URL;
 const XENDIT_SECRET_KEY = process.env.XENDIT_SECRET_KEY;
-const FRONTEND_URLS = process.env.FRONTEND_URL.split(","); 
-const BASE_URL = FRONTEND_URLS[0]; 
+
+const FRONTEND_URLS = process.env.FRONTEND_URL
+  ? process.env.FRONTEND_URL.split(",")
+  : ["http://localhost:3000"];
+const BASE_URL = FRONTEND_URLS[0];
+
 const CRYPTO_SECRET_KEY =
   process.env.CRYPTO_SECRET_KEY || "please_set_a_real_secret_in_env";
 
 if (!XENDIT_SECRET_KEY) {
-  console.warn("⚠️ XENDIT_SECRET_KEY belum diset - invoice creation akan gagal jika dipanggil.");
+  console.warn(
+    "⚠️ XENDIT_SECRET_KEY belum diset - invoice creation akan gagal jika dipanggil."
+  );
 }
 if (!CRYPTO_SECRET_KEY) {
   console.warn("⚠️ CRYPTO_SECRET_KEY belum diset - signatures tidak aman.");
 }
 
+// ==============================
 // Xendit init
+// ==============================
 const xendit = new Xendit({ secretKey: XENDIT_SECRET_KEY });
 const { Invoice } = xendit;
+function getXenditMode() {
+  if (!XENDIT_SECRET_KEY) return "unknown";
+  if (XENDIT_SECRET_KEY.startsWith("xnd_development")) return "sandbox";
+  if (XENDIT_SECRET_KEY.startsWith("xnd_production")) return "production";
+  return "unknown";
+}
+
+const XENDIT_BASE_URL = "https://api.xendit.co";
+
+// ✅ Ambil daftar channel dari Xendit (semua, baik aktif / non-aktif)
+async function getXenditChannels() {
+  try {
+    const mode = getXenditMode();
+    console.log(`🌐 Xendit mode: ${mode}`);
+
+    const res = await axios.get(`${XENDIT_BASE_URL}/payment_channels`, {
+      auth: { username: XENDIT_SECRET_KEY, password: "" },
+    });
+
+    // Response = array langsung
+    if (!Array.isArray(res.data)) {
+      console.error("❌ Response Xendit tidak sesuai:", res.data);
+      return [];
+    }
+
+    // 👉 Tampilkan semua, tanpa filter is_enabled
+    return res.data;
+  } catch (err) {
+    console.error(
+      "❌ Gagal ambil payment channels:",
+      err.response?.data || err.message
+    );
+    return [];
+  }
+}
+
 
 // Cache setup
 const cache = new NodeCache({ stdTTL: 60, checkperiod: 120 });
@@ -115,7 +162,7 @@ async function mintSellerBalance(sellerId, amount, opts = {}) {
 async function getUserBalance(userId) {
   const { data, error } = await supabase
     .from("user_balances")
-    .select("balance, withdrawable_balance, user_pin_hash, bank_code, account_holder_name, account_number")
+    .select("balance, user_pin_hash, bank_code, account_holder_name, account_number")
     .eq("user_id", userId)
     .single();
 
@@ -132,7 +179,7 @@ async function getUserBalance(userId) {
   if (error) throw error;
   return {
     balance: Number(data?.balance ?? 0),
-    withdrawable_balance: Number(data?.withdrawable_balance ?? 0),
+    withdrawable_balance: Number(data?.balance ?? 0),
     user_pin_hash: data?.user_pin_hash,
     bank_code: data?.bank_code,
     account_holder_name: data?.account_holder_name,
@@ -185,7 +232,7 @@ async function mintUserBalance(userId, amount, opts = {}) {
   if (amount <= 0) throw new Error("Amount harus > 0");
   const current = await getUserBalance(userId);
   const newBalance = Number(current.balance) + Number(amount);
-  const newWithdrawableBalance = Number(current.withdrawable_balance) + Number(amount);
+  const newWithdrawableBalance = Number(current.balance) + Number(amount);
   await upsertUserBalance(userId, newBalance, newWithdrawableBalance);
   await recordUserTransaction({
     userId,
@@ -1015,10 +1062,21 @@ router.post("/cart/checkout", async (req, res) => {
 });
 
 
-
+// ==============================
+// Route: Delivery Fee
+// ==============================
 router.post("/cart/delivery-fee", async (req, res) => {
   try {
     const { itemsToCheckout, pickupMethod } = req.body;
+    const mode = getXenditMode();
+
+    // --- Ambil user dari cookies/session ---
+    const userInfo = req.cookies?.user_info
+      ? JSON.parse(req.cookies.user_info)
+      : null;
+    if (!userInfo?.id) {
+      return res.status(401).json({ message: "❌ Harus login dulu." });
+    }
 
     if (!itemsToCheckout?.length) {
       return res.status(400).json({
@@ -1026,9 +1084,11 @@ router.post("/cart/delivery-fee", async (req, res) => {
       });
     }
 
-    // Ambil productId unik dan sort sekali aja buat cache key
+    // =============================
+    // 1. Ambil data produk
+    // =============================
     const productIds = Array.from(
-      new Set(itemsToCheckout.map((i) => i.productId)),
+      new Set(itemsToCheckout.map((i) => i.productId))
     ).sort();
     const cacheKeyProducts = `products:${productIds.join(",")}`;
 
@@ -1036,7 +1096,9 @@ router.post("/cart/delivery-fee", async (req, res) => {
     if (!products) {
       const { data, error } = await supabase
         .from("products")
-        .select("id, seller_id, product_price, product_name, product_image_url")
+        .select(
+          "id, seller_id, product_price, product_name, product_image_url"
+        )
         .in("id", productIds);
 
       if (error || !data?.length) {
@@ -1049,13 +1111,13 @@ router.post("/cart/delivery-fee", async (req, res) => {
       products = await attachVariantsStockDiscountWithRealDiscount(data);
       cache.set(cacheKeyProducts, products);
     }
-
-    // Map produk buat akses O(1)
     const productMap = new Map(products.map((p) => [p.id, p]));
 
-    // Ambil seller unik dan sort sekali buat cache
+    // =============================
+    // 2. Ambil data seller
+    // =============================
     const sellerIds = Array.from(
-      new Set(products.map((p) => p.seller_id)),
+      new Set(products.map((p) => p.seller_id))
     ).sort();
     const cacheKeySellers = `sellers:fee:${sellerIds.join(",")}`;
 
@@ -1076,25 +1138,21 @@ router.post("/cart/delivery-fee", async (req, res) => {
       sellers = data || [];
       cache.set(cacheKeySellers, sellers);
     }
-
-    // Map seller buat akses O(1)
     const sellerMap = new Map(sellers.map((s) => [s.id, s]));
 
-    // Group items per seller-method
+    // =============================
+    // 3. Group item per seller-method
+    // =============================
     const groupedOrders = itemsToCheckout.reduce((acc, item) => {
       const product = productMap.get(item.productId);
       if (!product) return acc;
 
       let method;
-
       if (pickupMethod) {
-        // Kalau ada pickupMethod global → override semua
         method = pickupMethod.toLowerCase();
       } else {
-        // Kalau tidak ada → ikut item.pickupMethod atau default "diambil"
         method = (item.pickupMethod || "diambil").toLowerCase();
       }
-
       if (method === "pengambilan") method = "diambil";
 
       const key = `${product.seller_id}-${method}`;
@@ -1106,11 +1164,12 @@ router.post("/cart/delivery-fee", async (req, res) => {
         };
       }
       acc[key].items.push(item);
-
       return acc;
     }, {});
 
-    // Hitung per grup
+    // =============================
+    // 4. Hitung total per group
+    // =============================
     const resultPerGroup = Object.values(groupedOrders)
       .map((group) => {
         const seller = sellerMap.get(group.seller_id);
@@ -1123,10 +1182,9 @@ router.post("/cart/delivery-fee", async (req, res) => {
           return sum + price * (item.qty || 1);
         }, 0);
 
-        // Logika delivery_fee berdasarkan is_delivery_available
         let delivery_fee = 0;
-        let delivery_note = "tidak bisa diantar"; // Default
-        let delivery_status = "pickup_only"; // Default
+        let delivery_note = "tidak bisa diantar";
+        let delivery_status = "pickup_only";
 
         if (group.pickup_method === "diantar") {
           if (seller.is_delivery_available === true) {
@@ -1134,23 +1192,21 @@ router.post("/cart/delivery-fee", async (req, res) => {
             delivery_note = "bisa diantar";
             delivery_status = "delivery_available";
           } else {
-            delivery_fee = 0;
             delivery_note = "tidak bisa diantar - hanya pickup";
-            delivery_status = "pickup_only";
           }
         } else if (group.pickup_method === "diambil") {
-          delivery_fee = 0;
           if (seller.is_delivery_available === true) {
             delivery_note = "bisa diantar (tapi pickup dipilih)";
             delivery_status = "delivery_available";
           } else {
             delivery_note = "hanya bisa pickup";
-            delivery_status = "pickup_only";
           }
         }
 
-        // Hitung jumlah items
-        const itemCount = group.items.reduce((sum, item) => sum + (item.qty || 1), 0);
+        const itemCount = group.items.reduce(
+          (sum, item) => sum + (item.qty || 1),
+          0
+        );
 
         return {
           seller_id: seller.id,
@@ -1166,41 +1222,86 @@ router.post("/cart/delivery-fee", async (req, res) => {
       })
       .filter(Boolean);
 
-    // Hitung grand totals
+    // =============================
+    // 5. Hitung grand totals
+    // =============================
     const grandTotalProduk = resultPerGroup.reduce(
       (sum, s) => sum + s.total_produk,
-      0,
+      0
     );
     const grandTotalOngkir = resultPerGroup.reduce(
       (sum, s) => sum + s.delivery_fee,
-      0,
+      0
     );
     const grandTotalSemua = grandTotalProduk + grandTotalOngkir;
 
-    // Hitung statistik delivery
-    const totalItems = itemsToCheckout.reduce((sum, item) => sum + (item.qty || 1), 0);
+    const totalItems = itemsToCheckout.reduce(
+      (sum, item) => sum + (item.qty || 1),
+      0
+    );
     const pickupOnlyItems = resultPerGroup
-      .filter(g => g.delivery_status === "pickup_only")
+      .filter((g) => g.delivery_status === "pickup_only")
       .reduce((sum, g) => sum + g.item_count, 0);
     const deliveryAvailableItems = totalItems - pickupOnlyItems;
 
+    // =============================
+    // 6. Ambil wallet & payment methods
+    // =============================
+    const wallet = await getUserBalance(userInfo.id);
+
+    // ✅ Pakai function helper getXenditChannels()
+    const channels = await getXenditChannels();
+
+    const methodsRes = await axios.get(
+      `${XENDIT_BASE_URL}/v2/payment_methods`,
+      {
+        auth: { username: XENDIT_SECRET_KEY, password: "" },
+      }
+    );
+    const methods = (methodsRes.data?.data || []).filter(
+      (m) => m.status === "ACTIVE"
+    );
+
+    // =============================
+    // 7. Return response
+    // =============================
     return res.status(200).json({
-      message: "✅ Data checkout berhasil dihitung.",
-      sellers: resultPerGroup,
-      total_produk_semua: grandTotalProduk,
-      total_ongkir_semua: grandTotalOngkir,
-      total_checkout_semua: grandTotalSemua,
-      delivery_stats: {
-        total_items: totalItems,
-        pickup_only_items: pickupOnlyItems,
-        delivery_available_items: deliveryAvailableItems,
-        message: pickupOnlyItems > 0 
-          ? `⚠️ ${pickupOnlyItems} item tidak bisa diantar, tapi bisa diambil sendiri ke toko`
-          : "✅ Semua item bisa diantar",
-      },
-    });
+  message: "✅ Data checkout berhasil dihitung.",
+  sellers: resultPerGroup,
+  total_produk_semua: grandTotalProduk,
+  total_ongkir_semua: grandTotalOngkir,
+  total_checkout_semua: grandTotalSemua,
+  delivery_stats: {
+    total_items: totalItems,
+    pickup_only_items: pickupOnlyItems,
+    delivery_available_items: deliveryAvailableItems,
+    message:
+      pickupOnlyItems > 0
+        ? `⚠️ ${pickupOnlyItems} item tidak bisa diantar, tapi bisa diambil sendiri ke toko`
+        : "✅ Semua item bisa diantar",
+  },
+  payment_methods: {
+    cod: {
+      method: "cod",
+      name: "Cash on Delivery",
+      available: true,
+    },
+    balance: {
+      method: "balance",
+      name: "Saldo Akun",
+      available: true,
+      balance: wallet.balance,
+      withdrawable_balance: wallet.withdrawable_balance,
+    },
+    xendit: {
+       env: mode,
+      channels, // ✅ hanya channels aja, tanpa methods
+    },
+  },
+});
+
   } catch (err) {
-    console.error("❌ Server error:", err);
+    console.error("❌ Server error:", err.response?.data || err.message);
     return res.status(500).json({
       message: "❌ Terjadi kesalahan server.",
       error: err.message,
