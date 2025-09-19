@@ -583,32 +583,32 @@ router.put(
   uploadStoreImage.single("store_image_url"),
   async (req, res) => {
     try {
-      console.log("👉 Mulai proses update seller");
+      console.log("👉 [START] Mulai proses update seller");
 
+      // === 1. Cek login seller ===
       const sellerInfo = req.cookies?.seller_info
         ? JSON.parse(req.cookies.seller_info)
         : null;
 
       if (!sellerInfo?.id) {
-        console.log("❌ Seller belum login");
-        return res
-          .status(401)
-          .json({ error: "❌ Harus login sebagai seller" });
+        console.log("❌ [AUTH] Seller belum login");
+        return res.status(401).json({ error: "❌ Harus login sebagai seller" });
       }
 
       const sellerId = req.params.id;
-      console.log("🔑 Seller ID dari param:", sellerId);
-      console.log("🔑 Seller ID dari cookie:", sellerInfo.id);
+      console.log("🔑 [AUTH] Seller ID dari param:", sellerId);
+      console.log("🔑 [AUTH] Seller ID dari cookie:", sellerInfo.id);
 
       if (sellerId !== sellerInfo.id) {
-        console.log("⚠️ Seller mencoba update data seller lain");
+        console.log("⚠️ [AUTH] Seller mencoba update data seller lain");
         return res.status(403).json({
           error: "❌ Tidak diizinkan mengubah data seller lain",
         });
       }
 
+      // === 2. Ambil body request ===
       const body = req.body || {};
-      console.log("📦 Body request:", body);
+      console.log("📦 [REQUEST] Body request mentah:", body);
 
       const {
         email,
@@ -632,26 +632,52 @@ router.put(
         accountNumber,
       } = body;
 
-      // Validate PIN if provided
-      if (pin && (pin.toString().length < 4 || pin.toString().length > 6)) {
-        return res.status(400).json({ error: "⚠️ PIN harus 4-6 digit." });
+      // 📝 Logging field masuk
+      console.log("📝 [FIELDS] email:", email);
+      console.log("📝 [FIELDS] name:", name);
+      console.log("📝 [FIELDS] business_name:", business_name);
+      console.log("📝 [FIELDS] phone:", phone);
+      console.log("📝 [FIELDS] store_name:", store_name);
+      console.log("📝 [FIELDS] store_address:", store_address);
+      console.log("📝 [FIELDS] provinsi_id:", provinsi_id);
+      console.log("📝 [FIELDS] kabupaten_id:", kabupaten_id);
+      console.log("📝 [FIELDS] kecamatan_id:", kecamatan_id);
+      console.log("📝 [FIELDS] kelurahan_id:", kelurahan_id);
+      console.log("📝 [FIELDS] latitude:", latitude);
+      console.log("📝 [FIELDS] longitude:", longitude);
+      console.log("📝 [FIELDS] role:", role);
+      console.log("📝 [FIELDS] is_delivery_available:", is_delivery_available);
+      console.log("📝 [FIELDS] delivery_fee:", delivery_fee);
+      console.log("📝 [FIELDS] pin:", pin ? "(diisi)" : "(kosong)");
+      console.log("📝 [FIELDS] bankCode:", bankCode);
+      console.log("📝 [FIELDS] accountHolderName:", accountHolderName);
+      console.log("📝 [FIELDS] accountNumber:", accountNumber);
+
+      // === 3. Validasi PIN ===
+      if (pin) {
+        console.log("🔍 [VALIDATION] Cek PIN:", pin);
+        if (pin.toString().length < 4 || pin.toString().length > 6) {
+          return res.status(400).json({ error: "⚠️ PIN harus 4-6 digit." });
+        }
       }
 
-      // Validate bank fields if any are provided
-      if (
-        (bankCode || accountHolderName || accountNumber) &&
-        !(bankCode && accountHolderName && accountNumber)
-      ) {
-        return res.status(400).json({
-          error:
-            "⚠️ bankCode, accountHolderName, dan accountNumber harus diisi bersama-sama jika salah satu disediakan.",
-        });
+      // === 4. Validasi Bank ===
+      if (bankCode || accountHolderName || accountNumber) {
+        console.log("🔍 [VALIDATION] Cek field bank...");
+        if (!(bankCode && accountHolderName && accountNumber)) {
+          return res.status(400).json({
+            error:
+              "⚠️ bankCode, accountHolderName, dan accountNumber harus diisi bersama-sama jika salah satu disediakan.",
+          });
+        }
       }
 
+      // === 5. Buat payload update ===
       const updateSellerPayload = {};
       const updateBalancePayload = {};
 
-      // Populate seller payload
+      console.log("🛠️ [PROCESS] Membuat payload seller...");
+
       if (email) updateSellerPayload.email = email;
       if (name) updateSellerPayload.name = name;
       if (business_name) updateSellerPayload.business_name = business_name;
@@ -664,17 +690,20 @@ router.put(
       if (typeof is_delivery_available !== "undefined")
         updateSellerPayload.is_delivery_available =
           String(is_delivery_available).toLowerCase() === "true";
-      if (delivery_fee) updateSellerPayload.delivery_fee = parseFloat(delivery_fee);
+      if (delivery_fee)
+        updateSellerPayload.delivery_fee = parseFloat(delivery_fee);
 
-      // === Upload / Replace Gambar Toko ===
+      // === 6. Upload Gambar ===
       if (req.file) {
-        console.log("🖼️ File upload diterima:", req.file.originalname);
+        console.log("🖼️ [UPLOAD] File upload diterima:", req.file.originalname);
         const filename = `store_${sellerId}_${Date.now()}.webp`;
 
+        console.log("🖼️ [UPLOAD] Konversi ke webp...");
         const buffer = await sharp(req.file.buffer)
           .webp({ quality: 80 })
           .toBuffer();
 
+        console.log("🖼️ [UPLOAD] Upload ke Supabase...");
         const { error: uploadError } = await supabase.storage
           .from("store-photos")
           .upload(filename, buffer, {
@@ -683,7 +712,7 @@ router.put(
           });
 
         if (uploadError) {
-          console.error("❌ Gagal upload gambar:", uploadError);
+          console.error("❌ [UPLOAD] Gagal upload gambar:", uploadError);
           return res.status(400).json({
             error: "Upload gagal",
             detail: uploadError.message,
@@ -694,59 +723,73 @@ router.put(
           .from("store-photos")
           .getPublicUrl(filename);
 
+        console.log("✅ [UPLOAD] Gambar berhasil diupload:", publicUrl.publicUrl);
         updateSellerPayload.store_image_url = publicUrl.publicUrl;
       }
 
-      // === Update wilayah ===
+      // === 7. Update Wilayah ===
+      console.log("🌍 [WILAYAH] Update wilayah...");
       if (provinsi_id) {
         updateSellerPayload.provinsi = await getWilayahName(
           "https://www.emsifa.com/api-wilayah-indonesia/api/provinces.json",
           provinsi_id
         );
+        console.log("🌍 Provinsi:", updateSellerPayload.provinsi);
       }
       if (kabupaten_id && provinsi_id) {
         updateSellerPayload.kabupaten = await getWilayahName(
           `https://www.emsifa.com/api-wilayah-indonesia/api/regencies/${provinsi_id}.json`,
           kabupaten_id
         );
+        console.log("🌍 Kabupaten:", updateSellerPayload.kabupaten);
       }
       if (kecamatan_id && kabupaten_id) {
         updateSellerPayload.kecamatan = await getWilayahName(
           `https://www.emsifa.com/api-wilayah-indonesia/api/districts/${kabupaten_id}.json`,
           kecamatan_id
         );
+        console.log("🌍 Kecamatan:", updateSellerPayload.kecamatan);
       }
       if (kelurahan_id && kecamatan_id) {
         updateSellerPayload.kelurahan = await getWilayahName(
           `https://www.emsifa.com/api-wilayah-indonesia/api/villages/${kecamatan_id}.json`,
           kelurahan_id
         );
+        console.log("🌍 Kelurahan:", updateSellerPayload.kelurahan);
       }
 
-      // Validate wilayah dependencies
       if (
         (kelurahan_id && !kecamatan_id) ||
         (kecamatan_id && !kabupaten_id) ||
         (kabupaten_id && !provinsi_id)
       ) {
+        console.log("❌ [WILAYAH] Data wilayah tidak lengkap");
         return res.status(400).json({
-          error: "Data wilayah tidak lengkap. Harus menyertakan provinsi, kabupaten, kecamatan, dan kelurahan secara berurutan.",
+          error:
+            "Data wilayah tidak lengkap. Harus menyertakan provinsi, kabupaten, kecamatan, dan kelurahan secara berurutan.",
         });
       }
 
-      // === Populate balance payload ===
+      // === 8. Payload Balance ===
+      console.log("💰 [BALANCE] Update balance...");
       if (pin) {
-        updateBalancePayload.seller_pin_hash = await bcrypt.hash(pin.toString(), 12);
+        updateBalancePayload.seller_pin_hash = await bcrypt.hash(
+          pin.toString(),
+          12
+        );
+        console.log("💰 PIN di-hash.");
       }
       if (bankCode) updateBalancePayload.bank_code = bankCode;
-      if (accountHolderName) updateBalancePayload.account_holder_name = accountHolderName;
+      if (accountHolderName)
+        updateBalancePayload.account_holder_name = accountHolderName;
       if (accountNumber) updateBalancePayload.account_number = accountNumber;
 
-      console.log("📤 Payload final untuk sellers:", updateSellerPayload);
-      console.log("📤 Payload final untuk seller_balances:", updateBalancePayload);
+      console.log("📤 [PAYLOAD] Seller:", updateSellerPayload);
+      console.log("📤 [PAYLOAD] Balance:", updateBalancePayload);
 
-      // === Update DB seller ===
+      // === 9. Update DB Sellers ===
       if (Object.keys(updateSellerPayload).length > 0) {
+        console.log("🛠️ [DB] Update tabel sellers...");
         const { data: sellerData, error: sellerError } = await supabase
           .from("sellers")
           .update(updateSellerPayload)
@@ -754,15 +797,16 @@ router.put(
           .select();
 
         if (sellerError) {
-          console.error("❌ Gagal update seller di DB:", sellerError);
+          console.error("❌ [DB] Gagal update sellers:", sellerError);
           return res.status(400).json({ error: sellerError.message });
         }
 
-        console.log("✅ Data seller berhasil diperbarui:", sellerData);
+        console.log("✅ [DB] Seller berhasil diperbarui:", sellerData);
       }
 
-      // === Update DB seller_balances ===
+      // === 10. Update DB Balances ===
       if (Object.keys(updateBalancePayload).length > 0) {
+        console.log("🛠️ [DB] Update tabel seller_balances...");
         const { data: balanceData, error: balanceError } = await supabase
           .from("seller_balances")
           .update(updateBalancePayload)
@@ -770,29 +814,32 @@ router.put(
           .select();
 
         if (balanceError) {
-          console.error("❌ Gagal update seller_balances di DB:", balanceError);
+          console.error("❌ [DB] Gagal update seller_balances:", balanceError);
           return res.status(400).json({ error: balanceError.message });
         }
 
-        console.log("✅ Data seller_balances berhasil diperbarui:", balanceData);
+        console.log("✅ [DB] Seller_balances berhasil diperbarui:", balanceData);
       }
 
-      // === Sinkronisasi seller_name di tabel products ===
+      // === 11. Sinkronisasi seller_name di products ===
       if (name) {
-        console.log("🔄 Update semua produk seller dengan seller_name baru:", name);
+        console.log("🔄 [SYNC] Update seller_name di tabel products...");
         const { error: productUpdateError } = await supabase
           .from("products")
           .update({ seller_name: name })
           .eq("seller_id", sellerId);
 
         if (productUpdateError) {
-          console.error("⚠️ Gagal sinkronisasi seller_name di products:", productUpdateError);
-          // Jangan return error, biarkan update seller tetap berhasil
+          console.error(
+            "⚠️ [SYNC] Gagal sinkronisasi seller_name di products:",
+            productUpdateError
+          );
         } else {
-          console.log("✅ Semua produk berhasil diupdate seller_name.");
+          console.log("✅ [SYNC] Semua produk berhasil diupdate seller_name.");
         }
       }
 
+      console.log("🎉 [SUCCESS] Proses update selesai.");
       res.json({
         message: "✅ Data toko berhasil diperbarui",
         data: {
@@ -801,7 +848,7 @@ router.put(
         },
       });
     } catch (err) {
-      console.error("💥 Error server:", err);
+      console.error("💥 [SERVER] Error server:", err);
       res.status(500).json({
         error: "Terjadi kesalahan server",
         detail: err.message,
@@ -809,7 +856,6 @@ router.put(
     }
   }
 );
-
 
 // ======================== DELETE USER ========================
 router.post("/login/google", async (req, res) => {
