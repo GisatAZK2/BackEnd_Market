@@ -346,6 +346,33 @@ router.post(
         code: otpCode,
       });
 
+      console.log("📧 Kirim email konfirmasi seller ke:", email);
+
+        const sellerData = {
+          name,
+          businessName,
+          phone,
+          storeName,
+          storeAddress,
+          provinsi,
+          kabupaten,
+          kecamatan,
+          kelurahan,
+          is_delivery_available: isDelivery,
+          delivery_fee: isDelivery ? parseFloat(delivery_fee) : null,
+          store_image_url: storeImageUrl,
+          pin: pin || null,
+          bankCode: bankCode || null,
+          accountHolderName: accountHolderName || null,
+          accountNumber: accountNumber || null,
+        };
+
+        // Panggil server B (SMTP/email server)
+         await axios.post(`${process.env.SEND_SERVICE_URL}/send-email-seller-registration`, {
+          email,
+          sellerData
+        });
+
       return res.status(201).json({
         message: "Seller berhasil didaftarkan. OTP dikirim ke email.",
         storeImageUrl,

@@ -576,8 +576,9 @@ async function getWilayahName(url, id) {
   return found.name;
 }
 
-
-// PUT /seller/update/:id (Update Seller)
+// =======================
+// Seller update route
+// =======================
 router.put(
   "/seller/update/:id",
   uploadStoreImage.single("store_image_url"),
@@ -596,22 +597,19 @@ router.put(
       }
 
       const sellerId = req.params.id;
-      console.log("🔑 [AUTH] Seller ID dari param:", sellerId);
-      console.log("🔑 [AUTH] Seller ID dari cookie:", sellerInfo.id);
+      console.log("🔑 [AUTH] Seller ID param:", sellerId);
+      console.log("🔑 [AUTH] Seller ID cookie:", sellerInfo.id);
 
       if (sellerId !== sellerInfo.id) {
         console.log("⚠️ [AUTH] Seller mencoba update data seller lain");
-        return res.status(403).json({
-          error: "❌ Tidak diizinkan mengubah data seller lain",
-        });
+        return res.status(403).json({ error: "❌ Tidak diizinkan" });
       }
 
       // === 2. Ambil body request ===
       const body = req.body || {};
-      console.log("📦 [REQUEST] Body request mentah:", body);
+      console.log("📦 [REQUEST BODY]:", body);
 
       const {
-        email,
         name,
         business_name,
         phone,
@@ -627,58 +625,24 @@ router.put(
         is_delivery_available,
         delivery_fee,
         pin,
-        bankCode,
-        accountHolderName,
-        accountNumber,
+        bank_code,
+        account_holder_name,
+        account_number,
       } = body;
 
-      // 📝 Logging field masuk
-      console.log("📝 [FIELDS] email:", email);
-      console.log("📝 [FIELDS] name:", name);
-      console.log("📝 [FIELDS] business_name:", business_name);
-      console.log("📝 [FIELDS] phone:", phone);
-      console.log("📝 [FIELDS] store_name:", store_name);
-      console.log("📝 [FIELDS] store_address:", store_address);
-      console.log("📝 [FIELDS] provinsi_id:", provinsi_id);
-      console.log("📝 [FIELDS] kabupaten_id:", kabupaten_id);
-      console.log("📝 [FIELDS] kecamatan_id:", kecamatan_id);
-      console.log("📝 [FIELDS] kelurahan_id:", kelurahan_id);
-      console.log("📝 [FIELDS] latitude:", latitude);
-      console.log("📝 [FIELDS] longitude:", longitude);
-      console.log("📝 [FIELDS] role:", role);
-      console.log("📝 [FIELDS] is_delivery_available:", is_delivery_available);
-      console.log("📝 [FIELDS] delivery_fee:", delivery_fee);
-      console.log("📝 [FIELDS] pin:", pin ? "(diisi)" : "(kosong)");
-      console.log("📝 [FIELDS] bankCode:", bankCode);
-      console.log("📝 [FIELDS] accountHolderName:", accountHolderName);
-      console.log("📝 [FIELDS] accountNumber:", accountNumber);
-
-      // === 3. Validasi PIN ===
+      // === 3. Validasi PIN jika ada ===
       if (pin) {
-        console.log("🔍 [VALIDATION] Cek PIN:", pin);
         if (pin.toString().length < 4 || pin.toString().length > 6) {
           return res.status(400).json({ error: "⚠️ PIN harus 4-6 digit." });
         }
       }
 
-      // === 4. Validasi Bank ===
-      if (bankCode || accountHolderName || accountNumber) {
-        console.log("🔍 [VALIDATION] Cek field bank...");
-        if (!(bankCode && accountHolderName && accountNumber)) {
-          return res.status(400).json({
-            error:
-              "⚠️ bankCode, accountHolderName, dan accountNumber harus diisi bersama-sama jika salah satu disediakan.",
-          });
-        }
-      }
-
-      // === 5. Buat payload update ===
+      // === 4. Siapkan payload update ===
       const updateSellerPayload = {};
       const updateBalancePayload = {};
+      const sensitiveFields = {}; // akan dikirim via email
 
-      console.log("🛠️ [PROCESS] Membuat payload seller...");
-
-      if (email) updateSellerPayload.email = email;
+      // seller fields
       if (name) updateSellerPayload.name = name;
       if (business_name) updateSellerPayload.business_name = business_name;
       if (phone) updateSellerPayload.phone = phone;
@@ -693,17 +657,13 @@ router.put(
       if (delivery_fee)
         updateSellerPayload.delivery_fee = parseFloat(delivery_fee);
 
-      // === 6. Upload Gambar ===
+      // === 5. Upload Gambar jika ada ===
       if (req.file) {
-        console.log("🖼️ [UPLOAD] File upload diterima:", req.file.originalname);
         const filename = `store_${sellerId}_${Date.now()}.webp`;
-
-        console.log("🖼️ [UPLOAD] Konversi ke webp...");
         const buffer = await sharp(req.file.buffer)
           .webp({ quality: 80 })
           .toBuffer();
 
-        console.log("🖼️ [UPLOAD] Upload ke Supabase...");
         const { error: uploadError } = await supabase.storage
           .from("store-photos")
           .upload(filename, buffer, {
@@ -712,9 +672,8 @@ router.put(
           });
 
         if (uploadError) {
-          console.error("❌ [UPLOAD] Gagal upload gambar:", uploadError);
           return res.status(400).json({
-            error: "Upload gagal",
+            error: "Upload gambar gagal",
             detail: uploadError.message,
           });
         }
@@ -723,139 +682,117 @@ router.put(
           .from("store-photos")
           .getPublicUrl(filename);
 
-        console.log("✅ [UPLOAD] Gambar berhasil diupload:", publicUrl.publicUrl);
         updateSellerPayload.store_image_url = publicUrl.publicUrl;
       }
 
-      // === 7. Update Wilayah ===
-      console.log("🌍 [WILAYAH] Update wilayah...");
+      // === 6. Update Wilayah jika ada ===
       if (provinsi_id) {
         updateSellerPayload.provinsi = await getWilayahName(
           "https://www.emsifa.com/api-wilayah-indonesia/api/provinces.json",
           provinsi_id
         );
-        console.log("🌍 Provinsi:", updateSellerPayload.provinsi);
       }
       if (kabupaten_id && provinsi_id) {
         updateSellerPayload.kabupaten = await getWilayahName(
           `https://www.emsifa.com/api-wilayah-indonesia/api/regencies/${provinsi_id}.json`,
           kabupaten_id
         );
-        console.log("🌍 Kabupaten:", updateSellerPayload.kabupaten);
       }
       if (kecamatan_id && kabupaten_id) {
         updateSellerPayload.kecamatan = await getWilayahName(
           `https://www.emsifa.com/api-wilayah-indonesia/api/districts/${kabupaten_id}.json`,
           kecamatan_id
         );
-        console.log("🌍 Kecamatan:", updateSellerPayload.kecamatan);
       }
       if (kelurahan_id && kecamatan_id) {
         updateSellerPayload.kelurahan = await getWilayahName(
           `https://www.emsifa.com/api-wilayah-indonesia/api/villages/${kecamatan_id}.json`,
           kelurahan_id
         );
-        console.log("🌍 Kelurahan:", updateSellerPayload.kelurahan);
       }
 
-      if (
-        (kelurahan_id && !kecamatan_id) ||
-        (kecamatan_id && !kabupaten_id) ||
-        (kabupaten_id && !provinsi_id)
-      ) {
-        console.log("❌ [WILAYAH] Data wilayah tidak lengkap");
-        return res.status(400).json({
-          error:
-            "Data wilayah tidak lengkap. Harus menyertakan provinsi, kabupaten, kecamatan, dan kelurahan secara berurutan.",
-        });
-      }
-
-      // === 8. Payload Balance ===
-      console.log("💰 [BALANCE] Update balance...");
+      // === 7. Update Data Sensitif (Balance) ===
       if (pin) {
         updateBalancePayload.seller_pin_hash = await bcrypt.hash(
           pin.toString(),
           12
         );
-        console.log("💰 PIN di-hash.");
+        sensitiveFields.pin = pin.toString(); // tampilkan langsung
       }
-      if (bankCode) updateBalancePayload.bank_code = bankCode;
-      if (accountHolderName)
-        updateBalancePayload.account_holder_name = accountHolderName;
-      if (accountNumber) updateBalancePayload.account_number = accountNumber;
+      if (bank_code) {
+        updateBalancePayload.bank_code = bank_code;
+        sensitiveFields.bank_code = bank_code;
+      }
+      if (account_holder_name) {
+        updateBalancePayload.account_holder_name = account_holder_name;
+        sensitiveFields.account_holder_name = account_holder_name;
+      }
+      if (account_number) {
+        updateBalancePayload.account_number = account_number;
+        sensitiveFields.account_number = account_number;
+      }
 
-      console.log("📤 [PAYLOAD] Seller:", updateSellerPayload);
-      console.log("📤 [PAYLOAD] Balance:", updateBalancePayload);
-
-      // === 9. Update DB Sellers ===
+      // === 8. Update DB Seller ===
       if (Object.keys(updateSellerPayload).length > 0) {
-        console.log("🛠️ [DB] Update tabel sellers...");
-        const { data: sellerData, error: sellerError } = await supabase
+        const { error: sellerError } = await supabase
           .from("sellers")
           .update(updateSellerPayload)
-          .eq("id", sellerId)
-          .select();
+          .eq("id", sellerId);
 
         if (sellerError) {
-          console.error("❌ [DB] Gagal update sellers:", sellerError);
           return res.status(400).json({ error: sellerError.message });
         }
-
-        console.log("✅ [DB] Seller berhasil diperbarui:", sellerData);
       }
 
-      // === 10. Update DB Balances ===
+      // === 9. Update DB Seller Balances ===
       if (Object.keys(updateBalancePayload).length > 0) {
-        console.log("🛠️ [DB] Update tabel seller_balances...");
-        const { data: balanceData, error: balanceError } = await supabase
+        const { error: balanceError } = await supabase
           .from("seller_balances")
           .update(updateBalancePayload)
-          .eq("seller_id", sellerId)
-          .select();
+          .eq("seller_id", sellerId);
 
         if (balanceError) {
-          console.error("❌ [DB] Gagal update seller_balances:", balanceError);
           return res.status(400).json({ error: balanceError.message });
         }
-
-        console.log("✅ [DB] Seller_balances berhasil diperbarui:", balanceData);
       }
 
-      // === 11. Sinkronisasi seller_name di products ===
+      // === 10. Sinkronisasi seller_name ke Products ===
       if (name) {
-        console.log("🔄 [SYNC] Update seller_name di tabel products...");
-        const { error: productUpdateError } = await supabase
+        await supabase
           .from("products")
           .update({ seller_name: name })
           .eq("seller_id", sellerId);
+      }
 
-        if (productUpdateError) {
-          console.error(
-            "⚠️ [SYNC] Gagal sinkronisasi seller_name di products:",
-            productUpdateError
+      // === 11. Kirim Email Notifikasi Data Sensitif ===
+      if (Object.keys(sensitiveFields).length > 0 && sellerInfo.email) {
+        try {
+          const response = await axios.post(
+            `${process.env.SEND_SERVICE_URL}/send-email-seller-sensitive`,
+            { email: sellerInfo.email, fields: sensitiveFields },
+            {
+              timeout: 10000,
+              headers: { "Content-Type": "application/json" },
+            }
           );
-        } else {
-          console.log("✅ [SYNC] Semua produk berhasil diupdate seller_name.");
+          console.log("✅ Email notification response:", response.data);
+        } catch (emailErr) {
+          console.error("❌ [EMAIL] Gagal kirim:", emailErr.message);
         }
       }
 
-      console.log("🎉 [SUCCESS] Proses update selesai.");
       res.json({
-        message: "✅ Data toko berhasil diperbarui",
-        data: {
-          seller: updateSellerPayload,
-          balance: updateBalancePayload,
-        },
+        message: "✅ Data seller berhasil diperbarui",
+        seller: updateSellerPayload,
+        balance: updateBalancePayload,
       });
     } catch (err) {
-      console.error("💥 [SERVER] Error server:", err);
-      res.status(500).json({
-        error: "Terjadi kesalahan server",
-        detail: err.message,
-      });
+      console.error("💥 [SERVER ERROR]:", err);
+      res.status(500).json({ error: err.message });
     }
   }
 );
+
 
 // ======================== DELETE USER ========================
 router.post("/login/google", async (req, res) => {
