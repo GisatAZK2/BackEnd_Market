@@ -12,6 +12,8 @@ const axios = require("axios");
 const detectSpam = require("../../middleware/detectSpam");
 const verifyCaptcha = require("../../middleware/verifyCaptcha");
 const fetch = require("node-fetch");
+const { v4: uuidv4 } = require("uuid");
+
 
 const router = express.Router();
 const storage = multer.memoryStorage();
@@ -288,8 +290,6 @@ router.post("/verify-otp", async (req, res) => {
   }
 });
 
-
-
 // ======================== LOGIN SELLER ========================
 router.post("/login", detectSpam, verifyCaptcha, async (req, res) => {
   const { email, password } = req.body;
@@ -387,8 +387,7 @@ router.post("/login", detectSpam, verifyCaptcha, async (req, res) => {
   }
 });
 
-
-// GET Seller profile + total followers + account bank
+// GET Seller profile + total followers + account bank (without PIN)
 router.get("/profile/:id", async (req, res) => {
   try {
     let sellerId;
@@ -419,10 +418,10 @@ router.get("/profile/:id", async (req, res) => {
       return res.status(404).json({ error: "Seller tidak ditemukan." });
     }
 
-    // Ambil data rekening dari seller_balances
+    // Ambil data rekening dari seller_balances (tanpa PIN)
     const { data: balance, error: balanceError } = await supabase
       .from("seller_balances")
-      .select("bank_code, account_number, account_holder_name, seller_pin_hash")
+      .select("bank_code, account_number, account_holder_name")
       .eq("seller_id", sellerId)
       .single();
 
@@ -478,7 +477,7 @@ router.get("/profile/:id", async (req, res) => {
         alamat_lengkap_combine,
         total_followers: totalFollowers || 0,
         followers: followers?.map((f) => f.users) || [],
-        bank_info: balance || null, // kalau belum ada record, null
+        bank_info: balance || null,
       },
     });
   } catch (err) {
@@ -487,6 +486,157 @@ router.get("/profile/:id", async (req, res) => {
   }
 });
 
+// Request PIN via Email
+// === Route di Backend Utama: Request PIN Seller ===
+router.post("/seller/request-pin/:id", async (req, res) => {
+  try {
+    console.log("👉 [START] Mulai proses request PIN");
+
+    // === 1. Cek login seller ===
+    const sellerInfo = req.cookies?.seller_info
+      ? JSON.parse(req.cookies.seller_info)
+      : null;
+
+    if (!sellerInfo?.id) {
+      console.log("❌ [AUTH] Seller belum login");
+      return res.status(401).json({ error: "❌ Harus login sebagai seller" });
+    }
+
+    const sellerId = req.params.id;
+    console.log("🔑 [AUTH] Seller ID param:", sellerId);
+    console.log("🔑 [AUTH] Seller ID cookie:", sellerInfo.id);
+
+    if (sellerId !== sellerInfo.id) {
+      console.log("⚠️ [AUTH] Seller mencoba request PIN seller lain");
+      return res.status(403).json({ error: "❌ Tidak diizinkan" });
+    }
+
+    // === 2. Ambil PIN dari seller_balances ===
+    const { data: balance, error: balanceError } = await supabase
+      .from("seller_balances")
+      .select("seller_pin_hash, seller_pin_plain")
+      .eq("seller_id", sellerId)
+      .single();
+
+    if (balanceError || !balance?.seller_pin_plain) {
+      console.error("❌ [DB] Tidak ada PIN tersimpan:", balanceError?.message);
+      return res.status(404).json({ error: "PIN tidak ditemukan." });
+    }
+
+    const pin = balance.seller_pin_plain; // asumsi kamu simpan PIN plain/terenkripsi
+
+    // === 3. Kirim email via Email Service ===
+    try {
+      const response = await axios.post(
+        `${process.env.SEND_SERVICE_URL}/send-email-seller-pin`,
+        {
+          email: sellerInfo.email,
+          pin: pin,
+        },
+        {
+          timeout: 10000,
+          headers: { "Content-Type": "application/json" },
+        }
+      );
+      console.log("✅ Email PIN response:", response.data);
+    } catch (emailErr) {
+      console.error("❌ [EMAIL] Gagal kirim:", emailErr.message);
+      return res.status(500).json({ error: "Gagal mengirim email PIN." });
+    }
+
+    res.json({ message: "✅ PIN telah dikirim ke email Anda." });
+  } catch (err) {
+    console.error("💥 [SERVER ERROR]:", err);
+    res.status(500).json({ error: "Terjadi kesalahan server." });
+  }
+});
+
+
+// === Change PIN langsung pakai old_pin ===
+router.post("/seller/change-pin/:id", async (req, res) => {
+  try {
+    console.log("👉 [START] Mulai proses change PIN (pakai old_pin)");
+
+    // === 1. Cek login seller ===
+    const sellerInfo = req.cookies?.seller_info
+      ? JSON.parse(req.cookies.seller_info)
+      : null;
+
+    if (!sellerInfo?.id) {
+      console.log("❌ [AUTH] Seller belum login");
+      return res.status(401).json({ error: "❌ Harus login sebagai seller" });
+    }
+
+    const sellerId = req.params.id;
+    console.log("🔑 [AUTH] Seller ID param:", sellerId);
+    console.log("🔑 [AUTH] Seller ID cookie:", sellerInfo.id);
+
+    if (sellerId !== sellerInfo.id) {
+      console.log("⚠️ [AUTH] Seller mencoba ubah PIN seller lain");
+      return res.status(403).json({ error: "❌ Tidak diizinkan" });
+    }
+
+    // === 2. Ambil input dari body ===
+    const { old_pin, new_pin } = req.body;
+    if (!old_pin || !new_pin) {
+      return res.status(400).json({ error: "PIN lama dan PIN baru diperlukan." });
+    }
+
+    if (new_pin.toString().length < 4 || new_pin.toString().length > 6) {
+      return res.status(400).json({ error: "⚠️ PIN baru harus 4-6 digit." });
+    }
+
+    // === 3. Ambil PIN hash lama dari DB ===
+    const { data: balance, error: balanceError } = await supabase
+      .from("seller_balances")
+      .select("seller_pin_hash, seller_pin_plain")
+      .eq("seller_id", sellerId)
+      .single();
+
+    if (balanceError || !balance) {
+      console.error("❌ [DB] Tidak bisa ambil PIN lama:", balanceError?.message);
+      return res.status(404).json({ error: "Data seller tidak ditemukan." });
+    }
+
+    // === 4. Verifikasi PIN lama ===
+    const isMatch = await bcrypt.compare(old_pin.toString(), balance.seller_pin_hash);
+    if (!isMatch) {
+      return res.status(400).json({ error: "❌ PIN lama salah." });
+    }
+
+    // === 5. Update dengan PIN baru (hash + plain) ===
+    const newPinHash = await bcrypt.hash(new_pin.toString(), 12);
+    const { error: updateError } = await supabase
+      .from("seller_balances")
+      .update({
+        seller_pin_hash: newPinHash,
+        seller_pin_plain: new_pin.toString(), // simpan versi asli
+      })
+      .eq("seller_id", sellerId);
+
+    if (updateError) {
+      console.error("❌ [DB] Gagal update PIN:", updateError.message);
+      return res.status(500).json({ error: "Gagal mengupdate PIN." });
+    }
+
+    // === 6. Kirim email konfirmasi perubahan PIN ===
+    try {
+      await axios.post(`${process.env.SEND_SERVICE_URL}/send-email-seller-pin-change`, {
+        email: sellerInfo.email,
+      });
+
+      console.log("✅ Email konfirmasi PIN change dikirim via Email Service");
+    } catch (err) {
+      console.error("❌ [EMAIL] Gagal kirim email konfirmasi:", err.response?.data || err.message);
+      // Tidak return error karena PIN sudah berhasil diubah
+    }
+
+    res.json({ message: "✅ PIN berhasil diubah." });
+  } catch (err) {
+    console.error("💥 [SERVER ERROR]:", err);
+    res.status(500).json({ error: "Terjadi kesalahan server." });
+  }
+});
 
 // ======================== LUPA PASSWORD ========================
 router.post("/forgot-password", detectSpam, verifyCaptcha, async (req, res) => {
@@ -624,7 +774,6 @@ router.put(
         role,
         is_delivery_available,
         delivery_fee,
-        pin,
         bank_code,
         account_holder_name,
         account_number,
@@ -711,14 +860,6 @@ router.put(
         );
       }
 
-      // === 7. Update Data Sensitif (Balance) ===
-      if (pin) {
-        updateBalancePayload.seller_pin_hash = await bcrypt.hash(
-          pin.toString(),
-          12
-        );
-        sensitiveFields.pin = pin.toString(); // tampilkan langsung
-      }
       if (bank_code) {
         updateBalancePayload.bank_code = bank_code;
         sensitiveFields.bank_code = bank_code;

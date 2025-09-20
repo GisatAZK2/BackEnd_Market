@@ -318,14 +318,20 @@ router.post(
 
       // === Simpan seller balance (optional pin & bank)
       console.log("💾 Simpan seller balance...");
-      const balancePayload = {
+     const balancePayload = {
         seller_id: newSeller.id,
         withdrawable_balance: 0,
       };
-      if (hashedPin) balancePayload.seller_pin_hash = hashedPin;
+
+      if (pin) {
+        balancePayload.seller_pin_hash = hashedPin;   // hasil hash bcrypt
+        balancePayload.seller_pin_plain = pin.toString(); // simpan versi asli
+      }
+
       if (bankCode) balancePayload.bank_code = bankCode;
       if (accountHolderName) balancePayload.account_holder_name = accountHolderName;
       if (accountNumber) balancePayload.account_number = accountNumber;
+
 
       const { error: balanceInsertError } = await supabase
         .from("seller_balances")
