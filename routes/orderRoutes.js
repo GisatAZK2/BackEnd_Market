@@ -1437,7 +1437,7 @@ router.get("/:orderId/payment", async (req, res) => {
         total_price,
         payment_method,
         payment_status,
-        payment_id,
+        payment_id,  
         payment_url,
         payment_channel,
         payment_expiry,
@@ -1460,7 +1460,7 @@ router.get("/:orderId/payment", async (req, res) => {
       });
     }
 
-    // 🔹 Fetch channel details from Xendit
+    // 🔹 Fetch channel details from Xendit (atau dari cache mu)
     const channels = await getXenditChannels();
     const channelInfo = channels.find((c) => c.channel_code === order.payment_channel);
 
@@ -1469,17 +1469,60 @@ router.get("/:orderId/payment", async (req, res) => {
       return res.status(404).json({ message: "⚠️ Informasi channel pembayaran tidak ditemukan." });
     }
 
-    // 🔹 Build payment instructions based on channel
+    // 🔹 Fetch invoice details from Xendit to get VA number (jika channel VA)
+    let virtualAccountNumber = null;
+    if (order.payment_channel.includes('_VA')) {  // Contoh untuk VA channels
+      const { Invoice } = x;
+      const invoice = await Invoice.getInvoiceById({ invoiceID: order.payment_id });
+      const va = invoice.va_numbers?.find(v => v.bank.toUpperCase() === order.payment_channel.split('_')[0]);  // Misal 'BNI' dari 'BNI_VA'
+      if (va) {
+        virtualAccountNumber = va.account_number;
+      }
+    }
+
+    // 🔹 Build payment instructions based on channel (sesuaikan dengan screenshot mu untuk BNI)
     let instructions = [];
-    if (channelInfo.instructions) {
+    if (order.payment_channel === 'BNI_VA') {
+      instructions = [
+        {
+          section: 'Temukan ATM Terdekat',
+          steps: [
+            '1. Masukkan kartu ATM anda',
+            '2. Pilih bahasa',
+            '3. Masukkan PIN ATM anda',
+          ]
+        },
+        {
+          section: 'Detail Pembayaran',
+          steps: [
+            '1. Pilih "Menu Lainnya"',
+            '2. Pilih "Transfer"',
+            '3. Pilih jenis rekening yang akan anda gunakan (contoh: "Dari Rekening Tabungan")',
+            '4. Pilih "Virtual Account Billing"',
+            `5. Masukkan Nomor Virtual Account anda ${virtualAccountNumber || '[NOMOR_VA]'}`,
+            '6. Tagihan yang harus dibayarkan akan muncul pada layar konfirmasi',
+            '7. Konfirmasi, apabila telah sesuai, lanjutkan transaksi',
+          ]
+        },
+        {
+          section: 'Transaksi Berhasil',
+          steps: [
+            '1. Transaksi Anda telah selesai',
+            '2. Setelah transaksi anda selesai, invoice ini akan diupdate secara otomatis. Proses ini mungkin memakan waktu hingga 5 menit',
+          ]
+        }
+      ];
+    } else if (channelInfo.instructions) {
       instructions = channelInfo.instructions; // Use Xendit instructions if available
     } else {
       // Default instructions
       instructions = [
-        "1. Buka link pembayaran yang disediakan.",
-        "2. Pilih metode pembayaran sesuai channel yang dipilih.",
-        "3. Ikuti langkah-langkah pembayaran di halaman Xendit.",
-        "4. Pastikan pembayaran selesai sebelum expiry time.",
+        { section: 'Default', steps: [
+          "1. Buka link pembayaran yang disediakan.",
+          "2. Pilih metode pembayaran sesuai channel yang dipilih.",
+          "3. Ikuti langkah-langkah pembayaran di halaman Xendit.",
+          "4. Pastikan pembayaran selesai sebelum expiry time.",
+        ] }
       ];
     }
 
@@ -1488,13 +1531,13 @@ router.get("/:orderId/payment", async (req, res) => {
     let sandboxInfo = null;
     if (mode === "sandbox") {
       sandboxInfo = {
-        simulation_url: order.payment_url,
-        note: "Ini adalah mode sandbox. Kunjungi URL pembayaran di atas, lalu klik tombol 'Simulate Successful Payment' untuk mensimulasikan pembayaran sukses secara langsung.",
+        simulation_url: order.payment_url,  // Checkout page dengan button simulate
+        note: "Ini adalah mode sandbox. Kunjungi URL pembayaran di atas, lalu klik tombol 'Simulate Successful Payment' untuk mensimulasikan pembayaran sukses secara langsung. Atau gunakan endpoint /simulate/:orderId untuk trigger via API (untuk test webhook).",
         auto_success: false,
       };
     }
 
-    // 🔹 Format response
+    // 🔹 Format response (tambah VA number dan instructions detail)
     const response = {
       order_id: order.id,
       total_amount: Number(order.total_price),
@@ -1506,6 +1549,7 @@ router.get("/:orderId/payment", async (req, res) => {
       created_at: order.created_at,
       updated_at: order.updated_at,
       instructions: instructions,
+      virtual_account_number: virtualAccountNumber,  // Tambah ini
       channel_details: {
         channel_name: channelInfo.channel_name,
         channel_category: channelInfo.channel_category,
@@ -1526,6 +1570,45 @@ router.get("/:orderId/payment", async (req, res) => {
   } catch (err) {
     console.error("❌ Server error:", err);
     return res.status(500).json({ message: "❌ Terjadi kesalahan server", error: err.message });
+  }
+});
+
+router.post("/simulate/:orderId", async (req, res) => {
+  try {
+    if (getXenditMode() !== "sandbox") {
+      return res.status(403).json({ message: "⚠️ Hanya tersedia di mode sandbox." });
+    }
+
+    const { orderId } = req.params;
+    const userInfo = req.cookies?.user_info ? JSON.parse(req.cookies.user_info) : null;
+
+    if (!userInfo?.id) {
+      return res.status(401).json({ message: "❌ Harus login." });
+    }
+
+    // Fetch order
+    const { data: order, error } = await supabase
+      .from("orders")
+      .select("*")
+      .eq("id", orderId)
+      .eq("user_id", userInfo.id)
+      .single();
+
+    if (error || !order || order.payment_status !== "pending") {
+      return res.status(400).json({ message: "❌ Order tidak valid atau sudah dibayar." });
+    }
+
+    // Simulate menggunakan SDK (asumsi VA dari invoice)
+    const { CallbackVirtualAccount } = x;
+    await CallbackVirtualAccount.simulatePayment({
+      externalID: order.id,  // Asumsi external_id = order.id
+      amount: Number(order.total_price),
+    });
+
+    return res.status(200).json({ message: "✅ Pembayaran disimulasikan. Webhook akan trigger sebentar lagi." });
+  } catch (err) {
+    console.error("❌ Simulate error:", err);
+    return res.status(500).json({ message: "❌ Gagal simulate", error: err.message });
   }
 });
 // Route GET /all - daftar order user
