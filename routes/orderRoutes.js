@@ -9,7 +9,7 @@ const NodeCache = require("node-cache");
 const {
   attachVariantsStockDiscountWithRealDiscount
 } = require("../utils/applyDiscountAndVariants");
-const {getXenditMode,getXenditChannels, Listpaymentchanel} = require("../utils/listpaymentchanel");
+const {getXenditMode,getXenditChannels, Listpaymentchanel, getXenditInvoice} = require("../utils/listpaymentchanel");
 
 // ==============================
 // Environment variables
@@ -1397,8 +1397,8 @@ router.delete("/orders/:id", async (req, res) => {
   }
 });
 
-const axios = require('axios');
 
+// 🔐 Modified router to use getXenditInvoice
 router.get("/:orderId/payment", async (req, res) => {
   try {
     const { orderId } = req.params;
@@ -1406,13 +1406,16 @@ router.get("/:orderId/payment", async (req, res) => {
 
     // 🔐 Check if user is logged in
     if (!userInfo?.id) {
-      return res.status(401).json({ message: "❌ Harus login untuk melihat detail pembayaran." });
+      return res
+        .status(401)
+        .json({ message: "❌ Harus login untuk melihat detail pembayaran." });
     }
 
     // 🔹 Fetch order data from Supabase
     const { data: order, error: orderError } = await supabase
       .from("orders")
-      .select(`
+      .select(
+        `
         id,
         user_id,
         total_price,
@@ -1424,7 +1427,8 @@ router.get("/:orderId/payment", async (req, res) => {
         payment_expiry,
         created_at,
         updated_at
-      `)
+      `
+      )
       .eq("id", orderId)
       .eq("user_id", userInfo.id)
       .single();
@@ -1437,93 +1441,83 @@ router.get("/:orderId/payment", async (req, res) => {
     // 🔹 Validate: Only for digital payment method and pending status
     if (order.payment_method !== "digital" || order.payment_status !== "pending") {
       return res.status(400).json({
-        message: "⚠️ Endpoint ini hanya untuk order dengan pembayaran digital yang masih pending.",
+        message:
+          "⚠️ Endpoint ini hanya untuk order dengan pembayaran digital yang masih pending.",
       });
     }
 
-    // 🔹 Fetch invoice details from Xendit using GET /v2/invoices/{invoice_id}
-    const XENDIT_BASE_URL = "https://api.xendit.co";
-    const XENDIT_API_KEY = process.env.XENDIT_API_KEY; // Ensure this is set in your environment variables
-    const invoiceResponse = await axios.get(`${XENDIT_BASE_URL}/v2/invoices/${order.payment_id}`, {
-      headers: {
-        Authorization: `Basic ${Buffer.from(XENDIT_API_KEY + ":").toString("base64")}`,
-      },
-    });
-
-    const invoice = invoiceResponse.data;
-    if (!invoice) {
-      console.error("⚠️ Invoice tidak ditemukan:", order.payment_id);
-      return res.status(404).json({ message: "⚠️ Invoice tidak ditemukan." });
-    }
-
-    // 🔹 Fetch channel details from Xendit (or from cache)
+    // 🔹 Fetch channel details from Xendit
     const channels = await getXenditChannels();
-    const channelInfo = channels.find((c) => c.channel_code === order.payment_channel);
+    const channelInfo = channels.find(
+      (c) => c.channel_code === order.payment_channel
+    );
 
     if (!channelInfo) {
       console.error("⚠️ Channel tidak ditemukan:", order.payment_channel);
-      return res.status(404).json({ message: "⚠️ Informasi channel pembayaran tidak ditemukan." });
+      return res
+        .status(404)
+        .json({ message: "⚠️ Informasi channel pembayaran tidak ditemukan." });
     }
 
-    // 🔹 Extract virtual account number for VA channels
+    // 🔹 Fetch invoice details if Virtual Account
     let virtualAccountNumber = null;
-    if (order.payment_channel.includes('_VA')) {
-      const va = invoice.available_banks?.find(v => v.bank.toUpperCase() === order.payment_channel.split('_')[0]);
-      if (va) {
-        virtualAccountNumber = va.account_number;
+    if (channelInfo.channel_category === "VIRTUAL_ACCOUNT") {
+      const invoice = await getXenditInvoice(order.payment_id);
+      if (invoice?.payment_details?.virtual_account_number) {
+        virtualAccountNumber = invoice.payment_details.virtual_account_number;
       }
     }
 
     // 🔹 Build payment instructions based on channel
     let instructions = [];
-    if (order.payment_channel === 'BNI_VA') {
+    if (order.payment_channel === "BNI" || order.payment_channel === "BNI_VA") {
       instructions = [
         {
-          section: 'Temukan ATM Terdekat',
+          section: "Temukan ATM Terdekat",
           steps: [
-            '1. Masukkan kartu ATM anda',
-            '2. Pilih bahasa',
-            '3. Masukkan PIN ATM anda',
-          ]
+            "1. Masukkan kartu ATM anda",
+            "2. Pilih bahasa",
+            "3. Masukkan PIN ATM anda",
+          ],
         },
         {
-          section: 'Detail Pembayaran',
+          section: "Detail Pembayaran",
           steps: [
             '1. Pilih "Menu Lainnya"',
             '2. Pilih "Transfer"',
             '3. Pilih jenis rekening yang akan anda gunakan (contoh: "Dari Rekening Tabungan")',
             '4. Pilih "Virtual Account Billing"',
-            `5. Masukkan Nomor Virtual Account anda ${virtualAccountNumber || '[NOMOR_VA]'}`,
-            '6. Tagihan yang harus dibayarkan akan muncul pada layar konfirmasi',
-            '7. Konfirmasi, apabila telah sesuai, lanjutkan transaksi',
-          ]
+            `5. Masukkan Nomor Virtual Account anda ${virtualAccountNumber || "[NOMOR_VA]"}`,
+            "6. Tagihan yang harus dibayarkan akan muncul pada layar konfirmasi",
+            "7. Konfirmasi, apabila telah sesuai, lanjutkan transaksi",
+          ],
         },
         {
-          section: 'Transaksi Berhasil',
+          section: "Transaksi Berhasil",
           steps: [
-            '1. Transaksi Anda telah selesai',
-            '2. Setelah transaksi anda selesai, invoice ini akan diupdate secara otomatis. Proses ini mungkin memakan waktu hingga 5 menit',
-          ]
-        }
+            "1. Transaksi Anda telah selesai",
+            "2. Setelah transaksi anda selesai, invoice ini akan diupdate secara otomatis. Proses ini mungkin memakan waktu hingga 5 menit",
+          ],
+        },
       ];
     } else if (channelInfo.instructions) {
       instructions = channelInfo.instructions;
     } else {
       instructions = [
         {
-          section: 'Default',
+          section: "Default",
           steps: [
             "1. Buka link pembayaran yang disediakan.",
             "2. Pilih metode pembayaran sesuai channel yang dipilih.",
             "3. Ikuti langkah-langkah pembayaran di halaman Xendit.",
             "4. Pastikan pembayaran selesai sebelum expiry time.",
-          ]
-        }
+          ],
+        },
       ];
     }
 
     // 🔹 Check Xendit mode (sandbox or live)
-    const mode = getXenditMode();
+    const mode = await getXenditMode();
     let sandboxInfo = null;
     if (mode === "sandbox") {
       sandboxInfo = {
@@ -1533,7 +1527,7 @@ router.get("/:orderId/payment", async (req, res) => {
       };
     }
 
-    // 🔹 Format response with full invoice details
+    // 🔹 Format response
     const response = {
       order_id: order.id,
       total_amount: Number(order.total_price),
@@ -1544,7 +1538,7 @@ router.get("/:orderId/payment", async (req, res) => {
       payment_expiry: order.payment_expiry,
       created_at: order.created_at,
       updated_at: order.updated_at,
-      instructions: instructions,
+      instructions,
       virtual_account_number: virtualAccountNumber,
       channel_details: {
         channel_name: channelInfo.channel_name,
@@ -1552,25 +1546,6 @@ router.get("/:orderId/payment", async (req, res) => {
         currency: channelInfo.currency,
         min_limit: channelInfo.min_limit,
         max_limit: channelInfo.max_limit,
-      },
-      invoice_details: {
-        invoice_id: invoice.id,
-        external_id: invoice.external_id,
-        status: invoice.status,
-        merchant_name: invoice.merchant_name,
-        amount: invoice.amount,
-        payer_email: invoice.payer_email,
-        description: invoice.description,
-        invoice_url: invoice.invoice_url,
-        expiry_date: invoice.expiry_date,
-        available_banks: invoice.available_banks || [],
-        available_retail_outlets: invoice.available_retail_outlets || [],
-        available_ewallets: invoice.available_ewallets || [],
-        available_qr_codes: invoice.available_qr_codes || [],
-        available_direct_debits: invoice.available_direct_debits || [],
-        available_paylaters: invoice.available_paylaters || [],
-        created: invoice.created,
-        updated: invoice.updated,
       },
     };
 
@@ -1584,7 +1559,9 @@ router.get("/:orderId/payment", async (req, res) => {
     });
   } catch (err) {
     console.error("❌ Server error:", err);
-    return res.status(500).json({ message: "❌ Terjadi kesalahan server", error: err.message });
+    return res
+      .status(500)
+      .json({ message: "❌ Terjadi kesalahan server", error: err.message });
   }
 });
 
