@@ -9,6 +9,7 @@ const NodeCache = require("node-cache");
 const {
   attachVariantsStockDiscountWithRealDiscount
 } = require("../utils/applyDiscountAndVariants");
+const {getXenditMode,getXenditChannels, Listpaymentchanel} = require("../utils/listpaymentchanel");
 
 // ==============================
 // Environment variables
@@ -37,76 +38,8 @@ if (!CRYPTO_SECRET_KEY) {
 // Xendit init
 // ==============================
 const xendit = new Xendit({ secretKey: XENDIT_SECRET_KEY });
-const { Invoice } = xendit;
-function getXenditMode() {
-  if (!XENDIT_SECRET_KEY) return "unknown";
-  if (XENDIT_SECRET_KEY.startsWith("xnd_development")) return "sandbox";
-  if (XENDIT_SECRET_KEY.startsWith("xnd_production")) return "production";
-  return "unknown";
-}
 
 const XENDIT_BASE_URL = "https://api.xendit.co";
-
-// ✅ Ambil daftar channel dari Xendit (semua, baik aktif / non-aktif)
-async function getXenditChannels() {
-  try {
-    const mode = getXenditMode();
-    console.log(`🌐 Xendit mode: ${mode}`);
-
-    const res = await axios.get(`${XENDIT_BASE_URL}/payment_channels`, {
-      auth: { username: XENDIT_SECRET_KEY, password: "" },
-    });
-
-    // Response = array langsung
-    if (!Array.isArray(res.data)) {
-      console.error("❌ Response Xendit tidak sesuai:", res.data);
-      return [];
-    }
-
-    // 👉 Tampilkan semua, tanpa filter is_enabled
-    return res.data;
-  } catch (err) {
-    console.error(
-      "❌ Gagal ambil payment channels:",
-      err.response?.data || err.message
-    );
-    return [];
-  }
-}
-
-const CHANNEL_LIMITS = {
-  AKULAKU: { min_amount: 1000, max_amount: 25000000 },
-  ALFAMART: { min_amount: 10000, max_amount: 5000000 },
-  ASTRAPAY: { min_amount: 100, max_amount: 20000000 },
-  ATOME: { min_amount: 50000, max_amount: 6000000 },
-  BCA: { min_amount: 10000, max_amount: 50000000 },
-  BJB: { min_amount: 1, max_amount: 2000000000 },
-  BNC: { min_amount: 1, max_amount: 50000000000 },
-  BNI: { min_amount: 1, max_amount: 50000000 },
-  BRI_DIRECT_DEBIT: { min_amount: 1, max_amount: 50000000 },
-  BRI: { min_amount: 1, max_amount: 50000000000 },
-  BSI: { min_amount: 1, max_amount: 50000000000 },
-  BSS: { min_amount: 1, max_amount: 50000000000 },
-  CARDS: { min_amount: 5000, max_amount: 200000000 },
-  CIMB: { min_amount: 1, max_amount: 50000000 },
-  DANA: { min_amount: 100, max_amount: 20000000 },
-  GOPAY: { min_amount: 1, max_amount: 50000000 },
-  GOPAY_RECURRING: { min_amount: 1, max_amount: 50000000 },
-  INDODANA: { min_amount: 10000, max_amount: 25000000 },
-  INDOMARET: { min_amount: 10000, max_amount: 2500000 },
-  JENIUSPAY: { min_amount: 1000, max_amount: 10000000 },
-  KREDIVO: { min_amount: 1000, max_amount: 30000000 },
-  LINKAJA: { min_amount: 100, max_amount: 10000000 },
-  MANDIRI: { min_amount: 1, max_amount: 50000000000 },
-  MUAMALAT: { min_amount: 1, max_amount: 50000000000 },
-  NEXCASH: { min_amount: 1, max_amount: 20000000 },
-  OVO: { min_amount: 100, max_amount: 20000000 },
-  PERMATA: { min_amount: 1, max_amount: 9999999999 },
-  QRIS: { min_amount: 1, max_amount: 10000000 },
-  SHOPEEPAY: { min_amount: 1, max_amount: 20000000 },
-};
-
-
 
 // Cache setup
 const cache = new NodeCache({ stdTTL: 60, checkperiod: 120 });
@@ -1294,30 +1227,36 @@ router.post("/cart/delivery-fee", async (req, res) => {
     // =============================
     // 6. Ambil wallet & payment methods
     // =============================
-    const wallet = await getUserBalance(userInfo.id);
+      const wallet = await getUserBalance(userInfo.id);
 
-    // ✅ Ambil daftar channel + min/max amount
-    const channels = await getXenditChannels();
+      // ✅ Ambil daftar channel dari Xendit
+      const channels = await getXenditChannels();
 
-    // 🚀 Mapping channels dengan filter min/max
-    const mappedChannels = channels.map((c) => {
-      const limits = CHANNEL_LIMITS[c.channel_code] || {};
-      const isAvailable =
-        grandTotalSemua >= (limits.min_amount || 0) &&
-        (limits.max_amount ? grandTotalSemua <= limits.max_amount : true);
+      // ✅ Ambil logo + limits dari util
+      const { CHANNEL_LOGOS, CHANNEL_LIMITS } = await Listpaymentchanel();
 
-      return {
-        channel_code: c.channel_code,
-        name: c.name,
-        type: c.channel_category,
-        is_enabled: c.is_enabled,
-        currency: c.currency,
-        min_amount: limits.min_amount || 0,
-        max_amount: limits.max_amount || null,
-        available: isAvailable,
-        note: isAvailable ? "bisa bayar" : "tidak bisa bayar",
-      };
-    });
+      // 🚀 Mapping channels dengan filter min/max + logo
+      const mappedChannels = channels.map((c) => {
+        const limits = CHANNEL_LIMITS[c.channel_code] || {};
+        const logo = CHANNEL_LOGOS[c.channel_code] || null;
+
+        const isAvailable =
+          grandTotalSemua >= (limits.min_amount || 0) &&
+          (limits.max_amount ? grandTotalSemua <= limits.max_amount : true);
+
+        return {
+          channel_code: c.channel_code,
+          name: c.name,
+          type: c.channel_category,
+          is_enabled: c.is_enabled,
+          currency: c.currency,
+          logo,
+          min_amount: limits.min_amount || 0,
+          max_amount: limits.max_amount || null,
+          available: isAvailable,
+          note: isAvailable ? "bisa bayar" : "tidak bisa bayar",
+        };
+      });
 
     // =============================
     // 7. Return response
@@ -1458,6 +1397,8 @@ router.delete("/orders/:id", async (req, res) => {
   }
 });
 
+const axios = require('axios');
+
 router.get("/:orderId/payment", async (req, res) => {
   try {
     const { orderId } = req.params;
@@ -1500,7 +1441,22 @@ router.get("/:orderId/payment", async (req, res) => {
       });
     }
 
-    // 🔹 Fetch channel details from Xendit (atau dari cache mu)
+    // 🔹 Fetch invoice details from Xendit using GET /v2/invoices/{invoice_id}
+    const XENDIT_BASE_URL = "https://api.xendit.co";
+    const XENDIT_API_KEY = process.env.XENDIT_API_KEY; // Ensure this is set in your environment variables
+    const invoiceResponse = await axios.get(`${XENDIT_BASE_URL}/v2/invoices/${order.payment_id}`, {
+      headers: {
+        Authorization: `Basic ${Buffer.from(XENDIT_API_KEY + ":").toString("base64")}`,
+      },
+    });
+
+    const invoice = invoiceResponse.data;
+    if (!invoice) {
+      console.error("⚠️ Invoice tidak ditemukan:", order.payment_id);
+      return res.status(404).json({ message: "⚠️ Invoice tidak ditemukan." });
+    }
+
+    // 🔹 Fetch channel details from Xendit (or from cache)
     const channels = await getXenditChannels();
     const channelInfo = channels.find((c) => c.channel_code === order.payment_channel);
 
@@ -1509,18 +1465,16 @@ router.get("/:orderId/payment", async (req, res) => {
       return res.status(404).json({ message: "⚠️ Informasi channel pembayaran tidak ditemukan." });
     }
 
-    // 🔹 Fetch invoice details from Xendit to get VA number (jika channel VA)
+    // 🔹 Extract virtual account number for VA channels
     let virtualAccountNumber = null;
-    if (order.payment_channel.includes('_VA')) {  // Contoh untuk VA channels
-      const { Invoice } = x;
-      const invoice = await Invoice.getInvoiceById({ invoiceID: order.payment_id });
-      const va = invoice.va_numbers?.find(v => v.bank.toUpperCase() === order.payment_channel.split('_')[0]);  // Misal 'BNI' dari 'BNI_VA'
+    if (order.payment_channel.includes('_VA')) {
+      const va = invoice.available_banks?.find(v => v.bank.toUpperCase() === order.payment_channel.split('_')[0]);
       if (va) {
         virtualAccountNumber = va.account_number;
       }
     }
 
-    // 🔹 Build payment instructions based on channel (sesuaikan dengan screenshot mu untuk BNI)
+    // 🔹 Build payment instructions based on channel
     let instructions = [];
     if (order.payment_channel === 'BNI_VA') {
       instructions = [
@@ -1553,16 +1507,18 @@ router.get("/:orderId/payment", async (req, res) => {
         }
       ];
     } else if (channelInfo.instructions) {
-      instructions = channelInfo.instructions; // Use Xendit instructions if available
+      instructions = channelInfo.instructions;
     } else {
-      // Default instructions
       instructions = [
-        { section: 'Default', steps: [
-          "1. Buka link pembayaran yang disediakan.",
-          "2. Pilih metode pembayaran sesuai channel yang dipilih.",
-          "3. Ikuti langkah-langkah pembayaran di halaman Xendit.",
-          "4. Pastikan pembayaran selesai sebelum expiry time.",
-        ] }
+        {
+          section: 'Default',
+          steps: [
+            "1. Buka link pembayaran yang disediakan.",
+            "2. Pilih metode pembayaran sesuai channel yang dipilih.",
+            "3. Ikuti langkah-langkah pembayaran di halaman Xendit.",
+            "4. Pastikan pembayaran selesai sebelum expiry time.",
+          ]
+        }
       ];
     }
 
@@ -1571,13 +1527,13 @@ router.get("/:orderId/payment", async (req, res) => {
     let sandboxInfo = null;
     if (mode === "sandbox") {
       sandboxInfo = {
-        simulation_url: order.payment_url,  // Checkout page dengan button simulate
+        simulation_url: order.payment_url,
         note: "Ini adalah mode sandbox. Kunjungi URL pembayaran di atas, lalu klik tombol 'Simulate Successful Payment' untuk mensimulasikan pembayaran sukses secara langsung. Atau gunakan endpoint /simulate/:orderId untuk trigger via API (untuk test webhook).",
         auto_success: false,
       };
     }
 
-    // 🔹 Format response (tambah VA number dan instructions detail)
+    // 🔹 Format response with full invoice details
     const response = {
       order_id: order.id,
       total_amount: Number(order.total_price),
@@ -1589,13 +1545,32 @@ router.get("/:orderId/payment", async (req, res) => {
       created_at: order.created_at,
       updated_at: order.updated_at,
       instructions: instructions,
-    _number: virtualAccountNumber,  // Tambah ini
+      virtual_account_number: virtualAccountNumber,
       channel_details: {
         channel_name: channelInfo.channel_name,
         channel_category: channelInfo.channel_category,
         currency: channelInfo.currency,
         min_limit: channelInfo.min_limit,
         max_limit: channelInfo.max_limit,
+      },
+      invoice_details: {
+        invoice_id: invoice.id,
+        external_id: invoice.external_id,
+        status: invoice.status,
+        merchant_name: invoice.merchant_name,
+        amount: invoice.amount,
+        payer_email: invoice.payer_email,
+        description: invoice.description,
+        invoice_url: invoice.invoice_url,
+        expiry_date: invoice.expiry_date,
+        available_banks: invoice.available_banks || [],
+        available_retail_outlets: invoice.available_retail_outlets || [],
+        available_ewallets: invoice.available_ewallets || [],
+        available_qr_codes: invoice.available_qr_codes || [],
+        available_direct_debits: invoice.available_direct_debits || [],
+        available_paylaters: invoice.available_paylaters || [],
+        created: invoice.created,
+        updated: invoice.updated,
       },
     };
 
