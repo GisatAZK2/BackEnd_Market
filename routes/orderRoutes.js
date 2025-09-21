@@ -74,6 +74,39 @@ async function getXenditChannels() {
   }
 }
 
+const CHANNEL_LIMITS = {
+  AKULAKU: { min_amount: 1000, max_amount: 25000000 },
+  ALFAMART: { min_amount: 10000, max_amount: 5000000 },
+  ASTRAPAY: { min_amount: 100, max_amount: 20000000 },
+  ATOME: { min_amount: 50000, max_amount: 6000000 },
+  BCA: { min_amount: 10000, max_amount: 50000000 },
+  BJB: { min_amount: 1, max_amount: 2000000000 },
+  BNC: { min_amount: 1, max_amount: 50000000000 },
+  BNI: { min_amount: 1, max_amount: 50000000 },
+  BRI_DIRECT_DEBIT: { min_amount: 1, max_amount: 50000000 },
+  BRI: { min_amount: 1, max_amount: 50000000000 },
+  BSI: { min_amount: 1, max_amount: 50000000000 },
+  BSS: { min_amount: 1, max_amount: 50000000000 },
+  CARDS: { min_amount: 5000, max_amount: 200000000 },
+  CIMB: { min_amount: 1, max_amount: 50000000 },
+  DANA: { min_amount: 100, max_amount: 20000000 },
+  GOPAY: { min_amount: 1, max_amount: 50000000 },
+  GOPAY_RECURRING: { min_amount: 1, max_amount: 50000000 },
+  INDODANA: { min_amount: 10000, max_amount: 25000000 },
+  INDOMARET: { min_amount: 10000, max_amount: 2500000 },
+  JENIUSPAY: { min_amount: 1000, max_amount: 10000000 },
+  KREDIVO: { min_amount: 1000, max_amount: 30000000 },
+  LINKAJA: { min_amount: 100, max_amount: 10000000 },
+  MANDIRI: { min_amount: 1, max_amount: 50000000000 },
+  MUAMALAT: { min_amount: 1, max_amount: 50000000000 },
+  NEXCASH: { min_amount: 1, max_amount: 20000000 },
+  OVO: { min_amount: 100, max_amount: 20000000 },
+  PERMATA: { min_amount: 1, max_amount: 9999999999 },
+  QRIS: { min_amount: 1, max_amount: 10000000 },
+  SHOPEEPAY: { min_amount: 1, max_amount: 20000000 },
+};
+
+
 
 // Cache setup
 const cache = new NodeCache({ stdTTL: 60, checkperiod: 120 });
@@ -1079,9 +1112,10 @@ router.post("/cart/checkout", async (req, res) => {
     return res.status(500).json({ message: "❌ Terjadi kesalahan server", error: err.message });
   }
 });
-// ==============================
-// Route: Delivery Fee
-// ==============================
+
+// =====================================
+// 🛒 POST /cart/delivery-fee
+// =====================================
 router.post("/cart/delivery-fee", async (req, res) => {
   try {
     const { itemsToCheckout, pickupMethod } = req.body;
@@ -1113,9 +1147,7 @@ router.post("/cart/delivery-fee", async (req, res) => {
     if (!products) {
       const { data, error } = await supabase
         .from("products")
-        .select(
-          "id, seller_id, product_price, product_name, product_image_url"
-        )
+        .select("id, seller_id, product_price, product_name, product_image_url")
         .in("id", productIds);
 
       if (error || !data?.length) {
@@ -1133,9 +1165,7 @@ router.post("/cart/delivery-fee", async (req, res) => {
     // =============================
     // 2. Ambil data seller
     // =============================
-    const sellerIds = Array.from(
-      new Set(products.map((p) => p.seller_id))
-    ).sort();
+    const sellerIds = Array.from(new Set(products.map((p) => p.seller_id))).sort();
     const cacheKeySellers = `sellers:fee:${sellerIds.join(",")}`;
 
     let sellers = cache.get(cacheKeySellers);
@@ -1266,57 +1296,66 @@ router.post("/cart/delivery-fee", async (req, res) => {
     // =============================
     const wallet = await getUserBalance(userInfo.id);
 
-    // ✅ Pakai function helper getXenditChannels()
+    // ✅ Ambil daftar channel + min/max amount
     const channels = await getXenditChannels();
 
-    const methodsRes = await axios.get(
-      `${XENDIT_BASE_URL}/v2/payment_methods`,
-      {
-        auth: { username: XENDIT_SECRET_KEY, password: "" },
-      }
-    );
-    const methods = (methodsRes.data?.data || []).filter(
-      (m) => m.status === "ACTIVE"
-    );
+    // 🚀 Mapping channels dengan filter min/max
+    const mappedChannels = channels.map((c) => {
+      const limits = CHANNEL_LIMITS[c.channel_code] || {};
+      const isAvailable =
+        grandTotalSemua >= (limits.min_amount || 0) &&
+        (limits.max_amount ? grandTotalSemua <= limits.max_amount : true);
+
+      return {
+        channel_code: c.channel_code,
+        name: c.name,
+        type: c.channel_category,
+        is_enabled: c.is_enabled,
+        currency: c.currency,
+        min_amount: limits.min_amount || 0,
+        max_amount: limits.max_amount || null,
+        available: isAvailable,
+        note: isAvailable ? "bisa bayar" : "tidak bisa bayar",
+      };
+    });
 
     // =============================
     // 7. Return response
     // =============================
     return res.status(200).json({
-  message: "✅ Data checkout berhasil dihitung.",
-  sellers: resultPerGroup,
-  total_produk_semua: grandTotalProduk,
-  total_ongkir_semua: grandTotalOngkir,
-  total_checkout_semua: grandTotalSemua,
-  delivery_stats: {
-    total_items: totalItems,
-    pickup_only_items: pickupOnlyItems,
-    delivery_available_items: deliveryAvailableItems,
-    message:
-      pickupOnlyItems > 0
-        ? `⚠️ ${pickupOnlyItems} item tidak bisa diantar, tapi bisa diambil sendiri ke toko`
-        : "✅ Semua item bisa diantar",
-  },
-  payment_methods: {
-    cod: {
-      method: "cod",
-      name: "Cash on Delivery",
-      available: true,
-    },
-    balance: {
-      method: "balance",
-      name: "Saldo Akun",
-      available: true,
-      balance: wallet.balance,
-      withdrawable_balance: wallet.withdrawable_balance,
-    },
-    xendit: {
-       env: mode,
-      channels, // ✅ hanya channels aja, tanpa methods
-    },
-  },
-});
-
+      message: "✅ Data checkout berhasil dihitung.",
+      sellers: resultPerGroup,
+      total_produk_semua: grandTotalProduk,
+      total_ongkir_semua: grandTotalOngkir,
+      total_checkout_semua: grandTotalSemua,
+      delivery_stats: {
+        total_items: totalItems,
+        pickup_only_items: pickupOnlyItems,
+        delivery_available_items: deliveryAvailableItems,
+        message:
+          pickupOnlyItems > 0
+            ? `⚠️ ${pickupOnlyItems} item tidak bisa diantar, tapi bisa diambil sendiri ke toko`
+            : "✅ Semua item bisa diantar",
+      },
+      payment_methods: {
+        cod: {
+          method: "cod",
+          name: "Cash on Delivery",
+          available: true,
+        },
+        balance: {
+          method: "balance",
+          name: "Saldo Akun",
+          available: true,
+          balance: wallet.balance,
+          withdrawable_balance: wallet.withdrawable_balance,
+        },
+        xendit: {
+          env: mode,
+          channels: mappedChannels,
+        },
+      },
+    });
   } catch (err) {
     console.error("❌ Server error:", err.response?.data || err.message);
     return res.status(500).json({
@@ -1325,6 +1364,7 @@ router.post("/cart/delivery-fee", async (req, res) => {
     });
   }
 });
+
 
 router.post("/orders/:id/confirm-receive", async (req, res) => {
   try {
@@ -1549,7 +1589,7 @@ router.get("/:orderId/payment", async (req, res) => {
       created_at: order.created_at,
       updated_at: order.updated_at,
       instructions: instructions,
-      virtual_account_number: virtualAccountNumber,  // Tambah ini
+    _number: virtualAccountNumber,  // Tambah ini
       channel_details: {
         channel_name: channelInfo.channel_name,
         channel_category: channelInfo.channel_category,
