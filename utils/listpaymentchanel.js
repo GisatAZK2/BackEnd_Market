@@ -12,6 +12,7 @@ async function getXenditMode() {
 }
 
 // ✅ Fetch all payment channels from Xendit (active and inactive)
+// ✅ Fetch all payment channels from Xendit (active and inactive)
 async function getXenditChannels() {
   try {
     const mode = await getXenditMode();
@@ -27,8 +28,16 @@ async function getXenditChannels() {
       return [];
     }
 
-    // Return all channels without filtering
-    return res.data;
+    let channels = res.data;
+
+    // 🔥 Kalau sandbox → sembunyikan RETAIL_OUTLET
+    if (mode === "sandbox") {
+      channels = channels.filter(
+        (ch) => ch.channel_category !== "RETAIL_OUTLET"
+      );
+    }
+
+    return channels;
   } catch (err) {
     console.error(
       "❌ Gagal ambil payment channels:",
