@@ -10,6 +10,7 @@ const {
   attachVariantsStockDiscountWithRealDiscount
 } = require("../utils/applyDiscountAndVariants");
 const {getXenditMode,getXenditChannels, Listpaymentchanel, getXenditInvoice} = require("../utils/listpaymentchanel");
+const QRCode = require("qrcode");
 
 // ==============================
 // Environment variables
@@ -1607,21 +1608,17 @@ router.get("/allpendingpayment", async (req, res) => {
   }
 });
 
-// ✅ GET /:orderId/payment
-// ✅ GET /:orderId/payment
 router.get("/:orderId/payment", async (req, res) => {
   try {
     const { orderId } = req.params;
     const userInfo = req.cookies?.user_info ? JSON.parse(req.cookies.user_info) : null;
 
-    // 🔐 Check if user is logged in
     if (!userInfo?.id) {
       return res.status(401).json({ message: "❌ Harus login untuk melihat detail pembayaran." });
     }
 
     const cacheKey = `order:payment:${userInfo.id}:${orderId}`;
     let cached = orderCache.get(cacheKey);
-
     if (cached) {
       cached = await attachRatings([cached], userInfo.id);
       return res.status(200).json({
@@ -1630,46 +1627,25 @@ router.get("/:orderId/payment", async (req, res) => {
       });
     }
 
-    // 🔹 Fetch order data from Supabase
+    // 🔹 Fetch order data
     const { data: order, error: orderError } = await supabase
       .from("orders")
-      .select(
-        `
-        id,
-        user_id,
-        total_price,
-        delivery_fee,
-        payment_method,
-        payment_status,
-        payment_id,
-        payment_url,
-        payment_channel,
-        payment_expiry,
-        created_at,
-        updated_at,
-        pickup_method,
-        confirm_deadline,
-        buyer_address,
-        seller_address
-      `
-      )
+      .select("*")
       .eq("id", orderId)
       .eq("user_id", userInfo.id)
       .single();
 
     if (orderError || !order) {
-      console.error("❌ Gagal ambil order:", orderError?.message);
       return res.status(404).json({ message: "❌ Order tidak ditemukan." });
     }
 
-    // 🔹 Validate: Only for digital payment method and pending status
     if (order.payment_method !== "digital" || order.payment_status !== "pending") {
       return res.status(400).json({
-        message: "⚠️ Endpoint ini hanya untuk order dengan pembayaran digital yang masih pending.",
+        message: "⚠️ Endpoint ini hanya untuk order digital yang pending.",
       });
     }
 
-    // 🔹 Fetch order items and details
+    // 🔹 Fetch items
     const [orderItemsRes, detailItemsRes] = await Promise.all([
       supabase.from("order_items").select("id, order_id, product_id, variant_id, quantity").eq("order_id", orderId),
       supabase.from("order_details_items").select("*").eq("order_id", orderId),
@@ -1677,7 +1653,6 @@ router.get("/:orderId/payment", async (req, res) => {
 
     const orderItems = orderItemsRes.data || [];
     const detailItems = detailItemsRes.data || [];
-
     const orderItemMap = {};
     orderItems.forEach((oi) => {
       const key = `${oi.order_id}-${oi.product_id}-${oi.variant_id ?? "null"}`;
@@ -1695,16 +1670,14 @@ router.get("/:orderId/payment", async (req, res) => {
         quantity: entry.quantity,
         price_per_item: item.variant_final_price ?? item.final_price ?? item.product_price,
         discount_percentage: item.variant_discount_percentage ?? item.discount_percentage ?? 0,
-        variant: item.variant_id
-          ? {
-              id: item.variant_id,
-              variant_name: item.variant_name,
-              variant_image_url: item.variant_image_url,
-              variant_price: item.variant_price,
-              variant_final_price: item.variant_final_price,
-              variant_discount_percentage: item.variant_discount_percentage,
-            }
-          : null,
+        variant: item.variant_id ? {
+          id: item.variant_id,
+          variant_name: item.variant_name,
+          variant_image_url: item.variant_image_url,
+          variant_price: item.variant_price,
+          variant_final_price: item.variant_final_price,
+          variant_discount_percentage: item.variant_discount_percentage,
+        } : null,
         ratings: [],
       };
     });
@@ -1713,48 +1686,27 @@ router.get("/:orderId/payment", async (req, res) => {
     const buyerInfo = parseAddress(order.buyer_address, true);
     const sellerInfo = parseAddress(order.seller_address, false);
 
-    // 🔹 Fetch channel details from Xendit
+    // 🔹 Channel info
     const channels = await getXenditChannels();
     const channelInfo = channels.find((c) => c.channel_code === order.payment_channel);
 
-    if (!channelInfo) {
-      console.error("⚠️ Channel tidak ditemukan:", order.payment_channel);
-      return res.status(404).json({ message: "⚠️ Informasi channel pembayaran tidak ditemukan." });
-    }
-
-    // 🔹 Fetch invoice details from Xendit
+    // 🔹 Invoice details
     let invoice = null;
+    let qrCodeUrl = null;
     if (order.payment_id) {
       const rawInvoice = await getXenditInvoice(order.payment_id);
       if (rawInvoice) {
-        const { customer_notification_preference, available_banks, ...filteredInvoice } = rawInvoice;
-        const removeIfEmptyFields = [
-          "available_retail_outlets",
-          "available_ewallets",
-          "available_qr_codes",
-          "available_direct_debits",
-          "available_paylaters",
-          "should_exclude_credit_card",
-          "should_send_email",
-        ];
+        const { available_qr_codes, ...filteredInvoice } = rawInvoice;
+        invoice = filteredInvoice;
 
-        removeIfEmptyFields.forEach((field) => {
-          if (
-            filteredInvoice[field] === null ||
-            filteredInvoice[field] === false ||
-            (Array.isArray(filteredInvoice[field]) && filteredInvoice[field].length === 0)
-          ) {
-            delete filteredInvoice[field];
-          }
-        });
-
-        invoice = Array.isArray(available_banks) && available_banks.length > 0
-          ? { ...filteredInvoice, ...available_banks[0] }
-          : filteredInvoice;
+        // 🔹 Tambahin QR code kalau channel QRIS
+        if (available_qr_codes && available_qr_codes.some((q) => q.qr_code_type === "QRIS")) {
+          // Generate QR code dari invoice_url ke base64
+          qrCodeUrl = await QRCode.toDataURL(rawInvoice.invoice_url);
+        }
       }
     }
 
-    // 🔹 Check Xendit mode
     const mode = await getXenditMode();
     let sandboxInfo = null;
     if (mode === "sandbox") {
@@ -1765,7 +1717,6 @@ router.get("/:orderId/payment", async (req, res) => {
       };
     }
 
-    // 🔹 Build full response
     const response = {
       order_details: {
         order_id: order.id,
@@ -1787,22 +1738,13 @@ router.get("/:orderId/payment", async (req, res) => {
       buyer_full_address: buyerInfo.fullAddress,
       seller_info: sellerInfo.info,
       seller_full_address: sellerInfo.fullAddress,
-      invoice_details: invoice,
-      channel_details: {
-        channel_name: channelInfo.channel_name,
-        channel_category: channelInfo.channel_category,
-        currency: channelInfo.currency,
-        min_limit: channelInfo.min_limit,
-        max_limit: channelInfo.max_limit,
-      },
+      invoice_details: { ...invoice, qr_code_url: qrCodeUrl },
+      channel_details: channelInfo || null,
       sandbox_info: sandboxInfo,
       is_rated: false,
     };
 
-    // 🔹 Cache response
     orderCache.set(cacheKey, [response]);
-
-    // 🔹 Attach ratings
     const finalResponse = (await attachRatings([response], userInfo.id))[0];
 
     return res.status(200).json({
@@ -1812,46 +1754,6 @@ router.get("/:orderId/payment", async (req, res) => {
   } catch (err) {
     console.error("❌ Server error:", err);
     return res.status(500).json({ message: "❌ Terjadi kesalahan server", error: err.message });
-  }
-});
-
-
-router.post("/simulate/:orderId", async (req, res) => {
-  try {
-    if (getXenditMode() !== "sandbox") {
-      return res.status(403).json({ message: "⚠️ Hanya tersedia di mode sandbox." });
-    }
-
-    const { orderId } = req.params;
-    const userInfo = req.cookies?.user_info ? JSON.parse(req.cookies.user_info) : null;
-
-    if (!userInfo?.id) {
-      return res.status(401).json({ message: "❌ Harus login." });
-    }
-
-    // Fetch order
-    const { data: order, error } = await supabase
-      .from("orders")
-      .select("*")
-      .eq("id", orderId)
-      .eq("user_id", userInfo.id)
-      .single();
-
-    if (error || !order || order.payment_status !== "pending") {
-      return res.status(400).json({ message: "❌ Order tidak valid atau sudah dibayar." });
-    }
-
-    // Simulate menggunakan SDK (asumsi VA dari invoice)
-    const { CallbackVirtualAccount } = x;
-    await CallbackVirtualAccount.simulatePayment({
-      externalID: order.id,  // Asumsi external_id = order.id
-      amount: Number(order.total_price),
-    });
-
-    return res.status(200).json({ message: "✅ Pembayaran disimulasikan. Webhook akan trigger sebentar lagi." });
-  } catch (err) {
-    console.error("❌ Simulate error:", err);
-    return res.status(500).json({ message: "❌ Gagal simulate", error: err.message });
   }
 });
 
