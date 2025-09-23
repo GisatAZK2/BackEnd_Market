@@ -613,6 +613,7 @@ async function getWilayahName(url, id) {
 router.put("/user/:id", upload.single("avatar"), async (req, res) => {
   try {
     const userId = req.params.id;
+    console.log(`[START] Updating user with ID: ${userId}`);
 
     // Ambil body
     const {
@@ -634,56 +635,104 @@ router.put("/user/:id", upload.single("avatar"), async (req, res) => {
       account_holder_name,
       account_number,
     } = req.body;
+    console.log("[INPUT] Request body:", {
+      username,
+      nama_penerima,
+      no_telepon,
+      alamat_lengkap,
+      kode_pos,
+      provinsi_id,
+      provinsi,
+      kota_id,
+      kota,
+      kecamatan_id,
+      kecamatan,
+      kelurahan_id,
+      kelurahan,
+      bank_code,
+      account_holder_name,
+      account_number,
+    });
 
     // ============ Build payload users ============
     const updateUsers = {};
-
-    if (username) updateUsers.username = username;
-    if (password) updateUsers.password = await bcrypt.hash(password, 10);
+    if (username) {
+      updateUsers.username = username;
+      console.log("[PAYLOAD] Added username to updateUsers:", username);
+    }
+    if (password) {
+      updateUsers.password = await bcrypt.hash(password, 10);
+      console.log("[PAYLOAD] Password hashed and added to updateUsers");
+    }
 
     // Wilayah
     const provId = provinsi_id || provinsi;
     const kotaId = kota_id || kota;
     const kecId = kecamatan_id || kecamatan;
     const kelId = kelurahan_id || kelurahan;
+    console.log("[WILAYAH] Region IDs:", { provId, kotaId, kecId, kelId });
 
     if (provId) {
+      console.log(`[API CALL] Fetching province name for ID: ${provId}`);
       updateUsers.provinsi = await getWilayahName(
         "https://www.emsifa.com/api-wilayah-indonesia/api/provinces.json",
         provId
       );
+      console.log("[API RESULT] Province name:", updateUsers.provinsi);
     }
 
     if (kotaId && provId) {
+      console.log(`[API CALL] Fetching regency name for province ID: ${provId}, regency ID: ${kotaId}`);
       updateUsers.kota_kabupaten = await getWilayahName(
         `https://www.emsifa.com/api-wilayah-indonesia/api/regencies/${provId}.json`,
         kotaId
       );
+      console.log("[API RESULT] Regency name:", updateUsers.kota_kabupaten);
     }
 
     if (kecId && kotaId) {
+      console.log(`[API CALL] Fetching district name for regency ID: ${kotaId}, district ID: ${kecId}`);
       updateUsers.kecamatan = await getWilayahName(
         `https://www.emsifa.com/api-wilayah-indonesia/api/districts/${kotaId}.json`,
         kecId
       );
+      console.log("[API RESULT] District name:", updateUsers.kecamatan);
     }
 
     if (kelId && kecId) {
+      console.log(`[API CALL] Fetching village name for district ID: ${kecId}, village ID: ${kelId}`);
       updateUsers.kelurahan = await getWilayahName(
         `https://www.emsifa.com/api-wilayah-indonesia/api/villages/${kecId}.json`,
         kelId
       );
+      console.log("[API RESULT] Village name:", updateUsers.kelurahan);
     }
 
-    if (kode_pos) updateUsers.kode_pos = kode_pos;
-    if (nama_penerima) updateUsers.nama_penerima = nama_penerima;
-    if (no_telepon) updateUsers.no_telepon = no_telepon;
-    if (alamat_lengkap) updateUsers.alamat_lengkap = alamat_lengkap;
+    if (kode_pos) {
+      updateUsers.kode_pos = kode_pos;
+      console.log("[PAYLOAD] Added kode_pos to updateUsers:", kode_pos);
+    }
+    if (nama_penerima) {
+      updateUsers.nama_penerima = nama_penerima;
+      console.log("[PAYLOAD] Added nama_penerima to updateUsers:", nama_penerima);
+    }
+    if (no_telepon) {
+      updateUsers.no_telepon = no_telepon;
+      console.log("[PAYLOAD] Added no_telepon to updateUsers:", no_telepon);
+    }
+    if (alamat_lengkap) {
+      updateUsers.alamat_lengkap = alamat_lengkap;
+      console.log("[PAYLOAD] Added alamat_lengkap to updateUsers:", alamat_lengkap);
+    }
 
     // Avatar
     if (req.file) {
+      console.log("[AVATAR] File upload detected:", req.file.originalname);
       const fileExt = path.extname(req.file.originalname);
       const fileName = `avatar_${Date.now()}${fileExt}`;
+      console.log("[AVATAR] Generated file name:", fileName);
+
+      console.log("[SUPABASE] Uploading file to Supabase storage...");
       const { error: uploadError } = await supabase.storage
         .from("avatars")
         .upload(fileName, req.file.buffer, {
@@ -691,23 +740,37 @@ router.put("/user/:id", upload.single("avatar"), async (req, res) => {
           upsert: true,
         });
 
-      if (uploadError) throw uploadError;
+      if (uploadError) {
+        console.error("[SUPABASE ERROR] Failed to upload avatar:", uploadError);
+        throw uploadError;
+      }
+      console.log("[SUPABASE] File uploaded successfully");
 
+      console.log("[SUPABASE] Fetching public URL for avatar...");
       const { data: publicUrlData } = supabase.storage
         .from("avatars")
         .getPublicUrl(fileName);
-
       updateUsers.avatar = publicUrlData.publicUrl;
+      console.log("[SUPABASE] Public URL for avatar:", updateUsers.avatar);
     }
 
     // ============ Build payload user_balances ============
     const updateBalances = {};
-    if (bank_code) updateBalances.bank_code = bank_code;
-    if (account_holder_name) updateBalances.account_holder_name = account_holder_name;
-    if (account_number) updateBalances.account_number = account_number;
+    if (bank_code) {
+      updateBalances.bank_code = bank_code;
+      console.log("[PAYLOAD] Added bank_code to updateBalances:", bank_code);
+    }
+    if (account_holder_name) {
+      updateBalances.account_holder_name = account_holder_name;
+      console.log("[PAYLOAD] Added account_holder_name to updateBalances:", account_holder_name);
+    }
+    if (account_number) {
+      updateBalances.account_number = account_number;
+      console.log("[PAYLOAD] Added account_number to updateBalances:", account_number);
+    }
 
     // ============ Simpan ke database ============
-    // Update users
+    console.log("[DATABASE] Updating users table with payload:", updateUsers);
     const { data: userData, error: userError } = await supabase
       .from("users")
       .update(clean(updateUsers))
@@ -716,28 +779,36 @@ router.put("/user/:id", upload.single("avatar"), async (req, res) => {
         "id, email, username, avatar, provinsi, kota_kabupaten, kecamatan, kelurahan, kode_pos, nama_penerima, no_telepon, alamat_lengkap"
       );
 
-    if (userError) throw userError;
+    if (userError) {
+      console.error("[DATABASE ERROR] Failed to update users table:", userError);
+      throw userError;
+    }
+    console.log("[DATABASE] Users table updated successfully:", userData);
 
-    // Update user_balances
     if (Object.keys(updateBalances).length > 0) {
+      console.log("[DATABASE] Updating user_balances table with payload:", updateBalances);
       const { error: balanceError } = await supabase
         .from("user_balances")
         .update(clean(updateBalances))
         .eq("user_id", userId);
 
-      if (balanceError) throw balanceError;
+      if (balanceError) {
+        console.error("[DATABASE ERROR] Failed to update user_balances table:", balanceError);
+        throw balanceError;
+      }
+      console.log("[DATABASE] user_balances table updated successfully");
     }
 
+    console.log("[SUCCESS] User update completed for ID:", userId);
     res.json({
       message: "✅ User berhasil diupdate.",
       user: userData[0],
     });
   } catch (err) {
-    console.error("Update user error:", err);
+    console.error("[ERROR] Update user failed:", err.message);
     res.status(500).json({ error: "Gagal update user.", detail: err.message });
   }
 });
-
 
 // ======================== DELETE USER ========================
 router.delete("/user/:id", async (req, res) => {

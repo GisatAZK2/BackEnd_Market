@@ -3,7 +3,33 @@ const axios = require("axios");
 const XENDIT_SECRET_KEY = process.env.XENDIT_SECRET_KEY;
 const XENDIT_BASE_URL = "https://api.xendit.co";
 
-// 🔐 Determine Xendit mode (sandbox or production)
+// ========================
+// 🔄 Helper: Retry with exponential backoff
+// ========================
+async function withRetry(fn, retries = 5, delay = 500) {
+  let attempt = 0;
+  while (attempt < retries) {
+    try {
+      return await fn();
+    } catch (err) {
+      const status = err.response?.status;
+      // Kalau error 429 (rate limit) → tunggu dulu
+      if (status === 429) {
+        const waitTime = delay * Math.pow(2, attempt); // 0.5s, 1s, 2s, 4s, ...
+        console.warn(`⚠️ Rate limit hit. Retry in ${waitTime}ms...`);
+        await new Promise((r) => setTimeout(r, waitTime));
+        attempt++;
+      } else {
+        throw err; // Kalau error lain, langsung throw
+      }
+    }
+  }
+  throw new Error("❌ Max retries exceeded (Xendit API).");
+}
+
+// ========================
+// 🔐 Determine Xendit mode
+// ========================
 async function getXenditMode() {
   if (!XENDIT_SECRET_KEY) return "unknown";
   if (XENDIT_SECRET_KEY.startsWith("xnd_development")) return "sandbox";
@@ -11,53 +37,51 @@ async function getXenditMode() {
   return "unknown";
 }
 
-// ✅ Fetch all payment channels from Xendit (active and inactive)
-// ✅ Fetch all payment channels from Xendit (active and inactive)
+// ========================
+// ✅ Get payment channels
+// ========================
 async function getXenditChannels() {
   try {
     const mode = await getXenditMode();
     console.log(`🌐 Xendit mode: ${mode}`);
 
-    const res = await axios.get(`${XENDIT_BASE_URL}/payment_channels`, {
-      auth: { username: XENDIT_SECRET_KEY, password: "" },
-    });
+    const res = await withRetry(() =>
+      axios.get(`${XENDIT_BASE_URL}/payment_channels`, {
+        auth: { username: XENDIT_SECRET_KEY, password: "" },
+      })
+    );
 
-    // Ensure response is an array
     if (!Array.isArray(res.data)) {
       console.error("❌ Response Xendit tidak sesuai:", res.data);
       return [];
     }
 
     let channels = res.data;
-
-    // 🔥 Kalau sandbox → sembunyikan RETAIL_OUTLET
     if (mode === "sandbox") {
-      channels = channels.filter(
-        (ch) => ch.channel_category !== "RETAIL_OUTLET"
-      );
+      channels = channels.filter((ch) => ch.channel_category !== "RETAIL_OUTLET");
     }
 
     return channels;
   } catch (err) {
-    console.error(
-      "❌ Gagal ambil payment channels:",
-      err.response?.data || err.message
-    );
+    console.error("❌ Gagal ambil payment channels:", err.response?.data || err.message);
     return [];
   }
 }
 
-// ✅ Fetch invoice details from Xendit using GET /v2/invoices/{invoice_id}
+// ========================
+// ✅ Get invoice by ID
+// ========================
 async function getXenditInvoice(invoiceId) {
   try {
     const mode = await getXenditMode();
     console.log(`🌐 Fetching invoice in ${mode} mode for invoice ID: ${invoiceId}`);
 
-    const res = await axios.get(`${XENDIT_BASE_URL}/v2/invoices/${invoiceId}`, {
-      auth: { username: XENDIT_SECRET_KEY, password: "" },
-    });
+    const res = await withRetry(() =>
+      axios.get(`${XENDIT_BASE_URL}/v2/invoices/${invoiceId}`, {
+        auth: { username: XENDIT_SECRET_KEY, password: "" },
+      })
+    );
 
-    // Check if response contains invoice data
     if (!res.data || !res.data.id) {
       console.error("❌ Invalid invoice response:", res.data);
       return null;
@@ -65,15 +89,14 @@ async function getXenditInvoice(invoiceId) {
 
     return res.data;
   } catch (err) {
-    console.error(
-      "❌ Gagal ambil invoice details:",
-      err.response?.data || err.message
-    );
+    console.error("❌ Gagal ambil invoice details:", err.response?.data || err.message);
     return null;
   }
 }
 
-// ✅ Payment channel logos and limits
+// ========================
+// ✅ Payment channel logos & limits
+// ========================
 function Listpaymentchanel() {
   const CHANNEL_LOGOS = {
     AKULAKU:
@@ -152,6 +175,5 @@ function Listpaymentchanel() {
 
   return { CHANNEL_LOGOS, CHANNEL_LIMITS };
 }
-
 
 module.exports = { getXenditMode, getXenditChannels, getXenditInvoice, Listpaymentchanel };
