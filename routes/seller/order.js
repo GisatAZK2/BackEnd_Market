@@ -7,7 +7,7 @@ const QRCode = require("qrcode");
 const PDFDocument = require("pdfkit");
 const router = express.Router();
 
-const SEND_URL = process.env.SEND_URL;
+const SEND_URL = process.env.SEND_SERVICE_URL;
 const CRYPTO_SECRET_KEY = process.env.CRYPTO_SECRET_KEY || "please_set_a_real_secret_in_env";
 
 const NodeCache = require("node-cache");
@@ -188,6 +188,7 @@ function safeParseImageUrl(data) {
     return data; // fallback kalau bukan JSON valid
   }
 }
+// rute seller
 
 // ======================
 // GET Semua Order Seller
@@ -208,7 +209,7 @@ router.get("/seller/all", async (req, res) => {
     // 🔹 Ambil semua order milik seller kecuali yang statusnya dibatalkan/diterima oleh pembeli
     const { data: ordersData, error: orderError } = await supabase
       .from("orders")
-      .select("id, created_at, total_price, delivery_fee, status, pickup_method, confirm_deadline, buyer_address, seller_address")
+      .select("id, created_at, total_price, delivery_fee, status, pickup_method, confirm_deadline, buyer_address, seller_address, payment_status, payment_channel")
       .eq("seller_id", sellerInfo.id)
       .not("status", "in", "(dibatalkan,\"diterima oleh pembeli\")")
       .order("created_at", { ascending: false });
@@ -254,8 +255,8 @@ router.get("/seller/all", async (req, res) => {
       const match = orderItemMap[key] || { id: null, quantity: 0 };
 
       itemsByOrder[item.order_id].push({
-        order_item_id: item.order_item_id, // dari detailItems
-        orderItemId: match.id,             // dari order_items (buat rating)
+        order_item_id: item.order_item_id,
+        orderItemId: match.id,
         product_id: item.product_id,
         product_name: item.product_name,
         product_image_url: safeParseImageUrl(item.product_image_url),
@@ -322,6 +323,7 @@ router.get("/seller/all", async (req, res) => {
               seller_info: sellerData || null,
               seller_full_address: sellerFullAddress || null,
             }),
+        can_process: order.payment_status === "paid" // true if paid, false if pending or other
       };
     });
 
@@ -352,7 +354,7 @@ router.get("/seller/cancelled", async (req, res) => {
     // 🔹 Ambil order dibatalkan milik seller
     const { data: ordersData, error: orderError } = await supabase
       .from("orders")
-      .select("id, created_at, total_price, delivery_fee, status, pickup_method, confirm_deadline, buyer_address, seller_address")
+      .select("id, created_at, total_price, delivery_fee, status, pickup_method, confirm_deadline, buyer_address, seller_address, payment_status, payment_channel")
       .eq("seller_id", sellerInfo.id)
       .eq("status", "dibatalkan")
       .order("created_at", { ascending: false });
@@ -460,6 +462,7 @@ router.get("/seller/cancelled", async (req, res) => {
         buyer_full_address: buyerFullAddress || null,
         seller_info: sellerData || null,
         seller_full_address: sellerFullAddress || null,
+        can_process: order.payment_status === "paid" // true if paid, false if pending or other
       };
     });
 
@@ -490,7 +493,7 @@ router.get("/seller/completed", async (req, res) => {
     // 🔹 Ambil order diterima milik seller
     const { data: ordersData, error: orderError } = await supabase
       .from("orders")
-      .select("id, created_at, total_price, delivery_fee, status, pickup_method, confirm_deadline, buyer_address, seller_address")
+      .select("id, created_at, total_price, delivery_fee, status, pickup_method, confirm_deadline, buyer_address, seller_address, payment_status, payment_channel")
       .eq("seller_id", sellerInfo.id)
       .eq("status", "diterima oleh pembeli")
       .order("created_at", { ascending: false });
@@ -598,6 +601,7 @@ router.get("/seller/completed", async (req, res) => {
         buyer_full_address: buyerFullAddress || null,
         seller_info: sellerData || null,
         seller_full_address: sellerFullAddress || null,
+        can_process: order.payment_status === "paid" // true if paid, false if pending or other
       };
     });
 
@@ -608,8 +612,6 @@ router.get("/seller/completed", async (req, res) => {
     return res.status(500).json({ message: "❌ Terjadi kesalahan server", error: err.message });
   }
 });
-
-
 
 // ======================
 // GET Detail Order Seller
@@ -631,7 +633,7 @@ router.get("/seller/:orderId", async (req, res) => {
     // 🔹 Ambil order utama
     const { data: orderData, error: orderError } = await supabase
       .from("orders")
-      .select("id, created_at, total_price, delivery_fee, status, pickup_method, confirm_deadline, buyer_address, seller_address")
+      .select("id, created_at, total_price, delivery_fee, status, pickup_method, confirm_deadline, buyer_address, seller_address, payment_status, payment_channel")
       .eq("id", orderId)
       .eq("seller_id", sellerInfo.id)
       .single();
@@ -665,7 +667,7 @@ router.get("/seller/:orderId", async (req, res) => {
 
       return {
         order_item_id: item.order_item_id,
-        orderItemId: match.id, // id asli dari tabel order_items
+        orderItemId: match.id,
         product_id: item.product_id,
         product_name: item.product_name,
         product_image_url: safeParseImageUrl(item.product_image_url),
@@ -727,6 +729,7 @@ router.get("/seller/:orderId", async (req, res) => {
             seller_info: sellerData || null,
             seller_full_address: sellerFullAddress || null,
           }),
+      can_process: orderData.payment_status === "paid" // true if paid, false if pending or other
     };
 
     orderCache.set(cacheKey, orderResult);
@@ -736,7 +739,6 @@ router.get("/seller/:orderId", async (req, res) => {
     return res.status(500).json({ message: "❌ Terjadi kesalahan server", error: err.message });
   }
 });
-
 // -----------------------------
 // Update order status route
 
@@ -907,9 +909,14 @@ router.put("/orders/:id/status", async (req, res) => {
 
       const commonActions = {
         accept: () => {
-          if (order.payment_method === "digital" && order.status !== "processing") {
-            throw new Error("⚠️ Order dengan pembayaran digital hanya bisa diterima dari status 'processing'.");
-          }
+          if (
+              (order.payment_method === "digital" || order.payment_method === "balance") &&
+              order.status !== "processing" &&  order.payment_status !== "paid"
+            ) {
+              throw new Error(
+                "⚠️ Order dengan pembayaran digital atau balance hanya bisa diterima dari status 'paid'."
+              );
+            }
           if (order.payment_method === "cod" && order.status !== "pending") {
             throw new Error("⚠️ Order dengan pembayaran COD hanya bisa diterima dari status 'pending'.");
           }
@@ -967,6 +974,7 @@ router.put("/orders/:id/status", async (req, res) => {
       };
       return statusFlow[order.status]?.includes(newStatus) || false;
     };
+
 
     // MAIN FLOW
     console.log(`🔄 Fetching order ${orderId}...`);
@@ -1040,6 +1048,11 @@ router.put("/orders/:id/status", async (req, res) => {
     if (updateError || !updatedOrder) {
       console.error("❌ Update error:", updateError?.message);
       return res.status(500).json({ message: "❌ Gagal update status order.", error: updateError?.message });
+    }
+
+    // Handle balance movement if order is completed (status: diterima)
+    if (newStatus === "diterima") {
+      await handleOrderCompletion(updatedOrder.seller.id, orderId, updatedOrder);
     }
 
     // Handle refund and stock restoration if canceled
@@ -1182,64 +1195,63 @@ router.put("/orders/:id/status", async (req, res) => {
     });
   }
 });
-// -----------------------------
+
 // Handle Order Completion - Move balance to withdrawable
-// -----------------------------
 async function handleOrderCompletion(sellerId, orderId, order) {
-  try {
-    console.log(`💰 Processing balance movement for completed order ${orderId}`);
-    
-    // Ambil current balance
-    const currentBalance = await getSellerBalance(sellerId);
-    console.log(
-      `💳 Current balance - Total: ${currentBalance.balance}, Withdrawable: ${currentBalance.withdrawable_balance}`
-    );
-    
-    // Hitung net amount to seller (tanpa platform fee)
-    const grossAmount = Number(order.total_price || 0);
-    const netToSeller = grossAmount;
-    
-    console.log(`💸 Distribution - Gross: ${grossAmount}, Net: ${netToSeller}`);
-    
-    // Simulasi: asumsikan sebelumnya sudah di-credit ke total balance saat payment confirmed
-    // Sekarang kita move dari total ke withdrawable
-    const newTotalBalance = currentBalance.balance; // Tetap sama
-    const newWithdrawableBalance = currentBalance.withdrawable_balance + netToSeller;
-    
-    // Update balances
-    const { data: balanceData, error: balanceError } = await supabase
-      .from("seller_balances")
-      .update({ 
-        balance: newTotalBalance,
-        withdrawable_balance: newWithdrawableBalance 
-      })
-      .eq("seller_id", sellerId)
-      .select()
-      .single();
-    
-    if (balanceError) throw balanceError;
-    
-    // Record transaction
-    await recordSellerTransaction({
-      sellerId,
-      amount: netToSeller,
-      type: "move_to_withdrawable",
-      orderId,
-      metadata: { 
-        source: "order_completed", 
-        grossAmount,
-        action: "released_to_withdrawable"
-      },
-    });
-    
-    console.log(
-      `✅ Balance moved: +${netToSeller} to withdrawable. New withdrawable: ${newWithdrawableBalance}`
-    );
-    
-  } catch (balanceErr) {
-    console.error("❌ Balance movement error:", balanceErr.message);
-    // Jangan throw - biarkan order tetap completed
-  }
+      try {
+        console.log(`💰 Processing balance movement for completed order ${orderId}`);
+        
+        // Ambil current balance
+        const currentBalance = await getSellerBalance(sellerId);
+        console.log(
+          `💳 Current balance - Total: ${currentBalance.balance}, Withdrawable: ${currentBalance.withdrawable_balance}`
+        );
+        
+        // Hitung net amount to seller (tanpa platform fee)
+        const grossAmount = Number(order.total_price || 0);
+        const netToSeller = grossAmount;
+        
+        console.log(`💸 Distribution - Gross: ${grossAmount}, Net: ${netToSeller}`);
+        
+        // Simulasi: asumsikan sebelumnya sudah di-credit ke total balance saat payment confirmed
+        // Sekarang kita move dari total ke withdrawable
+        const newTotalBalance = currentBalance.balance; // Tetap sama
+        const newWithdrawableBalance = currentBalance.withdrawable_balance + netToSeller;
+        
+        // Update balances
+        const { data: balanceData, error: balanceError } = await supabase
+          .from("seller_balances")
+          .update({ 
+            balance: newTotalBalance,
+            withdrawable_balance: newWithdrawableBalance 
+          })
+          .eq("seller_id", sellerId)
+          .select()
+          .single();
+        
+        if (balanceError) throw balanceError;
+        
+        // Record transaction
+        await recordSellerTransaction({
+          sellerId,
+          amount: netToSeller,
+          type: "move_to_withdrawable",
+          orderId,
+          metadata: { 
+            source: "order_completed", 
+            grossAmount,
+            action: "released_to_withdrawable"
+          },
+        });
+        
+        console.log(
+          `✅ Balance moved: +${netToSeller} to withdrawable. New withdrawable: ${newWithdrawableBalance}`
+        );
+        
+      } catch (balanceErr) {
+        console.error("❌ Balance movement error:", balanceErr.message);
+        // Jangan throw - biarkan order tetap completed
+      }
 }
 
 

@@ -283,7 +283,8 @@ async function withdrawUserBalance(userId, amount, opts = {}) {
   });
   return newBalance;
 }
-// ==================================
+
+
 // 🔔 Webhook untuk payment order
 // ==================================
 router.post("/payment/webhook", async (req, res) => {
@@ -319,7 +320,11 @@ router.post("/payment/webhook", async (req, res) => {
     const netToSeller = grossAmount - platformFee;
 
     if (status === "PAID") {
-      await supabase.from("orders").update({ payment_status: "paid" }).eq("id", orderId);
+      const confirmDeadline = new Date(Date.now() + 3 * 60 * 60 * 1000).toISOString();
+      await supabase.from("orders").update({ 
+        payment_status: "paid",
+        confirm_deadline: confirmDeadline
+      }).eq("id", orderId);
       console.log(`✅ Order ${orderId} payment_status set to 'paid'.`);
 
       if (netToSeller > 0 && sellerId) {
