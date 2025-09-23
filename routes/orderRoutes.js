@@ -2,6 +2,7 @@ const express = require("express");
 const router = express.Router();
 const supabase = require("../config/supabase");
 const axios = require("axios");
+const bcrypt = require("bcrypt"); 
 const { Xendit } = require("xendit-node");
 const { DateTime } = require("luxon");
 const crypto = require("crypto");
@@ -452,9 +453,6 @@ router.get("/received", async (req, res) => {
 // =====================================
 // 🛒 POST /cart/checkout
 // =====================================
-// =====================================
-// 🛒 POST /cart/checkout
-// =====================================
 router.post("/cart/checkout", async (req, res) => {
   const startTime = Date.now();
   console.log("===== 🛒 [CHECKOUT ROUTE DIPANGGIL] =====");
@@ -462,7 +460,7 @@ router.post("/cart/checkout", async (req, res) => {
   console.log("🍪 Cookies:", req.cookies);
 
   try {
-    const { itemsToCheckout, pickupMethod, address, paymentMethod, selectedPaymentChannel } = req.body;
+    const { itemsToCheckout, pickupMethod, address, paymentMethod, selectedPaymentChannel, pin } = req.body;
     const userInfo = req.cookies?.user_info ? JSON.parse(req.cookies.user_info) : null;
 
     console.log("👤 User info:", userInfo);
@@ -723,6 +721,57 @@ router.post("/cart/checkout", async (req, res) => {
       cache.set(cacheKeySellers, sellerData);
     }
     const sellerMap = Object.fromEntries(sellerData.map((s) => [s.id, s]));
+
+    // 🔹 Validate PIN for balance payment (if applicable)
+    if (paymentMethod.toLowerCase() === "balance") {
+      const { data: balance, error: balanceError } = await supabase
+        .from("user_balances")
+        .select("user_pin_hash")
+        .eq("user_id", userInfo.id)
+        .single();
+
+      if (balanceError || !balance) {
+        console.error("❌ User balance tidak ditemukan:", balanceError?.message);
+        return res.status(404).json({ message: "❌ User balance tidak ditemukan." });
+      }
+
+      if (!balance.user_pin_hash && !pin) {
+        console.error("⚠️ PIN diperlukan untuk pembayaran menggunakan saldo.");
+        return res.status(400).json({
+          message: "⚠️ PIN diperlukan untuk pembayaran menggunakan saldo. Silakan set PIN.",
+          needSetPin: true,
+        });
+      }
+
+      if (!balance.user_pin_hash && pin) {
+        // Set new PIN
+        if (pin.toString().length < 4 || pin.toString().length > 6) {
+          console.error("⚠️ PIN harus 4-6 digit:", pin);
+          return res.status(400).json({ message: "⚠️ PIN harus 4-6 digit." });
+        }
+
+        const newPinHash = await bcrypt.hash(pin.toString(), 12);
+        const { error: updatePinError } = await supabase
+          .from("user_balances")
+          .update({
+            user_pin_hash: newPinHash,
+            user_pin_plain: pin.toString(), // Simpan plain PIN (sesuai referensi)
+          })
+          .eq("user_id", userInfo.id);
+
+        if (updatePinError) {
+          console.error("❌ Gagal set PIN:", updatePinError.message);
+          return res.status(500).json({ message: "❌ Gagal set PIN.", error: updatePinError.message });
+        }
+
+        try {
+          await axios.post(`${SEND_URL}/send-email-user-pin-change`, { email: userData.email });
+          console.log("📧 Email PIN change terkirim ke:", userData.email);
+        } catch (err) {
+          console.error("❌ Gagal kirim email PIN change:", err.message);
+        }
+      }
+    }
 
     // 🔹 Call checkout_atomic RPC
     console.log("⚡ Memanggil RPC checkout_atomic...");
@@ -1015,17 +1064,17 @@ router.post("/cart/checkout", async (req, res) => {
       .eq("user_id", userInfo.id)
       .maybeSingle();
 
-          if (cart?.items?.length) {
-        const remainingItems = cart.items.filter(
-          (cartItem) =>
-            !itemsToCheckout.some(
-              (checkoutItem) =>
-                checkoutItem.productId === cartItem.productId &&
-                (checkoutItem.variantId || null) === (cartItem.variantId || null)
-            )
-        );
-        await supabase.from("carts").update({ items: remainingItems }).eq("user_id", userInfo.id);
-      }
+    if (cart?.items?.length) {
+      const remainingItems = cart.items.filter(
+        (cartItem) =>
+          !itemsToCheckout.some(
+            (checkoutItem) =>
+              checkoutItem.productId === cartItem.productId &&
+              (checkoutItem.variantId || null) === (cartItem.variantId || null)
+          )
+      );
+      await supabase.from("carts").update({ items: remainingItems }).eq("user_id", userInfo.id);
+    }
 
     // 🔹 Format response
     const endTime = Date.now();
@@ -1048,6 +1097,7 @@ router.post("/cart/checkout", async (req, res) => {
     return res.status(500).json({ message: "❌ Terjadi kesalahan server", error: err.message });
   }
 });
+
 // =====================================
 // 🛒 POST /cart/delivery-fee
 // =====================================

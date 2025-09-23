@@ -279,62 +279,6 @@ async function withdrawUserBalance(userId, amount, opts = {}) {
   return newBalance;
 }
 
-// =====================================
-// 🔑 POST /set-pin
-// =====================================
-router.post("/set-pin", async (req, res) => {
-  try {
-    const userInfo = req.cookies?.user_info ? JSON.parse(req.cookies.user_info) : null;
-
-    if (!userInfo?.id) {
-      return res.status(401).json({ message: "❌ Harus login sebagai user." });
-    }
-
-    const { pin, current_pin } = req.body;
-
-    if (!pin || pin.toString().length < 4 || pin.toString().length > 6) {
-      return res.status(400).json({ message: "⚠️ PIN harus 4-6 digit." });
-    }
-
-    const balanceData = await getUserBalance(userInfo.id);
-
-    if (balanceData.user_pin_hash) {
-      if (!current_pin) {
-        return res.status(400).json({
-          message: "⚠️ Current PIN diperlukan untuk mengubah PIN.",
-        });
-      }
-
-      const isCurrentPinValid = await bcrypt.compare(
-        current_pin.toString(),
-        balanceData.user_pin_hash
-      );
-      if (!isCurrentPinValid) {
-        return res.status(403).json({ message: "❌ Current PIN salah." });
-      }
-    }
-
-    const hashedPin = await bcrypt.hash(pin.toString(), 12);
-
-    const { error } = await supabase
-      .from("user_balances")
-      .update({ user_pin_hash: hashedPin })
-      .eq("user_id", userInfo.id);
-
-    if (error) throw error;
-
-    return res.status(200).json({
-      message: `✅ ${
-        balanceData.user_pin_hash
-          ? "PIN berhasil diubah"
-          : "PIN berhasil diset"
-      }.`,
-    });
-  } catch (err) {
-    console.error("❌ Set PIN error:", err);
-    return res.status(500).json({ message: "❌ Gagal mengatur PIN." });
-  }
-});
 
 // =====================================
 // 📤 POST /withdraw/batch

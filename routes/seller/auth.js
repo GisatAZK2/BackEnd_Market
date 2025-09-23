@@ -486,7 +486,6 @@ router.get("/profile/:id", async (req, res) => {
   }
 });
 
-// Request PIN via Email
 // === Route di Backend Utama: Request PIN Seller ===
 router.post("/seller/request-pin/:id", async (req, res) => {
   try {

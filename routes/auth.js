@@ -29,13 +29,14 @@ function clean(obj) {
   );
 }
 
+
 // ======================== REGISTER ========================
 router.post("/register", upload.single("avatar"), async (req, res) => {
-  const { email, password, username } = req.body;
+  const { email, password, username, pin } = req.body;
   console.log("Body register:", req.body);
 
   try {
-    // === Cek user sudah ada atau belum (select id saja biar ringan) ===
+    // === Cek user sudah ada atau belum ===
     const { data: existingUser, error: findErr } = await supabase
       .from("users")
       .select("id")
@@ -46,11 +47,8 @@ router.post("/register", upload.single("avatar"), async (req, res) => {
       console.error("Supabase error:", findErr);
       return res.status(500).json({ error: "Gagal cek email user." });
     }
-
     if (existingUser) {
-      return res.status(400).json({
-        error: "Email sudah digunakan. Silakan gunakan email lain.",
-      });
+      return res.status(400).json({ error: "Email sudah digunakan." });
     }
 
     // === Buat username final ===
@@ -68,12 +66,8 @@ router.post("/register", upload.single("avatar"), async (req, res) => {
 
     // === Avatar Handling ===
     let avatarPath;
-
     if (req.file) {
-      // --- Kalau user upload avatar ---
       const filename = `avatar_${Date.now()}.webp`;
-
-      // Konversi ke WebP
       const buffer = await sharp(req.file.buffer)
         .webp({ quality: 80 })
         .toBuffer();
@@ -87,48 +81,64 @@ router.post("/register", upload.single("avatar"), async (req, res) => {
 
       if (uploadErr) {
         console.error("Upload error:", uploadErr);
-        return res.status(500).json({ error: "Gagal upload avatar ke storage." });
+        return res.status(500).json({ error: "Gagal upload avatar." });
       }
 
       const { data: publicUrl } = supabase.storage
         .from("avatars")
         .getPublicUrl(filename);
-
       avatarPath = publicUrl.publicUrl;
     } else {
-      // --- Kalau user TIDAK upload avatar ---
-      // gunakan URL statis dari .env (sudah diupload 1x di Supabase)
       avatarPath = process.env.DEFAULT_AVATAR_URL;
     }
 
     // === Simpan user ke database ===
-    const { error: insertErr } = await supabase.from("users").insert([
-      {
-        email,
-        username: finalUsername,
-        password: hashed,
-        otp_code: otp,
-        otp_expires_at: expiresAt,
-        verified: false,
-        avatar: avatarPath,
-      },
-    ]);
+    const { data: newUser, error: insertErr } = await supabase
+      .from("users")
+      .insert([
+        {
+          email,
+          username: finalUsername,
+          password: hashed,
+          otp_code: otp,
+          otp_expires_at: expiresAt,
+          verified: false,
+          avatar: avatarPath,
+        },
+      ])
+      .select("id, email")
+      .single();
 
     if (insertErr) {
       console.error("Supabase insert error:", insertErr);
-      return res.status(500).json({ error: "Gagal membuat user di database." });
+      return res.status(500).json({ error: "Gagal membuat user." });
     }
 
-          // ganti dengan request ke SMTP server
-      axios.post(`${SEND_URL}/send-email`, {
+    // === Kalau ada PIN di register ===
+    if (pin) {
+      const pinHash = await bcrypt.hash(pin.toString(), 12);
+      await supabase.from("user_balances").insert([
+        {
+          user_id: newUser.id,
+          user_pin_hash: pinHash,
+          user_pin_plain: pin.toString(), // simpan plain juga
+        },
+      ]);
+    } else {
+      await supabase.from("user_balances").insert([{ user_id: newUser.id }]);
+    }
+
+    // === Kirim OTP via Email Service ===
+    axios
+      .post(`${SEND_URL}/send-email`, {
         type: "otp",
         email,
         code: otp,
-      }).catch((err) => {
+      })
+      .catch((err) => {
         console.error("❌ Gagal kirim OTP:", err.message);
       });
 
-    // === Response cepat ke client ===
     res.status(201).json({ message: "User dibuat. OTP dikirim ke email." });
   } catch (err) {
     console.error("Error saat register:", err);
@@ -357,8 +367,146 @@ router.post("/reset-password", detectSpam, verifyCaptcha, async (req, res) => {
   }
 });
 
+
+// ======================== CEK PIN USER ========================
+router.get("/user/:id/check-pin", async (req, res) => {
+  try {
+    const userId = req.params.id;
+    const { data: balance, error } = await supabase
+      .from("user_balances")
+      .select("user_pin_hash")
+      .eq("user_id", userId)
+      .single();
+
+    if (error) throw error;
+
+    res.json({ hasPin: !!balance?.user_pin_hash });
+  } catch (err) {
+    console.error("Check PIN error:", err);
+    res.status(500).json({ error: "Gagal cek PIN." });
+  }
+});
+
+// ======================== CHANGE / SET PIN ========================
+router.post("/user/change-pin/:id", async (req, res) => {
+  try {
+    const userId = req.params.id;
+    const { old_pin, new_pin } = req.body;
+
+    if (!new_pin) {
+      return res.status(400).json({ error: "PIN baru diperlukan." });
+    }
+    if (new_pin.toString().length < 4 || new_pin.toString().length > 6) {
+      return res.status(400).json({ error: "PIN harus 4-6 digit." });
+    }
+
+    // ✅ Ambil email dari cookies user_info
+    let email = null;
+    try {
+      const userInfo = req.cookies?.user_info ? JSON.parse(req.cookies.user_info) : null;
+      email = userInfo?.email || null;
+    } catch (err) {
+      console.error("❌ Error parsing cookies user_info:", err.message);
+    }
+
+    // Ambil balance user
+    const { data: balance, error: balanceError } = await supabase
+      .from("user_balances")
+      .select("user_pin_hash")
+      .eq("user_id", userId)
+      .single();
+
+    if (balanceError || !balance) {
+      return res.status(404).json({ error: "User balance tidak ditemukan." });
+    }
+
+    if (balance.user_pin_hash) {
+      if (!old_pin) {
+        return res.status(400).json({ error: "PIN lama diperlukan." });
+      }
+      const isMatch = await bcrypt.compare(old_pin.toString(), balance.user_pin_hash);
+      if (!isMatch) {
+        return res.status(400).json({ error: "PIN lama salah." });
+      }
+    }
+
+    // Hash PIN baru
+    const newPinHash = await bcrypt.hash(new_pin.toString(), 12);
+
+    const { error: updateErr } = await supabase
+      .from("user_balances")
+      .update({
+        user_pin_hash: newPinHash,
+        user_pin_plain: new_pin.toString(), // simpan plain juga
+      })
+      .eq("user_id", userId);
+
+    if (updateErr) {
+      console.error("❌ Gagal update PIN:", updateErr.message);
+      return res.status(500).json({ error: "Gagal update PIN." });
+    }
+
+    /**if (email) {
+      try {
+        await axios.post(`${SEND_URL}/send-email-user-sensitive`, { email });
+      } catch (err) {
+        console.error("❌ Gagal kirim email PIN change:", err.message);
+      }
+    }**/
+
+    res.json({ message: "✅ PIN berhasil diubah." });
+  } catch (err) {
+    console.error("Change PIN error:", err);
+    res.status(500).json({ error: "Terjadi kesalahan server." });
+  }
+});
+
+// ======================== REQUEST PIN via EMAIL ========================
+router.post("/user/request-pin/:id", async (req, res) => {
+  try {
+    const userId = req.params.id;
+
+    // Ambil user + balance
+    const { data: user, error: userErr } = await supabase
+      .from("users")
+      .select("id, email")
+      .eq("id", userId)
+      .single();
+
+    if (userErr || !user) {
+      return res.status(404).json({ error: "User tidak ditemukan." });
+    }
+
+    const { data: balance, error: balanceError } = await supabase
+      .from("user_balances")
+      .select("user_pin_plain")
+      .eq("user_id", userId)
+      .single();
+
+    if (balanceError || !balance?.user_pin_plain) {
+      return res.status(404).json({ error: "PIN belum diset." });
+    }
+
+    try {
+      await axios.post(`${SEND_URL}/send-email-user-pin`, {
+        email: user.email,
+        pin: balance.user_pin_plain,
+      });
+    } catch (err) {
+      console.error("❌ Gagal kirim email PIN:", err.message);
+      return res.status(500).json({ error: "Gagal kirim PIN ke email." });
+    }
+
+    res.json({ message: "✅ PIN telah dikirim ke email." });
+  } catch (err) {
+    console.error("Request PIN error:", err);
+    res.status(500).json({ error: "Terjadi kesalahan server." });
+  }
+});
+
+
 // ======================== GET USER BY ID (Validasi Cookie) ========================
-// GET User info + jumlah seller yang difollow
+// GET User info + jumlah seller yang difollow + balance
 router.get("/user/:id", async (req, res) => {
   const cookie = req.cookies.user_info;
   if (!cookie) return res.status(401).json({ error: "Tidak ada sesi login." });
@@ -374,18 +522,20 @@ router.get("/user/:id", async (req, res) => {
     return res.status(403).json({ error: "Sesi login tidak valid." });
   }
 
+  // === Ambil data user
   const { data: user, error } = await supabase
     .from("users")
     .select(
-      `id, email, username, verified, avatar, provinsi, kota_kabupaten, kecamatan, kelurahan, kode_pos, nama_penerima, no_telepon, alamat_lengkap`,
+      `id, email, username, verified, avatar, provinsi, kota_kabupaten, kecamatan, kelurahan, kode_pos, nama_penerima, no_telepon, alamat_lengkap`
     )
     .eq("id", req.params.id)
     .single();
 
-  if (error || !user)
+  if (error || !user) {
     return res.status(404).json({ error: "User tidak ditemukan." });
+  }
 
-  // Gabungkan alamat
+  // === Gabungkan alamat
   const alamat_lengkap_combine = [
     user.alamat_lengkap,
     user.kelurahan,
@@ -393,10 +543,10 @@ router.get("/user/:id", async (req, res) => {
     user.kota_kabupaten,
     user.kode_pos,
   ]
-    .filter(Boolean) // buang yg falsy/null/undefined
+    .filter(Boolean)
     .join(", ");
 
-  // Hitung jumlah seller yang difollow user ini
+  // === Hitung jumlah seller yang difollow user ini
   const { count: totalFollowing, error: followError } = await supabase
     .from("follows")
     .select("*", { count: "exact", head: true })
@@ -409,7 +559,7 @@ router.get("/user/:id", async (req, res) => {
     });
   }
 
-  // (Opsional) ambil list seller yang difollow
+  // === (Opsional) ambil list seller yang difollow
   const { data: followingSellers, error: sellersError } = await supabase
     .from("follows")
     .select(
@@ -425,12 +575,27 @@ router.get("/user/:id", async (req, res) => {
     });
   }
 
+  // === Ambil user balance (exclude pin hash & plain)
+  const { data: balanceData, error: balanceError } = await supabase
+    .from("user_balances")
+    .select("balance, updated_at, bank_code, account_holder_name, account_number")
+    .eq("user_id", req.params.id)
+    .maybeSingle();
+
+  if (balanceError) {
+    return res.status(500).json({
+      error: "Gagal mengambil data balance.",
+      detail: balanceError.message,
+    });
+  }
+
   res.json({
     user: {
       ...user,
       alamat_lengkap_combine,
       total_following: totalFollowing || 0,
       following_sellers: followingSellers?.map((f) => f.sellers) || [],
+      balance: balanceData || null, // balance ditaruh di dalam object user
     },
   });
 });
@@ -465,8 +630,6 @@ router.put("/user/:id", upload.single("avatar"), async (req, res) => {
       kecamatan,
       kelurahan_id,
       kelurahan,
-      // data rekening
-      user_pin,
       bank_code,
       account_holder_name,
       account_number,
@@ -539,7 +702,6 @@ router.put("/user/:id", upload.single("avatar"), async (req, res) => {
 
     // ============ Build payload user_balances ============
     const updateBalances = {};
-    if (user_pin) updateBalances.user_pin_hash = await bcrypt.hash(user_pin, 10);
     if (bank_code) updateBalances.bank_code = bank_code;
     if (account_holder_name) updateBalances.account_holder_name = account_holder_name;
     if (account_number) updateBalances.account_number = account_number;
