@@ -1,348 +1,1196 @@
-# Dokumentasi API Backend
+# Dokumentasi API - Manajemen Pengguna, Keuangan, dan Sistem Pesanan
 
-Selamat datang di dokumentasi API Backend untuk aplikasi e-commerce. API ini menggunakan endpoint dengan basis URL `https://backendcihuyy.up.railway.app`. Rute untuk seller menggunakan prefix `/seller/v1`, sedangkan rute untuk pembeli tidak menggunakan prefix. Berikut adalah penjelasan mengenai rute-rute utama yang telah diperbarui, termasuk penambahan field seperti `bankCode`, `pin`, dan lainnya, serta contoh request dan script Postman untuk bagian keuangan.
+**URL Dasar**: `https://backendcihuyy.up.railway.app`
 
 ## Daftar Isi
-1. [Rute Seller](#rute-seller)
-   - [Update Seller](#update-seller)
-   - [Pendaftaran Seller](#pendaftaran-seller)
-   - [Update Status Order](#update-status-order)
-   - [Keuangan Seller](#keuangan-seller)
-2. [Rute Pembeli](#rute-pembeli)
-   - [Checkout](#checkout)
-   - [Keuangan Pembeli](#keuangan-pembeli)
-   - [Update User](#update-user)
+1. [Autentikasi](#autentikasi)
+   - [Registrasi](#post-authregister)
+   - [Cek PIN Pengguna](#get-authusercheck-pinid)
+   - [Ubah/Atur PIN](#post-authuserchange-pinid)
+   - [Minta PIN melalui Email](#post-authuserrequest-pinid)
+   - [Perbarui Pengguna](#put-authuserid)
+2. [Keuangan](#keuangan)
+   - [Penarikan Massal](#post-paymentuserwithdrawbatch)
+   - [Dapatkan Riwayat Penarikan](#get-paymentuserwithdrawals)
+   - [Dapatkan Riwayat Transaksi](#get-paymentusertransactions)
+   - [Dapatkan Saldo](#get-paymentuserbalance)
+3. [Sistem Pesanan](#sistem-pesanan)
+   - [Checkout Keranjang](#post-ordercartcheckout)
+   - [Hitung Biaya Pengiriman](#post-ordercartdelivery-fee)
+   - [Konfirmasi Penerimaan Pesanan](#post-orderordersidconfirm-receive)
+   - [Hapus Pesanan](#delete-orderordersid)
+   - [Dapatkan Semua Pembayaran Tertunda](#get-orderallpendingpayments)
+   - [Dapatkan Semua Pesanan](#get-orderall)
+   - [Dapatkan Pesanan berdasarkan ID](#get-orderorderid)
+4. [Penjual](#penjual)
+   - [Autentikasi Penjual](#autentikasi-penjual)
+     - [Dapatkan Profil Penjual](#get-seller-v1authprofileid)
+     - [Minta PIN Penjual](#post-seller-v1authrequest-pinid)
+     - [Ubah PIN Penjual](#post-seller-v1authchange-pinid)
+     - [Perbarui Penjual](#put-seller-v1authupdateid)
+   - [Keuangan Penjual](#keuangan-penjual)
+     - [Penarikan Massal](#post-seller-v1paymentwithdrawbatch)
+     - [Dapatkan Riwayat Penarikan](#get-seller-v1paymentwithdrawals)
+     - [Dapatkan Riwayat Transaksi](#get-seller-v1paymenttransactions)
+     - [Dapatkan Saldo](#get-seller-v1paymentbalance)
+   - [Sistem Pesanan Penjual](#sistem-pesanan-penjual)
+     - [Dapatkan Semua Pesanan Penjual](#get-seller-v1orderall)
+     - [Dapatkan Pesanan Dibatalkan Penjual](#get-seller-v1ordercancelled)
+     - [Dapatkan Pesanan Selesai Penjual](#get-seller-v1ordercompleted)
+     - [Dapatkan Pesanan Penjual berdasarkan ID](#get-seller-v1orderorderid)
+     - [Perbarui Status Pesanan](#put-seller-v1orderordersidstatus)
 
-## Rute Seller
+---
 
-### Update Seller
-**Endpoint**: `PUT /seller/v1/auth/seller/update/:id`  
-**Deskripsi**: Mengupdate data seller, termasuk informasi toko, alamat, dan data bank. Mendukung upload gambar toko dan validasi PIN serta data bank.  
-**Fitur Baru**:
-- Penambahan field `bankCode`, `pin`, `accountHolderName`, dan `accountNumber`.
-- Validasi PIN (4-6 digit).
-- Validasi data bank harus diisi bersama-sama jika salah satu disediakan.
-- Sinkronisasi `seller_name` ke tabel `products` jika nama diubah.
+## Autentikasi
+**Path Dasar**: `/auth`
 
-**Contoh Request Body**:
-```json
-{
-  "email": "seller@example.com",
-  "name": "Nama Seller",
-  "business_name": "Nama Bisnis",
-  "phone": "081234567890",
-  "store_name": "Toko Seller",
-  "store_address": "Jl. Contoh No. 123",
-  "provinsi_id": "1",
-  "kabupaten_id": "101",
-  "kecamatan_id": "1001",
-  "kelurahan_id": "10001",
-  "latitude": "-6.123456",
-  "longitude": "106.123456",
-  "is_delivery_available": "true",
-  "delivery_fee": "15000",
-  "pin": "123456",
-  "bankCode": "BCA",
-  "accountHolderName": "Nama Pemilik Rekening",
-  "accountNumber": "1234567890"
-}
-```
-**Catatan**:
-- File gambar toko diunggah melalui `store_image_url` menggunakan `multipart/form-data`.
-- Validasi wilayah memastikan urutan pengisian (`provinsi_id` → `kabupaten_id` → `kecamatan_id` → `kelurahan_id`).
+### POST /auth/register
+Mendaftarkan pengguna baru dengan opsi unggah avatar dan pengaturan PIN.
 
-### Pendaftaran Seller
-**Endpoint**: `POST /seller/v1/forum-pendaftaran/seller`  
-**Deskripsi**: Mendaftarkan seller baru, termasuk informasi toko, alamat, dan data bank. Menggunakan upload gambar toko dan pengiriman OTP untuk verifikasi email.  
-**Fitur Baru**:
-- Penambahan field `pin`, `bankCode`, `accountHolderName`, dan `accountNumber` sebagai wajib.
-- Validasi PIN (4-6 digit).
-- Validasi semua field wajib, termasuk koordinat dan data bank.
+**Permintaan:**
+- **Metode**: POST
+- **URL**: `https://backendcihuyy.up.railway.app/auth/register`
+- **Content-Type**: `multipart/form-data`
+- **Body**:
+  - `email` (string, wajib): Alamat email pengguna.
+  - `password` (string, wajib): Kata sandi pengguna.
+  - `username` (string, opsional): Nama pengguna. Jika tidak diberikan, diambil dari email.
+  - `pin` (string, opsional): PIN 4-6 digit untuk saldo pengguna.
+  - `avatar` (file, opsional): Gambar avatar pengguna.
 
-**Contoh Request Body**:
-```json
-{
-  "email": "new.seller@example.com",
-  "name": "Nama Seller",
-  "businessName": "Nama Bisnis",
-  "phone": "081234567890",
-  "storeName": "Toko Baru",
-  "storeAddress": "Jl. Baru No. 1",
-  "provinsi_id": "1",
-  "kota_id": "101",
-  "kecamatan_id": "1001",
-  "kelurahan_id": "10001",
-  "latitude": "-6.123456",
-  "longitude": "106.123456",
-  "is_delivery_available": "true",
-  "delivery_fee": "15000",
-  "password": "P@ssw0rd123",
-  "pin": "123456",
-  "bankCode": "BCA",
-  "accountHolderName": "Nama Pemilik",
-  "accountNumber": "1234567890"
-}
-```
-**Catatan**:
-- Gambar toko diunggah melalui `storeImage` menggunakan `multipart/form-data`.
-- Password harus memenuhi kriteria keamanan (min. 8 karakter, huruf besar, kecil, angka, dan simbol).
+**Respon:**
+- **201 Created**:
+  ```json
+  { "message": "Pengguna dibuat. OTP dikirim ke email." }
+  ```
+- **400 Bad Request**:
+  ```json
+  { "error": "Email sudah digunakan." }
+  ```
+- **500 Internal Server Error**:
+  ```json
+  { "error": "Terjadi kesalahan pada server." }
+  ```
 
-### Update Status Order
-**Endpoint**: `PUT /seller/v1/order/orders/:id/status`  
-**Deskripsi**: Mengupdate status pesanan seller dengan validasi alur status dan penanganan refund serta pengembalian stok untuk pembatalan.  
-**Fitur Baru**:
-- Penambahan logika refund otomatis saat pembatalan untuk pembayaran digital.
-- Pengembalian stok produk/varian saat status menjadi `dibatalkan`.
-- Notifikasi email dengan detail produk dan alamat seller.
-
-**Contoh Request Body**:
-```json
-{
-  "action": "accept",
-}
-```
-**Aksi yang Didukung**:
-- `accept`: Menerima pesanan (dari `pending` atau `processing`).
-- `cancel`: Membatalkan pesanan (dengan refund jika sudah dibayar).
-- `ready`: Menandakan pesanan siap diambil (untuk `pickup_method: diambil`).
-- `ship`: Mengirim pesanan (untuk `pickup_method: diantar`).
-- `complete`: Menyelesaikan pesanan (dari `siap di ambil` atau `sedang di antar`).
-
-**Catatan**:
-- Validasi alur status memastikan transisi yang valid (misalnya, dari `pending` hanya ke `sedang di kemas` atau `dibatalkan`).
-- Cache digunakan untuk mengurangi query database.
-
-### Keuangan Seller
-**Endpoint**:
-- `POST /seller/v1/payment/withdraw/batch`: Melakukan penarikan saldo seller ke rekening bank.
-- `GET /seller/v1/payment/withdrawals`: Mengambil riwayat penarikan saldo.
-- `GET /seller/v1/payment/transactions`: Mengambil riwayat transaksi saldo.
-- `GET /seller/v1/payment/balance`: Mengambil informasi saldo seller.
-- `POST /seller/v1/payment/set-pin`: Mengatur atau mengubah PIN seller.
-
-**Fitur Baru**:
-- Penarikan saldo menggunakan Xendit dengan validasi PIN dan signature.
-- Penyimpanan riwayat transaksi dan penarikan di tabel `seller_balance_transactions` dan `seller_withdrawals`.
-- Validasi PIN (4-6 digit) dan otorisasi menggunakan `seller_info` dari cookies.
-
-**Contoh Request Body (Withdraw)**:
-```json
-{
-  "seller_id": "{{seller_id}}",
-  "amount": {{amount}},
-  "bank_code": "{{bank_code}}",
-  "account_number": "{{account_number}}",
-  "channel_properties": {
-    "account_holder_name": "{{account_holder_name}}"
-  },
-  "timestamp": {{timestamp}},
-  "signature": "{{signature}}"
-}
+**Contoh**:
+```bash
+curl -X POST https://backendcihuyy.up.railway.app/auth/register \
+  -F "email=user@example.com" \
+  -F "password=secure123" \
+  -F "username=john_doe" \
+  -F "pin=123456" \
+  -F "avatar=@/path/to/avatar.jpg"
 ```
 
-**Script Postman untuk Withdraw Seller**:
-```javascript
-// Fungsi stableStringify (harus sama dengan di backend)
-function stableStringify(obj) {
-  if (obj === null || typeof obj !== "object") return JSON.stringify(obj);
-  if (Array.isArray(obj)) return `[${obj.map(stableStringify).join(",")}]`;
-  const keys = Object.keys(obj).sort();
-  return `{${keys.map((k) => JSON.stringify(k) + ":" + stableStringify(obj[k])).join(",")}}`;
-}
+### GET /auth/user/:id/check-pin
+Memeriksa apakah pengguna telah mengatur PIN.
 
-// === Data request ===
-const sellerId = "34882968-93c6-4408-9619-8ebbd022fe27";        // ganti sesuai DB / cookies
-const amount = 3000;                 // contoh nominal
-const bankCode = "BNI";            // contoh kode bank
-const accountNumber = "1234567890";   // contoh nomor rekening
-const accountHolderName = "Amba Dev"; // contoh nama
-const ts = Date.now();
+**Permintaan:**
+- **Metode**: GET
+- **URL**: `https://backendcihuyy.up.railway.app/auth/user/:id/check-pin`
+- **Parameter**:
+  - `id` (string, wajib): ID pengguna.
 
-// payload untuk signature
-const payload = {
-  sellerId,
-  amount,
-  bankCode,
-  accountNumber,
-  accountHolderName,
-  timestamp: ts
-};
+**Respon:**
+- **200 OK**:
+  ```json
+  { "hasPin": true }
+  ```
+- **500 Internal Server Error**:
+  ```json
+  { "error": "Gagal memeriksa PIN." }
+  ```
 
-const jsonPayload = stableStringify(payload);
-
-// ambil secret dari environment variable Postman
-const secret = pm.environment.get("WITHDRAW_SECRET");
-
-// generate signature pakai CryptoJS (built-in Postman)
-const signature = CryptoJS.HmacSHA256(jsonPayload, secret).toString(CryptoJS.enc.Hex);
-
-// simpan ke environment variable Postman
-pm.environment.set("seller_id", sellerId);
-pm.environment.set("amount", amount);
-pm.environment.set("bank_code", bankCode);
-pm.environment.set("account_number", accountNumber);
-pm.environment.set("account_holder_name", accountHolderName);
-pm.environment.set("timestamp", ts);
-pm.environment.set("signature", signature);
+**Contoh**:
+```bash
+curl -X GET https://backendcihuyy.up.railway.app/auth/user/123/check-pin
 ```
 
-**Catatan**:
-- Pastikan environment variable `WITHDRAW_SECRET` sudah diset di Postman.
-- Signature dihasilkan menggunakan HMAC-SHA256 dengan payload yang disusun menggunakan `stableStringify`.
-- Response akan mencakup status penarikan dan detail transaksi dari Xendit.
+### POST /auth/user/change-pin/:id
+Mengubah atau mengatur PIN pengguna.
 
-## Rute Pembeli
+**Permintaan:**
+- **Metode**: POST
+- **URL**: `https://backendcihuyy.up.railway.app/auth/user/change-pin/:id`
+- **Parameter**:
+  - `id` (string, wajib): ID pengguna.
+- **Body**:
+  - `old_pin` (string, opsional): PIN saat ini (wajib jika PIN sudah ada).
+  - `new_pin` (string, wajib): PIN baru 4-6 digit.
 
-### Checkout
-**Endpoint**: `POST /cart/checkout`  
-**Deskripsi**: Memproses checkout dari keranjang belanja, termasuk validasi alamat, pembayaran, dan pembuatan pesanan.  
-**Fitur Baru**:
-- Penambahan metode pembayaran `balance` untuk menggunakan saldo user.
-- Otomatisasi pembaruan alamat jika disediakan dalam request.
-- Snapshot item pesanan disimpan di `order_item_details` dan `order_details_items`.
+**Respon:**
+- **200 OK**:
+  ```json
+  { "message": "✅ PIN berhasil diubah." }
+  ```
+- **400 Bad Request**:
+  ```json
+  { "error": "PIN baru diperlukan." }
+  ```
+- **500 Internal Server Error**:
+  ```json
+  { "error": "Terjadi kesalahan server." }
+  ```
 
-**Contoh Request Body**:
-```json
-{
-  "itemsToCheckout": [
-    {
-      "productId": "product-uuid",
-      "variantId": "variant-uuid",
-      "qty": 2,
-      "pickupMethod": "diantar"
-    }
-  ],
-  "pickupMethod": "diantar",
-  "paymentMethod": "digital",
-  "address": {
-    "nama_penerima": "Nama Penerima",
-    "no_telepon": "081234567890",
-    "alamat_lengkap": "Jl. Contoh No. 123",
-    "kode_pos": "12345",
-    "provinsi_id": "1",
-    "kota_id": "101",
-    "kecamatan_id": "1001",
-    "kelurahan_id": "10001"
+**Contoh**:
+```bash
+curl -X POST https://backendcihuyy.up.railway.app/auth/user/change-pin/123 \
+  -H "Content-Type: application/json" \
+  -d '{"old_pin": "1234", "new_pin": "5678"}'
+```
+
+### POST /auth/user/request-pin/:id
+Meminta PIN pengguna untuk dikirim melalui email.
+
+**Permintaan:**
+- **Metode**: POST
+- **URL**: `https://backendcihuyy.up.railway.app/auth/user/request-pin/:id`
+- **Parameter**:
+  - `id` (string, wajib): ID pengguna.
+
+**Respon:**
+- **200 OK**:
+  ```json
+  { "message": "✅ PIN telah dikirim ke email." }
+  ```
+- **404 Not Found**:
+  ```json
+  { "error": "Pengguna tidak ditemukan." }
+  ```
+- **500 Internal Server Error**:
+  ```json
+  { "error": "Terjadi kesalahan server." }
+  ```
+
+**Contoh**:
+```bash
+curl -X POST https://backendcihuyy.up.railway.app/auth/user/request-pin/123
+```
+
+### PUT /auth/user/:id
+Memperbarui informasi pengguna, termasuk opsi unggah avatar.
+
+**Permintaan:**
+- **Metode**: PUT
+- **URL**: `https://backendcihuyy.up.railway.app/auth/user/:id`
+- **Parameter**:
+  - `id` (string, wajib): ID pengguna.
+- **Content-Type**: `multipart/form-data`
+- **Body**:
+  - `username` (string, opsional): Nama pengguna baru.
+  - `password` (string, opsional): Kata sandi baru.
+  - `nama_penerima` (string, opsional): Nama penerima.
+  - `no_telepon` (string, opsional): Nomor telepon.
+  - `alamat_lengkap` (string, opsional): Alamat lengkap.
+  - `kode_pos` (string, opsional): Kode pos.
+  - `provinsi_id` (string, opsional): ID provinsi.
+  - `provinsi` (string, opsional): Nama provinsi.
+  - `kota_id` (string, opsional): ID kota.
+  - `kota` (string, opsional): Nama kota.
+  - `kecamatan_id` (string, opsional): ID kecamatan.
+  - `kecamatan` (string, opsional): Nama kecamatan.
+  - `kelurahan_id` (string, opsional): ID kelurahan.
+  - `kelurahan` (string, opsional): Nama kelurahan.
+  - `bank_code` (string, opsional): Kode bank.
+  - `account_holder_name` (string, opsional): Nama pemegang rekening.
+  - `account_number` (string, opsional): Nomor rekening bank.
+  - `avatar` (file, opsional): Gambar avatar baru.
+
+**Respon:**
+- **200 OK**:
+  ```json
+  {
+    "message": "✅ Pengguna berhasil diperbarui.",
+    "user": { "id": "123", "email": "user@example.com", ... }
   }
-}
-```
-**Catatan**:
-- Metode pembayaran: `cod`, `digital`, atau `balance`.
-- Alamat wajib lengkap jika ada item dengan `pickupMethod: diantar`.
+  ```
+- **500 Internal Server Error**:
+  ```json
+  { "error": "Gagal memperbarui pengguna.", "detail": "Pesan kesalahan" }
+  ```
 
-### Keuangan Pembeli
-**Endpoint**:
-- `POST /paymentuser/set-pin`: Mengatur atau mengubah PIN pembeli.
-- `POST /paymentuser/withdraw/batch`: Melakukan penarikan saldo pembeli ke rekening bank.
-- `GET /paymentuser/withdrawals`: Mengambil riwayat penarikan saldo.
-- `GET /paymentuser/transactions`: Mengambil riwayat transaksi saldo.
-- `GET /paymentuser/balance`: Mengambil informasi saldo pembeli.
-
-**Fitur Baru**:
-- Penarikan saldo menggunakan Xendit dengan validasi PIN dan signature.
-- Penyimpanan riwayat transaksi dan penarikan di tabel `user_balance_transactions` dan `user_withdrawals`.
-- Validasi PIN (4-6 digit) dan otorisasi menggunakan `user_info` dari cookies.
-
-**Contoh Request Body (Withdraw)**:
-```json
-{
-  "user_id": "{{user_id}}",
-  "amount": {{amount}},
-  "bank_code": "{{bank_code}}",
-  "account_number": "{{account_number}}",
-  "account_holder_name": "{{account_holder_name}}",
-  "pin": "1234",
-  "timestamp": {{timestamp}},
-  "signature": "{{signature}}"
-}
+**Contoh**:
+```bash
+curl -X PUT https://backendcihuyy.up.railway.app/auth/user/123 \
+  -F "username=new_username" \
+  -F "avatar=@/path/to/new_avatar.jpg"
 ```
 
-**Script Postman untuk Withdraw Pembeli**:
-```javascript
-// Fungsi stableStringify (harus sama dengan di backend)
-function stableStringify(obj) {
-  if (obj === null || typeof obj !== "object") return JSON.stringify(obj);
-  if (Array.isArray(obj)) return `[${obj.map(stableStringify).join(",")}]`;
-  const keys = Object.keys(obj).sort();
-  return `{${keys.map((k) => JSON.stringify(k) + ":" + stableStringify(obj[k])).join(",")}}`;
-}
+---
 
-// === Data request ===
-const userId = "64d67463-148f-4490-a23a-134f199dfa7e";        // ganti sesuai DB/ cookies
-const amount = 3000;                 // contoh nominal
-const bankCode = "BCA";            // contoh kode bank
-const accountNumber = "1234567890";   // contoh nomor rekening
-const accountHolderName = "John Doe"; // contoh nama
-const ts = Date.now();
+## Keuangan
+**Path Dasar**: `/paymentuser`
 
-// payload untuk signature
-const payload = {
-  userId,
-  amount,
-  bankCode,
-  accountNumber,
-  accountHolderName,
-  timestamp: ts
-};
+### POST /paymentuser/withdraw/batch
+Memulai penarikan massal dari saldo pengguna.
 
-const jsonPayload = stableStringify(payload);
+**Permintaan:**
+- **Metode**: POST
+- **URL**: `https://backendcihuyy.up.railway.app/paymentuser/withdraw/batch`
+- **Body**:
+  - `user_id` (string, wajib): ID pengguna.
+  - `amount` (number, wajib): Jumlah penarikan.
+  - `bank_code` (string, wajib): Kode bank.
+  - `account_number` (string, wajib): Nomor rekening bank.
+  - `pin` (string, wajib): PIN pengguna.
+  - `channel_properties` (object, opsional): Properti saluran tambahan.
+  - `timestamp` (number, opsional): Waktu tanda tangan.
+  - `signature` (string, wajib): Tanda tangan untuk validasi.
 
-// ambil secret dari environment variable Postman
-const secret = pm.environment.get("WITHDRAW_SECRET");
+**Respon:**
+- **200 OK**:
+  ```json
+  {
+    "message": "Penarikan disbursement dikirim ke Xendit (status sudah dimap ke DB).",
+    "db_status": "pending",
+    "disbursementPayload": {...},
+    "xenditResponse": {...}
+  }
+  ```
+- **400 Bad Request**:
+  ```json
+  { "error": "Field wajib untuk penarikan disbursement tidak lengkap" }
+  ```
+- **500 Internal Server Error**:
+  ```json
+  { "message": "Gagal memproses penarikan disbursement", "error": "Pesan kesalahan" }
+  ```
 
-// generate signature pakai CryptoJS (built-in Postman)
-const signature = CryptoJS.HmacSHA256(jsonPayload, secret).toString(CryptoJS.enc.Hex);
-
-// simpan ke environment variable Postman
-pm.environment.set("user_id", userId);
-pm.environment.set("amount", amount);
-pm.environment.set("bank_code", bankCode);
-pm.environment.set("account_number", accountNumber);
-pm.environment.set("account_holder_name", accountHolderName);
-pm.environment.set("timestamp", ts);
-pm.environment.set("signature", signature);
+**Contoh**:
+```bash
+curl -X POST https://backendcihuyy.up.railway.app/paymentuser/withdraw/batch \
+  -H "Content-Type: application/json" \
+  -d '{"user_id": "123", "amount": 50000, "bank_code": "BCA", "account_number": "1234567890", "pin": "1234", "signature": "abc123"}'
 ```
 
-**Catatan**:
-- Pastikan environment variable `WITHDRAW_SECRET` sudah diset di Postman.
-- PIN harus sesuai dengan yang diset di `POST /paymentuser/set-pin`.
-- Signature dihasilkan menggunakan HMAC-SHA256 dengan payload yang disusun menggunakan `stableStringify`.
+### GET /paymentuser/withdrawals
+Mengambil riwayat penarikan pengguna.
 
-### Update User
-**Endpoint**: `PUT /auth/user/:id`  
-**Deskripsi**: Mengupdate data pembeli, termasuk informasi alamat, avatar, dan data rekening.  
-**Fitur Baru**:
-- Penambahan field `user_pin`, `bank_code`, `account_holder_name`, dan `account_number` untuk keperluan penarikan saldo.
-- Validasi wilayah menggunakan API eksternal untuk memastikan data alamat valid.
+**Permintaan:**
+- **Metode**: GET
+- **URL**: `https://backendcihuyy.up.railway.app/paymentuser/withdrawals`
+- **Parameter Kueri**:
+  - `limit` (number, opsional): Jumlah rekaman yang dikembalikan (default: 20).
+  - `offset` (number, opsional): Offset untuk paginasi (default: 0).
+  - `status` (string, opsional): Filter berdasarkan status.
 
-**Contoh Request Body**:
-```json
-{
-  "username": "newusername",
-  "password": "NewP@ssw0rd123",
-  "nama_penerima": "Nama Penerima",
-  "no_telepon": "081234567890",
-  "alamat_lengkap": "Jl. Baru No. 1",
-  "kode_pos": "12345",
-  "provinsi_id": "1",
-  "kota_id": "101",
-  "kecamatan_id": "1001",
-  "kelurahan_id": "10001",
-  "user_pin": "123456",
-  "bank_code": "BCA",
-  "account_holder_name": "Nama Pemilik",
-  "account_number": "1234567890"
-}
+**Respon:**
+- **200 OK**:
+  ```json
+  {
+    "withdrawals": [...],
+    "pagination": { "limit": 20, "offset": 0, "has_more": false, "total": 10 }
+  }
+  ```
+- **401 Unauthorized**:
+  ```json
+  { "message": "❌ Harus login sebagai pengguna." }
+  ```
+- **500 Internal Server Error**:
+  ```json
+  { "message": "❌ Gagal mengambil riwayat penarikan." }
+  ```
+
+**Contoh**:
+```bash
+curl -X GET https://backendcihuyy.up.railway.app/paymentuser/withdrawals?limit=10&offset=0
 ```
-**Catatan**:
-- Avatar diunggah melalui `multipart/form-data`.
-- Password harus memenuhi kriteria keamanan jika diubah.
 
-## Catatan Umum
-- **Otentikasi**: Semua rute memerlukan cookies (`seller_info` atau `user_info`) untuk otorisasi.
-- **Validasi Wilayah**: Menggunakan API `https://www.emsifa.com/api-wilayah-indonesia` untuk validasi dan pengambilan nama wilayah.
-- **Pembayaran**: Menggunakan Xendit untuk pembayaran digital dan penarikan saldo.
-- **Error Handling**: Setiap rute memiliki penanganan error dengan pesan yang jelas dan kode status HTTP yang sesuai.
-- **Cache**: Beberapa rute menggunakan cache untuk mengoptimalkan performa (misalnya, data produk dan seller).
+### GET /paymentuser/transactions
+Mengambil riwayat transaksi pengguna.
 
-Untuk informasi lebih lanjut atau bantuan, hubungi tim pengembang melalui [support@example.com](mailto:support@example.com).
+**Permintaan:**
+- **Metode**: GET
+- **URL**: `https://backendcihuyy.up.railway.app/paymentuser/transactions`
+- **Parameter Kueri**:
+  - `limit` (number, opsional): Jumlah rekaman yang dikembalikan (default: 20).
+  - `offset` (number, opsional): Offset untuk paginasi (default: 0).
+  - `type` (string, opsional): Filter berdasarkan jenis transaksi.
+
+**Respon:**
+- **200 OK**:
+  ```json
+  {
+    "transactions": [...],
+    "pagination": { "limit": 20, "offset": 0, "has_more": false, "total": 10 }
+  }
+  ```
+- **401 Unauthorized**:
+  ```json
+  { "message": "❌ Harus login sebagai pengguna." }
+  ```
+- **500 Internal Server Error**:
+  ```json
+  { "message": "❌ Gagal mengambil riwayat transaksi." }
+  ```
+
+**Contoh**:
+```bash
+curl -X GET https://backendcihuyy.up.railway.app/paymentuser/transactions?limit=10&type=withdrawal
+```
+
+### GET /paymentuser/balance
+Mengambil informasi saldo pengguna.
+
+**Permintaan:**
+- **Metode**: GET
+- **URL**: `https://backendcihuyy.up.railway.app/paymentuser/balance`
+
+**Respon:**
+- **200 OK**:
+  ```json
+  {
+    "balance": {
+      "total": 100000,
+      "withdrawable": 100000,
+      "pending": 0
+    }
+  }
+  ```
+- **401 Unauthorized**:
+  ```json
+  { "message": "❌ Harus login sebagai pengguna." }
+  ```
+- **500 Internal Server Error**:
+  ```json
+  { "message": "❌ Gagal mengambil data saldo." }
+  ```
+
+**Contoh**:
+```bash
+curl -X GET https://backendcihuyy.up.railway.app/paymentuser/balance
+```
+
+---
+
+## Sistem Pesanan
+**Path Dasar**: `/order`
+
+### POST /order/cart/checkout
+Melakukan checkout item dari keranjang.
+
+**Permintaan:**
+- **Metode**: POST
+- **URL**: `https://backendcihuyy.up.railway.app/order/cart/checkout`
+- **Body**:
+  - `itemsToCheckout` (array, wajib): Daftar item untuk checkout (`productId`, `variantId`, `qty`).
+  - `pickupMethod` (string, opsional): Metode pengambilan (`diantar` atau `diambil`).
+  - `address` (object, opsional): Detail alamat pengiriman.
+  - `paymentMethod` (string, wajib): Metode pembayaran (`cod`, `digital`, `balance`).
+  - `selectedPaymentChannel` (string, opsional): Saluran pembayaran untuk pembayaran digital.
+  - `pin` (string, opsional): PIN untuk pembayaran saldo.
+
+**Respon:**
+- **200 OK**:
+  ```json
+  {
+    "message": "✅ Berhasil checkout 1 pesanan. Semua item siap diproses!",
+    "orders": [...],
+    "delivery_stats": {...}
+  }
+  ```
+- **400 Bad Request**:
+  ```json
+  { "message": "⚠️ Tidak ada item untuk di-checkout." }
+  ```
+- **500 Internal Server Error**:
+  ```json
+  { "message": "❌ Terjadi kesalahan server", "error": "Pesan kesalahan" }
+  ```
+
+**Contoh**:
+```bash
+curl -X POST https://backendcihuyy.up.railway.app/order/cart/checkout \
+  -H "Content-Type: application/json" \
+  -d '{"itemsToCheckout": [{"productId": "1", "variantId": "2", "qty": 1}], "pickupMethod": "diantar", "paymentMethod": "digital", "selectedPaymentChannel": "BCA"}'
+```
+
+### POST /order/cart/delivery-fee
+Menghitung biaya pengiriman untuk item keranjang.
+
+**Permintaan:**
+- **Metode**: POST
+- **URL**: `https://backendcihuyy.up.railway.app/order/cart/delivery-fee`
+- **Body**:
+  - `itemsToCheckout` (array, wajib): Daftar item (`productId`, `variantId`, `qty`).
+  - `pickupMethod` (string, opsional): Metode pengambilan (`diantar` atau `diambil`).
+
+**Respon:**
+- **200 OK**:
+  ```json
+  {
+    "message": "✅ Data checkout berhasil dihitung.",
+    "sellers": [...],
+    "total_produk_semua": 100000,
+    "total_ongkir_semua": 10000,
+    "total_checkout_semua": 110000,
+    "delivery_stats": {...},
+    "payment_methods": {...}
+  }
+  ```
+- **401 Unauthorized**:
+  ```json
+  { "message": "❌ Harus login dulu." }
+  ```
+- **500 Internal Server Error**:
+  ```json
+  { "message": "❌ Terjadi kesalahan server.", "error": "Pesan kesalahan" }
+  ```
+
+**Contoh**:
+```bash
+curl -X POST https://backendcihuyy.up.railway.app/order/cart/delivery-fee \
+  -H "Content-Type: application/json" \
+  -d '{"itemsToCheckout": [{"productId": "1", "variantId": "2", "qty": 1}], "pickupMethod": "diantar"}'
+```
+
+### POST /order/orders/:id/confirm-receive
+Mengkonfirmasi penerimaan pesanan.
+
+**Permintaan:**
+- **Metode**: POST
+- **URL**: `https://backendcihuyy.up.railway.app/order/orders/:id/confirm-receive`
+- **Parameter**:
+  - `id` (string, wajib): ID pesanan.
+
+**Respon:**
+- **200 OK**:
+  ```json
+  {
+    "message": "✅ Pesanan berhasil dikonfirmasi diterima.",
+    "order": {...}
+  }
+  ```
+- **401 Unauthorized**:
+  ```json
+  { "message": "❌ Harus login." }
+  ```
+- **500 Internal Server Error**:
+  ```json
+  { "message": "❌ Kesalahan server", "error": "Pesan kesalahan" }
+  ```
+
+**Contoh**:
+```bash
+curl -X POST https://backendcihuyy.up.railway.app/order/orders/123/confirm-receive
+```
+
+### DELETE /order/orders/:id
+Menghapus pesanan yang telah selesai.
+
+**Permintaan:**
+- **Metode**: DELETE
+- **URL**: `https://backendcihuyy.up.railway.app/order/orders/:id`
+- **Parameter**:
+  - `id` (string, wajib): ID pesanan.
+
+**Respon:**
+- **200 OK**:
+  ```json
+  { "message": "✅ Pesanan dan item pesanan berhasil dihapus. Rating tetap aman." }
+  ```
+- **401 Unauthorized**:
+  ```json
+  { "message": "❌ Harus login." }
+  ```
+- **500 Internal Server Error**:
+  ```json
+  { "message": "❌ Kesalahan server", "error": "Pesan kesalahan" }
+  ```
+
+**Contoh**:
+```bash
+curl -X DELETE https://backendcihuyy.up.railway.app/order/orders/123
+```
+
+### GET /order/allpendingpayments
+Mengambil semua pesanan dengan pembayaran digital tertunda.
+
+**Permintaan:**
+- **Metode**: GET
+- **URL**: `https://backendcihuyy.up.railway.app/order/allpendingpayments`
+
+**Respon:**
+- **200 OK**:
+  ```json
+  {
+    "message": "✅ Daftar pembayaran tertunda berhasil diambil.",
+    "data": [...]
+  }
+  ```
+- **401 Unauthorized**:
+  ```json
+  { "message": "❌ Harus login untuk melihat daftar pembayaran tertunda." }
+  ```
+- **500 Internal Server Error**:
+  ```json
+  { "message": "❌ Terjadi kesalahan server", "error": "Pesan kesalahan" }
+  ```
+
+**Contoh**:
+```bash
+curl -X GET https://backendcihuyy.up.railway.app/order/allpendingpayments
+```
+
+### GET /order/all
+Mengambil semua pesanan untuk pengguna.
+
+**Permintaan:**
+- **Metode**: GET
+- **URL**: `https://backendcihuyy.up.railway.app/order/all`
+
+**Respon:**
+- **200 OK**:
+  ```json
+  {
+    "message": "✅ Daftar pesanan berhasil diambil.",
+    "orders": [...]
+  }
+  ```
+- **401 Unauthorized**:
+  ```json
+  { "message": "❌ Harus login untuk melihat daftar pesanan." }
+  ```
+- **500 Internal Server Error**:
+  ```json
+  { "message": "❌ Terjadi kesalahan server", "error": "Pesan kesalahan" }
+  ```
+
+**Contoh**:
+```bash
+curl -X GET https://backendcihuyy.up.railway.app/order/all
+```
+
+### GET /order/:orderId
+Mengambil detail pesanan tertentu.
+
+**Permintaan:**
+- **Metode**: GET
+- **URL**: `https://backendcihuyy.up.railway.app/order/:orderId`
+- **Parameter**:
+  - `orderId` (string, wajib): ID pesanan.
+
+**Respon:**
+- **200 OK**:
+  ```json
+  {
+    "message": "✅ Detail pesanan berhasil diambil.",
+    "order": {...}
+  }
+  ```
+- **401 Unauthorized**:
+  ```json
+  { "message": "❌ Harus login untuk melihat detail pesanan." }
+  ```
+- **404 Not Found**:
+  ```json
+  { "message": "❌ Pesanan tidak ditemukan." }
+  ```
+- **500 Internal Server Error**:
+  ```json
+  { "message": "❌ Terjadi kesalahan server", "error": "Pesan kesalahan" }
+  ```
+
+**Contoh**:
+```bash
+curl -X GET https://backendcihuyy.up.railway.app/order/123
+```
+
+---
+
+## Penjual
+**Path Dasar**: `/seller/V1`
+
+### Autentikasi Penjual
+**Path Dasar**: `/seller/V1/auth`
+
+#### GET /seller/V1/auth/profile/:id
+Mengambil profil penjual, total pengikut, dan informasi rekening bank (tanpa PIN).
+
+**Permintaan:**
+- **Metode**: GET
+- **URL**: `https://backendcihuyy.up.railway.app/seller/V1/auth/profile/:id`
+- **Parameter**:
+  - `id` (string, wajib): ID penjual (atau kosongkan untuk menggunakan ID penjual yang terautentikasi dari cookie).
+
+**Respon:**
+- **200 OK**:
+  ```json
+  {
+    "seller": {
+      "id": "123",
+      "alamat_lengkap_combine": "Alamat Toko, Kelurahan, Kecamatan, Kota",
+      "total_followers": 100,
+      "followers": [{ "id": "user1", "username": "user1", "email": "user1@example.com", ... }],
+      "bank_info": { "bank_code": "BCA", "account_number": "1234567890", "account_holder_name": "John Doe" }
+    }
+  }
+  ```
+- **401 Unauthorized**:
+  ```json
+  { "error": "Penjual belum login." }
+  ```
+- **400 Bad Request**:
+  ```json
+  { "error": "Cookie penjual tidak valid." }
+  ```
+- **404 Not Found**:
+  ```json
+  { "error": "Penjual tidak ditemukan." }
+  ```
+- **500 Internal Server Error**:
+  ```json
+  { "error": "Terjadi kesalahan server." }
+  ```
+
+**Contoh**:
+```bash
+curl -X GET https://backendcihuyy.up.railway.app/seller/V1/auth/profile/123
+```
+
+#### POST /seller/V1/auth/request-pin/:id
+Meminta PIN penjual untuk dikirim melalui email.
+
+**Permintaan:**
+- **Metode**: POST
+- **URL**: `https://backendcihuyy.up.railway.app/seller/V1/auth/request-pin/:id`
+- **Parameter**:
+  - `id` (string, wajib): ID penjual.
+
+**Respon:**
+- **200 OK**:
+  ```json
+  { "message": "✅ PIN telah dikirim ke email Anda." }
+  ```
+- **401 Unauthorized**:
+  ```json
+  { "error": "❌ Harus login sebagai penjual." }
+  ```
+- **403 Forbidden**:
+  ```json
+  { "error": "❌ Tidak diizinkan." }
+  ```
+- **404 Not Found**:
+  ```json
+  { "error": "PIN tidak ditemukan." }
+  ```
+- **500 Internal Server Error**:
+  ```json
+  { "error": "Terjadi kesalahan server." }
+  ```
+
+**Contoh**:
+```bash
+curl -X POST https://backendcihuyy.up.railway.app/seller/V1/auth/request-pin/123
+```
+
+#### POST /seller/V1/auth/change-pin/:id
+Mengubah atau mengatur PIN penjual.
+
+**Permintaan:**
+- **Metode**: POST
+- **URL**: `https://backendcihuyy.up.railway.app/seller/V1/auth/change-pin/:id`
+- **Parameter**:
+  - `id` (string, wajib): ID penjual.
+- **Body**:
+  - `old_pin` (string, wajib): PIN saat ini.
+  - `new_pin` (string, wajib): PIN baru 4-6 digit.
+
+**Respon:**
+- **200 OK**:
+  ```json
+  { "message": "✅ PIN berhasil diubah." }
+  ```
+- **400 Bad Request**:
+  ```json
+  { "error": "PIN lama dan PIN baru diperlukan." }
+  ```
+- **401 Unauthorized**:
+  ```json
+  { "error": "❌ Harus login sebagai penjual." }
+  ```
+- **403 Forbidden**:
+  ```json
+  { "error": "❌ Tidak diizinkan." }
+  ```
+- **404 Not Found**:
+  ```json
+  { "error": "Data penjual tidak ditemukan." }
+  ```
+- **500 Internal Server Error**:
+  ```json
+  { "error": "Terjadi kesalahan server." }
+  ```
+
+**Contoh**:
+```bash
+curl -X POST https://backendcihuyy.up.railway.app/seller/V1/auth/change-pin/123 \
+  -H "Content-Type: application/json" \
+  -d '{"old_pin": "1234", "new_pin": "5678"}'
+```
+
+#### PUT /seller/V1/auth/update/:id
+Memperbarui informasi penjual, termasuk opsi unggah gambar toko.
+
+**Permintaan:**
+- **Metode**: PUT
+- **URL**: `https://backendcihuyy.up.railway.app/seller/V1/auth/update/:id`
+- **Parameter**:
+  - `id` (string, wajib): ID penjual.
+- **Content-Type**: `multipart/form-data`
+- **Body**:
+  - `name` (string, opsional): Nama penjual.
+  - `business_name` (string, opsional): Nama bisnis.
+  - `phone` (string, opsional): Nomor telepon.
+  - `store_name` (string, opsional): Nama toko.
+  - `store_address` (string, opsional): Alamat toko.
+  - `provinsi_id` (string, opsional): ID provinsi.
+  - `kabupaten_id` (string, opsional): ID kabupaten/kota.
+  - `kecamatan_id` (string, opsional): ID kecamatan.
+  - `kelurahan_id` (string, opsional): ID kelurahan.
+  - `latitude` (number, opsional): Latitude toko.
+  - `longitude` (number, opsional): Longitude toko.
+  - `role` (string, opsional): Peran penjual.
+  - `is_delivery_available` (boolean, opsional): Ketersediaan pengiriman.
+  - `delivery_fee` (number, opsional): Biaya pengiriman.
+  - `bank_code` (string, opsional): Kode bank.
+  - `account_holder_name` (string, opsional): Nama pemegang rekening.
+  - `account_number` (string, opsional): Nomor rekening bank.
+  - `store_image_url` (file, opsional): Gambar toko.
+
+**Respon:**
+- **200 OK**:
+  ```json
+  {
+    "message": "✅ Data penjual berhasil diperbarui",
+    "seller": {...},
+    "balance": {...}
+  }
+  ```
+- **401 Unauthorized**:
+  ```json
+  { "error": "❌ Harus login sebagai penjual." }
+  ```
+- **403 Forbidden**:
+  ```json
+  { "error": "❌ Tidak diizinkan." }
+  ```
+- **400 Bad Request**:
+  ```json
+  { "error": "Upload gambar gagal", "detail": "Pesan kesalahan" }
+  ```
+- **500 Internal Server Error**:
+  ```json
+  { "error": "Terjadi kesalahan server." }
+  ```
+
+**Contoh**:
+```bash
+curl -X PUT https://backendcihuyy.up.railway.app/seller/V1/auth/update/123 \
+  -F "name=John Doe" \
+  -F "store_image_url=@/path/to/store_image.webp"
+```
+
+---
+
+### Keuangan Penjual
+**Path Dasar**: `/seller/V1/payment`
+
+#### POST /seller/V1/payment/withdraw/batch
+Memulai penarikan massal dari saldo penjual.
+
+**Permintaan:**
+- **Metode**: POST
+- **URL**: `https://backendcihuyy.up.railway.app/seller/V1/payment/withdraw/batch`
+- **Body**:
+  - `seller_id` (string, wajib): ID penjual.
+  - `amount` (number, wajib): Jumlah penarikan.
+  - `bank_code` (string, wajib): Kode bank.
+  - `account_number` (string, wajib): Nomor rekening bank.
+  - `channel_properties` (object, opsional): Properti saluran tambahan (contoh: `account_holder_name`).
+  - `timestamp` (number, opsional): Waktu tanda tangan.
+  - `signature` (string, wajib): Tanda tangan untuk validasi.
+
+**Respon:**
+- **200 OK**:
+  ```json
+  {
+    "message": "Penarikan disbursement dikirim ke Xendit (status sudah dimap ke DB).",
+    "db_status": "pending",
+    "disbursementPayload": {...},
+    "xenditResponse": {...}
+  }
+  ```
+- **400 Bad Request**:
+  ```json
+  { "error": "Field wajib untuk penarikan disbursement tidak lengkap" }
+  ```
+- **401 Unauthorized**:
+  ```json
+  { "error": "Tanda tangan tidak valid" }
+  ```
+- **404 Not Found**:
+  ```json
+  { "error": "Penjual tidak ditemukan" }
+  ```
+- **500 Internal Server Error**:
+  ```json
+  { "message": "Gagal memproses penarikan disbursement", "error": "Pesan kesalahan" }
+  ```
+
+**Contoh**:
+```bash
+curl -X POST https://backendcihuyy.up.railway.app/seller/V1/payment/withdraw/batch \
+  -H "Content-Type: application/json" \
+  -d '{"seller_id": "123", "amount": 50000, "bank_code": "BCA", "account_number": "1234567890", "signature": "abc123"}'
+```
+
+#### GET /seller/V1/payment/withdrawals
+Mengambil riwayat penarikan penjual.
+
+**Permintaan:**
+- **Metode**: GET
+- **URL**: `https://backendcihuyy.up.railway.app/seller/V1/payment/withdrawals`
+- **Parameter Kueri**:
+  - `limit` (number, opsional): Jumlah rekaman yang dikembalikan (default: 20).
+  - `offset` (number, opsional): Offset untuk paginasi (default: 0).
+  - `status` (string, opsional): Filter berdasarkan status.
+
+**Respon:**
+- **200 OK**:
+  ```json
+  {
+    "withdrawals": [
+      {
+        "id": "123",
+        "amount": 50000,
+        "status": "pending",
+        "created_at": "2025-09-23T17:05:00Z",
+        "bank_info": { "code": "BCA", "holder_name": "John Doe", "number": "****7890" },
+        "xendit_id": "disb-123",
+        "transaction": {...}
+      }
+    ],
+    "pagination": { "limit": 20, "offset": 0, "has_more": false, "total": 1 }
+  }
+  ```
+- **401 Unauthorized**:
+  ```json
+  { "message": "❌ Harus login sebagai penjual." }
+  ```
+- **500 Internal Server Error**:
+  ```json
+  { "message": "❌ Gagal mengambil riwayat penarikan." }
+  ```
+
+**Contoh**:
+```bash
+curl -X GET https://backendcihuyy.up.railway.app/seller/V1/payment/withdrawals?limit=10&offset=0
+```
+
+#### GET /seller/V1/payment/transactions
+Mengambil riwayat transaksi penjual.
+
+**Permintaan:**
+- **Metode**: GET
+- **URL**: `https://backendcihuyy.up.railway.app/seller/V1/payment/transactions`
+- **Parameter Kueri**:
+  - `limit` (number, opsional): Jumlah rekaman yang dikembalikan (default: 20).
+  - `offset` (number, opsional): Offset untuk paginasi (default: 0).
+  - `type` (string, opsional): Filter berdasarkan jenis transaksi.
+
+**Respon:**
+- **200 OK**:
+  ```json
+  {
+    "transactions": [
+      {
+        "id": "123",
+        "amount": -50000,
+        "type": "withdrawal",
+        "timestamp": "2025-09-23T17:05:00Z",
+        "metadata": {...},
+        "signature": "abc123"
+      }
+    ],
+    "pagination": { "limit": 20, "offset": 0, "has_more": false, "total": 1 }
+  }
+  ```
+- **401 Unauthorized**:
+  ```json
+  { "message": "❌ Harus login sebagai penjual." }
+  ```
+- **500 Internal Server Error**:
+  ```json
+  { "message": "❌ Gagal mengambil riwayat transaksi." }
+  ```
+
+**Contoh**:
+```bash
+curl -X GET https://backendcihuyy.up.railway.app/seller/V1/payment/transactions?limit=10&type=withdrawal
+```
+
+#### GET /seller/V1/payment/balance
+Mengambil informasi saldo penjual.
+
+**Permintaan:**
+- **Metode**: GET
+- **URL**: `https://backendcihuyy.up.railway.app/seller/V1/payment/balance`
+
+**Respon:**
+- **200 OK**:
+  ```json
+  {
+    "balance": {
+      "total": 100000,
+      "withdrawable": 100000,
+      "pending": 0
+    }
+  }
+  ```
+- **401 Unauthorized**:
+  ```json
+  { "message": "❌ Harus login sebagai penjual." }
+  ```
+- **500 Internal Server Error**:
+  ```json
+  { "message": "❌ Gagal mengambil data saldo." }
+  ```
+
+**Contoh**:
+```bash
+curl -X GET https://backendcihuyy.up.railway.app/seller/V1/payment/balance
+```
+
+---
+
+### Sistem Pesanan Penjual
+**Path Dasar**: `/seller/V1/order`
+
+#### GET /seller/V1/order/all
+Mengambil semua pesanan untuk penjual, kecuali yang dibatalkan atau diterima oleh pembeli.
+
+**Permintaan:**
+- **Metode**: GET
+- **URL**: `https://backendcihuyy.up.railway.app/seller/V1/order/all`
+
+**Respon:**
+- **200 OK**:
+  ```json
+  {
+    "message": "✅ Daftar pesanan penjual berhasil diambil.",
+    "orders": [
+      {
+        "id": "123",
+        "created_at": "2025-09-23T17:05:00Z",
+        "total_price": 100000,
+        "delivery_fee": 10000,
+        "status": "pending",
+        "pickup_method": "diantar",
+        "buyer_info": {...},
+        "buyer_full_address": "Alamat, Kelurahan, Kecamatan, Kota, Provinsi, Kode Pos",
+        "seller_info": {...},
+        "seller_full_address": "Alamat Toko, Kelurahan, Kecamatan, Kota, Provinsi",
+        "order_items": [...],
+        "total_quantity": 2,
+        "can_process": true
+      }
+    ]
+  }
+  ```
+- **401 Unauthorized**:
+  ```json
+  { "message": "❌ Harus login sebagai penjual untuk melihat daftar pesanan." }
+  ```
+- **500 Internal Server Error**:
+  ```json
+  { "message": "❌ Terjadi kesalahan server", "error": "Pesan kesalahan" }
+  ```
+
+**Contoh**:
+```bash
+curl -X GET https://backendcihuyy.up.railway.app/seller/V1/order/all
+```
+
+#### GET /seller/V1/order/cancelled
+Mengambil semua pesanan penjual yang dibatalkan.
+
+**Permintaan:**
+- **Metode**: GET
+- **URL**: `https://backendcihuyy.up.railway.app/seller/V1/order/cancelled`
+
+**Respon:**
+- **200 OK**:
+  ```json
+  {
+    "message": "✅ Daftar pesanan dibatalkan penjual berhasil diambil.",
+    "orders": [
+      {
+        "id": "123",
+        "created_at": "2025-09-23T17:05:00Z",
+        "total_price": 100000,
+        "delivery_fee": 10000,
+        "status": "dibatalkan",
+        "pickup_method": "diantar",
+        "buyer_info": {...},
+        "buyer_full_address": "Alamat, Kelurahan, Kecamatan, Kota, Provinsi, Kode Pos",
+        "seller_info": {...},
+        "seller_full_address": "Alamat Toko, Kelurahan, Kecamatan, Kota, Provinsi",
+        "order_items": [...],
+        "total_quantity": 2,
+        "can_process": false
+      }
+    ]
+  }
+  ```
+- **401 Unauthorized**:
+  ```json
+  { "message": "❌ Harus login sebagai penjual untuk melihat daftar pesanan dibatalkan." }
+  ```
+- **500 Internal Server Error**:
+  ```json
+  { "message": "❌ Terjadi kesalahan server", "error": "Pesan kesalahan" }
+  ```
+
+**Contoh**:
+```bash
+curl -X GET https://backendcihuyy.up.railway.app/seller/V1/order/cancelled
+```
+
+#### GET /seller/V1/order/completed
+Mengambil semua pesanan penjual yang telah selesai (diterima oleh pembeli).
+
+**Permintaan:**
+- **Metode**: GET
+- **URL**: `https://backendcihuyy.up.railway.app/seller/V1/order/completed`
+
+**Respon:**
+- **200 OK**:
+  ```json
+  {
+    "message": "✅ Daftar pesanan selesai penjual berhasil diambil.",
+    "orders": [
+      {
+        "id": "123",
+        "created_at": "2025-09-23T17:05:00Z",
+        "total_price": 100000,
+        "delivery_fee": 10000,
+        "status": "diterima oleh pembeli",
+        "pickup_method": "diantar",
+        "buyer_info": {...},
+        "buyer_full_address": "Alamat, Kelurahan, Kecamatan, Kota, Provinsi, Kode Pos",
+        "seller_info": {...},
+        "seller_full_address": "Alamat Toko, Kelurahan, Kecamatan, Kota, Provinsi",
+        "order_items": [...],
+        "total_quantity": 2,
+        "can_process": false
+      }
+    ]
+  }
+  ```
+- **401 Unauthorized**:
+  ```json
+  { "message": "❌ Harus login sebagai penjual untuk melihat daftar pesanan selesai." }
+  ```
+- **500 Internal Server Error**:
+  ```json
+  { "message": "❌ Terjadi kesalahan server", "error": "Pesan kesalahan" }
+  ```
+
+**Contoh**:
+```bash
+curl -X GET https://backendcihuyy.up.railway.app/seller/V1/order/completed
+```
+
+#### GET /seller/V1/order/:orderId
+Mengambil detail pesanan penjual tertentu.
+
+**Permintaan:**
+- **Metode**: GET
+- **URL**: `https://backendcihuyy.up.railway.app/seller/V1/order/:orderId`
+- **Parameter**:
+  - `orderId` (string, wajib): ID pesanan.
+
+**Respon:**
+- **200 OK**:
+  ```json
+  {
+    "message": "✅ Detail pesanan penjual berhasil diambil.",
+    "order": {
+      "id": "123",
+      "created_at": "2025-09-23T17:05:00Z",
+      "total_price": 100000,
+      "delivery_fee": 10000,
+      "status": "pending",
+      "pickup_method": "diantar",
+      "buyer_info": {...},
+      "buyer_full_address": "Alamat, Kelurahan, Kecamatan, Kota, Provinsi, Kode Pos",
+      "seller_info": {...},
+      "seller_full_address": "Alamat Toko, Kelurahan, Kecamatan, Kota, Provinsi",
+      "order_items": [...],
+      "total_quantity": 2,
+      "can_process": true
+    }
+  }
+  ```
+- **401 Unauthorized**:
+  ```json
+  { "message": "❌ Harus login sebagai penjual." }
+  ```
+- **404 Not Found**:
+  ```json
+  { "message": "❌ Pesanan tidak ditemukan." }
+  ```
+- **500 Internal Server Error**:
+  ```json
+  { "message": "❌ Terjadi kesalahan server", "error": "Pesan kesalahan" }
+  ```
+
+**Contoh**:
+```bash
+curl -X GET https://backendcihuyy.up.railway.app/seller/V1/order/123
+```
+
+#### PUT /seller/V1/order/orders/:id/status
+Memperbarui status pesanan.
+
+**Permintaan:**
+- **Metode**: PUT
+- **URL**: `https://backendcihuyy.up.railway.app/seller/V1/order/orders/:id/status`
+- **Parameter**:
+  - `id` (string, wajib): ID pesanan.
+- **Body**:
+  - `action` (string, wajib): Aksi untuk status pesanan (`accept`, `cancel`, `ready`, `ship`, `complete`).
+  - `barcodeId` (string, opsional): ID barcode untuk konfirmasi pengambilan (diperlukan untuk `complete` dengan metode `diambil`).
+  - `awb_number` (string, opsional): Nomor resi pengiriman (diperlukan untuk `ship` dengan metode `diantar`).
+
+**Respon:**
+- **200 OK**:
+  ```json
+  {
+    "message": "✅ Status pesanan berhasil diubah ke 'sedang di kemas'",
+    "order": {...},
+    "processing_time": "0.25s",
+    "pdf_available": true
+  }
+  ```
+- **400 Bad Request**:
+  ```json
+  { "message": "⚠️ Aksi tidak valid untuk pesanan ini." }
+  ```
+- **401 Unauthorized**:
+  ```json
+  { "message": "❌ Harus login sebagai penjual." }
+  ```
+- **500 Internal Server Error**:
+  ```json
+  { "message": "❌ Terjadi kesalahan server.", "error": "Pesan kesalahan" }
+  ```
+
+**Contoh**:
+```bash
+curl -X PUT https://backendcihuyy.up.railway.app/seller/V1/order/orders/123/status \
+  -H "Content-Type: application/json" \
+  -d '{"action": "accept"}'
+```
