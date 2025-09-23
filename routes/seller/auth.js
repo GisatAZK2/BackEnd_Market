@@ -778,13 +778,6 @@ router.put(
         account_number,
       } = body;
 
-      // === 3. Validasi PIN jika ada ===
-      if (pin) {
-        if (pin.toString().length < 4 || pin.toString().length > 6) {
-          return res.status(400).json({ error: "⚠️ PIN harus 4-6 digit." });
-        }
-      }
-
       // === 4. Siapkan payload update ===
       const updateSellerPayload = {};
       const updateBalancePayload = {};
@@ -932,7 +925,6 @@ router.put(
     }
   }
 );
-
 
 // ======================== DELETE USER ========================
 router.post("/login/google", async (req, res) => {
