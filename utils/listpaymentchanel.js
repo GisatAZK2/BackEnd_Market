@@ -1,7 +1,10 @@
+const NodeCache = require("node-cache");
 const axios = require("axios");
 
 const XENDIT_SECRET_KEY = process.env.XENDIT_SECRET_KEY;
 const XENDIT_BASE_URL = "https://api.xendit.co";
+const cache = new NodeCache();
+
 
 // ========================
 // 🔄 Helper: Retry with exponential backoff
@@ -41,6 +44,14 @@ async function getXenditMode() {
 // ✅ Get payment channels
 // ========================
 async function getXenditChannels() {
+  const cacheKey = 'xendit_channels';
+  let channels = cache.get(cacheKey);
+
+  if (channels) {
+    console.log('✅ Menggunakan cached Xendit channels');
+    return channels;
+  }
+
   try {
     const mode = await getXenditMode();
     console.log(`🌐 Xendit mode: ${mode}`);
@@ -56,10 +67,14 @@ async function getXenditChannels() {
       return [];
     }
 
-    let channels = res.data;
+    channels = res.data;
     if (mode === "sandbox") {
       channels = channels.filter((ch) => ch.channel_category !== "RETAIL_OUTLET");
     }
+
+    // Cache for 1 hour (3600 seconds)
+    cache.set(cacheKey, channels, 3600);
+    console.log('✅ Cached Xendit channels for 1 hour');
 
     return channels;
   } catch (err) {

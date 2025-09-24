@@ -504,9 +504,7 @@ router.post("/user/request-pin/:id", async (req, res) => {
   }
 });
 
-
-// ======================== GET USER BY ID (Validasi Cookie) ========================
-// GET User info + jumlah seller yang difollow + balance
+// === Route get user detail
 router.get("/user/:id", async (req, res) => {
   const cookie = req.cookies.user_info;
   if (!cookie) return res.status(401).json({ error: "Tidak ada sesi login." });
@@ -526,7 +524,9 @@ router.get("/user/:id", async (req, res) => {
   const { data: user, error } = await supabase
     .from("users")
     .select(
-      `id, email, username, verified, avatar, provinsi, kota_kabupaten, kecamatan, kelurahan, kode_pos, nama_penerima, no_telepon, alamat_lengkap`
+      `id, email, username, verified, avatar,
+       provinsi, kota_kabupaten, kecamatan, kelurahan, kode_pos,
+       nama_penerima, no_telepon, alamat_lengkap`
     )
     .eq("id", req.params.id)
     .single();
@@ -575,10 +575,12 @@ router.get("/user/:id", async (req, res) => {
     });
   }
 
-  // === Ambil user balance (exclude pin hash & plain)
+  // === Ambil user balance (include bank info)
   const { data: balanceData, error: balanceError } = await supabase
     .from("user_balances")
-    .select("balance, updated_at, bank_code, account_holder_name, account_number")
+    .select(
+      "balance, updated_at, bank_code, account_holder_name, account_number"
+    )
     .eq("user_id", req.params.id)
     .maybeSingle();
 
@@ -595,7 +597,15 @@ router.get("/user/:id", async (req, res) => {
       alamat_lengkap_combine,
       total_following: totalFollowing || 0,
       following_sellers: followingSellers?.map((f) => f.sellers) || [],
-      balance: balanceData || null, // balance ditaruh di dalam object user
+      balance: balanceData
+        ? {
+            balance: balanceData.balance,
+            updated_at: balanceData.updated_at,
+            bank_code: balanceData.bank_code,
+            account_holder_name: balanceData.account_holder_name,
+            account_number: balanceData.account_number,
+          }
+        : null,
     },
   });
 });
@@ -609,6 +619,8 @@ async function getWilayahName(url, id) {
   if (!found) throw new Error(`Wilayah dengan id ${id} tidak ditemukan`);
   return found.name;
 }
+
+// file backend
 
 router.put("/user/:id", upload.single("avatar"), async (req, res) => {
   try {
@@ -770,20 +782,39 @@ router.put("/user/:id", upload.single("avatar"), async (req, res) => {
     }
 
     // ============ Simpan ke database ============
-    console.log("[DATABASE] Updating users table with payload:", updateUsers);
-    const { data: userData, error: userError } = await supabase
-      .from("users")
-      .update(clean(updateUsers))
-      .eq("id", userId)
-      .select(
-        "id, email, username, avatar, provinsi, kota_kabupaten, kecamatan, kelurahan, kode_pos, nama_penerima, no_telepon, alamat_lengkap"
-      );
+    let userData;
+    if (Object.keys(updateUsers).length > 0) {
+      console.log("[DATABASE] Updating users table with payload:", updateUsers);
+      const { data, error: userError } = await supabase
+        .from("users")
+        .update(clean(updateUsers))
+        .eq("id", userId)
+        .select(
+          "id, email, username, avatar, provinsi, kota_kabupaten, kecamatan, kelurahan, kode_pos, nama_penerima, no_telepon, alamat_lengkap"
+        );
 
-    if (userError) {
-      console.error("[DATABASE ERROR] Failed to update users table:", userError);
-      throw userError;
+      if (userError) {
+        console.error("[DATABASE ERROR] Failed to update users table:", userError);
+        throw userError;
+      }
+      userData = data;
+      console.log("[DATABASE] Users table updated successfully:", userData);
+    } else {
+      console.log("[DATABASE] No changes for users table, fetching current data");
+      const { data, error: fetchError } = await supabase
+        .from("users")
+        .select(
+          "id, email, username, avatar, provinsi, kota_kabupaten, kecamatan, kelurahan, kode_pos, nama_penerima, no_telepon, alamat_lengkap"
+        )
+        .eq("id", userId);
+
+      if (fetchError) {
+        console.error("[DATABASE ERROR] Failed to fetch users table:", fetchError);
+        throw fetchError;
+      }
+      userData = data;
+      console.log("[DATABASE] Users data fetched successfully:", userData);
     }
-    console.log("[DATABASE] Users table updated successfully:", userData);
 
     if (Object.keys(updateBalances).length > 0) {
       console.log("[DATABASE] Updating user_balances table with payload:", updateBalances);
