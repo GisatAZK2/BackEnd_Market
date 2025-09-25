@@ -210,63 +210,121 @@ router.get("/seller", async (req, res) => {
 });
 
 // ===============================
-// 🧠 Meta Produk (nama / keyword / varian)
+// 🧠 Meta Produk (nama / keyword / varian / seller)
 // ===============================
 router.get("/meta", async (req, res) => {
+  const { q = "", search_type } = req.query;
+
   try {
-    const q = req.query.q || "";
-    const searchTerm = `%${q}%`;
+    const keyword = q.toLowerCase();
+    const searchTerm = `%${keyword}%`; // Use raw keyword for ilike
+    let products = [];
 
-    const { data: mainProducts, error: mainError } = await supabase
-      .from("products")
-      .select(`
-        *,
-        sellers!inner(id, store_name, name, business_name)
-      `)
-      .or(`product_name.ilike.${searchTerm},keywords.cs.{${q}},seller_name.ilike.${searchTerm}`);
+    if (search_type === "seller") {
+      // Search sellers
+      const { data: sellers, error: sellerError } = await supabase
+        .from("sellers")
+        .select("id, store_name, name, business_name")
+        .or(
+          `store_name.ilike.${searchTerm},name.ilike.${searchTerm},business_name.ilike.${searchTerm}`
+        );
 
-    if (mainError) throw mainError;
+      if (sellerError) throw sellerError;
 
-    const { data: variantProducts, error: variantError } = await supabase
-      .from("product_variants")
-      .select("product_id, variant_name")
-      .ilike("variant_name", `%${q}%`);
-
-    if (variantError) throw variantError;
-
-    const variantProductIds = [...new Set(variantProducts.map((v) => v.product_id))];
-    let additionalProducts = [];
-    if (variantProductIds.length > 0) {
-      const mainProductIds = mainProducts.map((p) => p.id);
-      const missingProductIds = variantProductIds.filter(
-        (id) => !mainProductIds.includes(id),
-      );
-
-      if (missingProductIds.length > 0) {
-        const { data: missingProducts, error: missingError } = await supabase
+      if (sellers && sellers.length > 0) {
+        const sellerIds = sellers.map((s) => s.id);
+        const { data: sellerProducts, error: productError } = await supabase
           .from("products")
-          .select(`
-            *,
-            sellers!inner(id, store_name, name, business_name)
-          `)
-          .in("id", missingProductIds);
+          .select(
+            `*,
+            sellers!inner(id, store_name, name, business_name)`
+          )
+          .in("seller_id", sellerIds);
 
-        if (missingError) throw missingError;
-        additionalProducts = missingProducts;
+        if (productError) throw productError;
+        products = sellerProducts;
       }
+    } else {
+      // Search products by name or seller's store_name
+      const { data: mainProducts, error: mainError } = await supabase
+        .from("products")
+        .select(
+          `*,
+          sellers!inner(id, store_name, name, business_name)`
+        )
+        .ilike("product_name", searchTerm);
+
+      if (mainError) throw mainError;
+
+      // Also search by seller's store_name
+      const { data: sellerProducts, error: sellerError } = await supabase
+        .from("products")
+        .select(
+          `*,
+          sellers!inner(id, store_name, name, business_name)`
+        )
+        .ilike("sellers.store_name", searchTerm);
+
+      if (sellerError) throw sellerError;
+
+      // Search by variant
+      const { data: variantProducts, error: variantError } = await supabase
+        .from("product_variants")
+        .select("product_id, variant_name")
+        .ilike("variant_name", searchTerm);
+
+      if (variantError) throw variantError;
+
+      const variantProductIds = [
+        ...new Set(variantProducts.map((v) => v.product_id)),
+      ];
+      let additionalProducts = [];
+      if (variantProductIds.length > 0) {
+        const mainProductIds = mainProducts.map((p) => p.id);
+        const sellerProductIds = sellerProducts.map((p) => p.id);
+        const allCurrentIds = [...mainProductIds, ...sellerProductIds];
+        const missingProductIds = variantProductIds.filter(
+          (id) => !allCurrentIds.includes(id)
+        );
+
+        if (missingProductIds.length > 0) {
+          const { data: missingProducts, error: missingError } = await supabase
+            .from("products")
+            .select(
+              `*,
+              sellers!inner(id, store_name, name, business_name)`
+            )
+            .in("id", missingProductIds);
+
+          if (missingError) throw missingError;
+          additionalProducts = missingProducts;
+        }
+      }
+
+      // Combine and deduplicate products
+      const allProducts = [...mainProducts, ...sellerProducts, ...additionalProducts];
+      const uniqueProducts = Array.from(
+        new Map(allProducts.map((p) => [p.id, p])).values()
+      );
+      products = uniqueProducts;
     }
 
-    const products = [...mainProducts, ...additionalProducts];
-    const productsWithVariants = await attachVariantsStockDiscountWithRealDiscount(products);
+    const productsWithVariants =
+      await attachVariantsStockDiscountWithRealDiscount(products);
 
     // Attach ratings and followers
-    const { ratingMap, followerMap } = await attachRatingsAndFollowers(products.map(p => p.sellers));
+    const { ratingMap, followerMap } = await attachRatingsAndFollowers(
+      products.map((p) => p.sellers)
+    );
 
-    const enhancedProducts = productsWithVariants.map(product => {
+    const enhancedProducts = productsWithVariants.map((product) => {
       const sellerRatings = ratingMap.get(product.seller_id) || [];
-      const avgRating = sellerRatings.length > 0
-        ? (sellerRatings.reduce((a, b) => a + b, 0) / sellerRatings.length).toFixed(2)
-        : "0.00";
+      const avgRating =
+        sellerRatings.length > 0
+          ? (
+              sellerRatings.reduce((a, b) => a + b, 0) / sellerRatings.length
+            ).toFixed(2)
+          : "0.00";
       const totalFollowers = followerMap.get(product.seller_id) || 0;
 
       return {
@@ -275,7 +333,7 @@ router.get("/meta", async (req, res) => {
         average_rating: avgRating,
         total_reviews: sellerRatings.length,
         total_followers: totalFollowers,
-        sellers: undefined // Remove raw sellers data
+        sellers: undefined,
       };
     });
 
@@ -292,55 +350,142 @@ router.get("/meta", async (req, res) => {
 });
 
 // ===============================
-// 💡 Keyword Suggestion
+// 💡 Keyword Suggestion (produk + seller)
 // ===============================
 router.get("/suggest", async (req, res) => {
-  const { q, limit = 10 } = req.query;
+  const { q, limit = 10, search_type } = req.query;
 
   if (!q || q.trim().length === 0) {
     return res.status(400).json({ message: '❌ Parameter "q" wajib diisi' });
   }
 
   try {
-    const searchTerm = `%${q.toLowerCase()}%`;
+    const keyword = q.toLowerCase().trim();
+    const searchTerm = `%${keyword}%`; // pakai format SQL wildcard
 
-    const { data: products, error } = await supabase
-      .from("products")
-      .select(`
-        *,
-        sellers!inner(id, store_name, name, business_name)
-      `)
-      .or(`product_name.ilike.${searchTerm},seller_name.ilike.${searchTerm}`)
-      .limit(parseInt(limit));
-
-    if (error) throw error;
-
+    let products = [];
     const keywordSet = new Set();
-    products.forEach((p) => {
-      (p.keywords || [])
-        .filter((k) => k.toLowerCase().includes(q.toLowerCase()))
-        .forEach((k) => keywordSet.add(k));
-    });
 
-    const productsWithVariants = await attachVariantsStockDiscountWithRealDiscount(products);
+    // ===============================
+    // Case 1: Hanya cari seller
+    // ===============================
+    if (search_type === "seller") {
+      const { data: sellers, error: sellerError } = await supabase
+        .from("sellers")
+        .select("id, store_name")
+        .ilike("store_name", searchTerm)
+        .limit(parseInt(limit));
 
-    // Attach ratings and followers
-    const { ratingMap, followerMap } = await attachRatingsAndFollowers(products.map(p => p.sellers));
+      if (sellerError) throw sellerError;
 
-    const enhancedProducts = productsWithVariants.map(product => {
+      if (sellers && sellers.length > 0) {
+        const sellerIds = sellers.map((s) => s.id);
+
+        const { data: sellerProducts, error: productError } = await supabase
+          .from("products")
+          .select(
+            `*,
+             sellers!inner(id, store_name)`
+          )
+          .in("seller_id", sellerIds)
+          .limit(parseInt(limit));
+
+        if (productError) throw productError;
+        products = sellerProducts;
+
+        sellers.forEach((s) => {
+          if (s.store_name?.toLowerCase().includes(keyword)) {
+            keywordSet.add(s.store_name);
+          }
+        });
+      }
+    }
+
+    // ===============================
+    // Case 2: Produk + Seller (default)
+    // ===============================
+    else {
+      // 🔍 Cari produk by product_name
+      const { data: productMatches, error: productError } = await supabase
+        .from("products")
+        .select(
+          `*,
+           sellers!inner(id, store_name)`
+        )
+        .ilike("product_name", searchTerm)
+        .limit(parseInt(limit));
+
+      if (productError) throw productError;
+
+      // 🔍 Cari seller by store_name
+      const { data: sellerMatches, error: sellerError } = await supabase
+        .from("sellers")
+        .select("id, store_name")
+        .ilike("store_name", searchTerm)
+        .limit(parseInt(limit));
+
+      if (sellerError) throw sellerError;
+
+      let sellerProducts = [];
+      if (sellerMatches && sellerMatches.length > 0) {
+        const sellerIds = sellerMatches.map((s) => s.id);
+        const { data, error } = await supabase
+          .from("products")
+          .select(
+            `*,
+             sellers!inner(id, store_name)`
+          )
+          .in("seller_id", sellerIds)
+          .limit(parseInt(limit));
+
+        if (error) throw error;
+        sellerProducts = data || [];
+      }
+
+      // Merge hasil
+      products = [...(productMatches || []), ...(sellerProducts || [])];
+
+      // Build keywords
+      products.forEach((p) => {
+        if (p.product_name?.toLowerCase().includes(keyword)) {
+          keywordSet.add(p.product_name);
+        }
+        if (p.sellers?.store_name?.toLowerCase().includes(keyword)) {
+          keywordSet.add(p.sellers.store_name);
+        }
+        (p.keywords || [])
+          .filter((k) => k.toLowerCase().includes(keyword))
+          .forEach((k) => keywordSet.add(k));
+      });
+    }
+
+    // ===============================
+    // Attach varian, diskon, rating
+    // ===============================
+    const productsWithVariants =
+      await attachVariantsStockDiscountWithRealDiscount(products);
+
+    const { ratingMap, followerMap } = await attachRatingsAndFollowers(
+      products.map((p) => p.sellers)
+    );
+
+    const enhancedProducts = productsWithVariants.map((product) => {
       const sellerRatings = ratingMap.get(product.seller_id) || [];
-      const avgRating = sellerRatings.length > 0
-        ? (sellerRatings.reduce((a, b) => a + b, 0) / sellerRatings.length).toFixed(2)
-        : "0.00";
+      const avgRating =
+        sellerRatings.length > 0
+          ? (
+              sellerRatings.reduce((a, b) => a + b, 0) / sellerRatings.length
+            ).toFixed(2)
+          : "0.00";
       const totalFollowers = followerMap.get(product.seller_id) || 0;
 
       return {
         ...product,
-        seller_name: getUnifiedSellerName(product.sellers),
+        seller_name: product.sellers?.store_name,
         average_rating: avgRating,
         total_reviews: sellerRatings.length,
         total_followers: totalFollowers,
-        sellers: undefined // Remove raw sellers data
+        sellers: undefined,
       };
     });
 
@@ -350,9 +495,10 @@ router.get("/suggest", async (req, res) => {
       products: enhancedProducts,
     });
   } catch (error) {
-    res
-      .status(500)
-      .json({ message: "❌ Gagal mengambil suggestion", error: error.message });
+    res.status(500).json({
+      message: "❌ Gagal mengambil suggestion",
+      error: error.message,
+    });
   }
 });
 
