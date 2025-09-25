@@ -614,6 +614,9 @@ router.get("/balance", async (req, res) => {
       balance: {
         total: balance.balance,
         withdrawable: balance.balance, // kalau memang cuma 1 balance
+        bank_code: balance.bank_code,
+        account_holder_name: balance.account_holder_name,
+        account_number: balance.account_number,
         pending: 0, // tidak ada balance pending
       },
     });

@@ -400,6 +400,9 @@ router.get("/balance", async (req, res) => {
       balance: {
         total: balance.balance,
         withdrawable: balance.withdrawable_balance,
+        bank_code : balance.bank_code,
+        account_holder_name : balance.account_holder_name,
+        account_number : balance.account_number,
         pending: balance.balance - balance.withdrawable_balance,
       },
     });
