@@ -349,9 +349,6 @@ router.get("/meta", async (req, res) => {
   }
 });
 
-// ===============================
-// 💡 Keyword Suggestion (produk + seller)
-// ===============================
 router.get("/suggest", async (req, res) => {
   const { q, limit = 10, search_type } = req.query;
 
@@ -361,10 +358,12 @@ router.get("/suggest", async (req, res) => {
 
   try {
     const keyword = q.toLowerCase().trim();
-    const searchTerm = `%${keyword}%`; // pakai format SQL wildcard
+    const searchTerm = `%${keyword}%`;
 
     let products = [];
     const keywordSet = new Set();
+    const keywordsDisplay = []; // kumpulan keyword produk
+    const sellerKeywords = []; // kumpulan seller name
 
     // ===============================
     // Case 1: Hanya cari seller
@@ -383,10 +382,7 @@ router.get("/suggest", async (req, res) => {
 
         const { data: sellerProducts, error: productError } = await supabase
           .from("products")
-          .select(
-            `*,
-             sellers!inner(id, store_name)`
-          )
+          .select(`*, sellers!inner(id, store_name, email)`)
           .in("seller_id", sellerIds)
           .limit(parseInt(limit));
 
@@ -395,7 +391,10 @@ router.get("/suggest", async (req, res) => {
 
         sellers.forEach((s) => {
           if (s.store_name?.toLowerCase().includes(keyword)) {
-            keywordSet.add(s.store_name);
+            if (!keywordSet.has(s.store_name.toLowerCase())) {
+              keywordSet.add(s.store_name.toLowerCase());
+              sellerKeywords.push(s.store_name);
+            }
           }
         });
       }
@@ -405,19 +404,14 @@ router.get("/suggest", async (req, res) => {
     // Case 2: Produk + Seller (default)
     // ===============================
     else {
-      // 🔍 Cari produk by product_name
       const { data: productMatches, error: productError } = await supabase
         .from("products")
-        .select(
-          `*,
-           sellers!inner(id, store_name)`
-        )
+        .select(`*, sellers!inner(id, store_name, email)`)
         .ilike("product_name", searchTerm)
         .limit(parseInt(limit));
 
       if (productError) throw productError;
 
-      // 🔍 Cari seller by store_name
       const { data: sellerMatches, error: sellerError } = await supabase
         .from("sellers")
         .select("id, store_name")
@@ -431,10 +425,7 @@ router.get("/suggest", async (req, res) => {
         const sellerIds = sellerMatches.map((s) => s.id);
         const { data, error } = await supabase
           .from("products")
-          .select(
-            `*,
-             sellers!inner(id, store_name)`
-          )
+          .select(`*, sellers!inner(id, store_name, email)`)
           .in("seller_id", sellerIds)
           .limit(parseInt(limit));
 
@@ -442,20 +433,32 @@ router.get("/suggest", async (req, res) => {
         sellerProducts = data || [];
       }
 
-      // Merge hasil
       products = [...(productMatches || []), ...(sellerProducts || [])];
 
-      // Build keywords
       products.forEach((p) => {
+        // ✅ Product keyword
         if (p.product_name?.toLowerCase().includes(keyword)) {
-          keywordSet.add(p.product_name);
+          if (!keywordSet.has(p.product_name.toLowerCase())) {
+            keywordSet.add(p.product_name.toLowerCase());
+            keywordsDisplay.push(p.product_name);
+          }
         }
+        // ✅ Seller keyword
         if (p.sellers?.store_name?.toLowerCase().includes(keyword)) {
-          keywordSet.add(p.sellers.store_name);
+          if (!keywordSet.has(p.sellers.store_name.toLowerCase())) {
+            keywordSet.add(p.sellers.store_name.toLowerCase());
+            sellerKeywords.push(p.sellers.store_name);
+          }
         }
+        // ✅ Custom keywords dari field products.keywords[]
         (p.keywords || [])
           .filter((k) => k.toLowerCase().includes(keyword))
-          .forEach((k) => keywordSet.add(k));
+          .forEach((k) => {
+            if (!keywordSet.has(k.toLowerCase())) {
+              keywordSet.add(k.toLowerCase());
+              keywordsDisplay.push(k);
+            }
+          });
       });
     }
 
@@ -482,6 +485,7 @@ router.get("/suggest", async (req, res) => {
       return {
         ...product,
         seller_name: product.sellers?.store_name,
+        seller_email: product.sellers?.email,
         average_rating: avgRating,
         total_reviews: sellerRatings.length,
         total_followers: totalFollowers,
@@ -489,9 +493,18 @@ router.get("/suggest", async (req, res) => {
       };
     });
 
+    // ===============================
+    // Gabung keywords + seller
+    // ===============================
+    const combinedKeywords = [...keywordsDisplay];
+    combinedKeywords.push({ seller: sellerKeywords });
+
+    // ===============================
+    // Response
+    // ===============================
     res.status(200).json({
       message: "✅ Suggestion ditemukan",
-      keywords: [...keywordSet],
+      keywords: combinedKeywords,
       products: enhancedProducts,
     });
   } catch (error) {

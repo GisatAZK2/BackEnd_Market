@@ -589,11 +589,12 @@ router.get("/trending", async (req, res) => {
 });
 
 // === Ambil produk berdasarkan kategori ===
-// Produk berdasarkan kategori
+// === Ambil produk berdasarkan kategori ===
 router.get("/by-category/:category_id", async (req, res) => {
   const { category_id } = req.params;
+
   try {
-    // Cek kategori
+    // 🔎 Cek kategori ada atau nggak
     const { data: category, error: catErr } = await supabase
       .from("categories")
       .select("id, name")
@@ -604,37 +605,53 @@ router.get("/by-category/:category_id", async (req, res) => {
     if (!category)
       return res.status(404).json({ message: "❌ Kategori tidak ditemukan" });
 
-    // Ambil produk + rating
+    // 🔎 Ambil produk berdasarkan kategori + rating + order_items (terjual)
     const { data: products, error: prodErr } = await supabase
       .from("products")
-      .select(`
+      .select(
+        `
         *,
         ratings!left (
           rating
+        ),
+        order_items!left (
+          quantity
         )
-      `)
+      `
+      )
       .eq("category_id", category_id);
 
     if (prodErr) throw prodErr;
 
-    // Hitung avg rating + total rating
+    // 🔢 Hitung avg rating, total rating, & total sold
     const productsWithExtras = products.map((p) => {
       let avgRating = null;
+      let totalSold = 0;
+
+      // rating
       if (p.ratings && p.ratings.length > 0) {
         const sum = p.ratings.reduce((acc, r) => acc + r.rating, 0);
         avgRating = sum / p.ratings.length;
       }
+
+      // total terjual
+      if (p.order_items && p.order_items.length > 0) {
+        totalSold = p.order_items.reduce((acc, o) => acc + o.quantity, 0);
+      }
+
       return {
         ...p,
         avg_rating: avgRating ? Number(avgRating.toFixed(2)) : null,
         total_ratings: p.ratings ? p.ratings.length : 0,
+        total_sold: totalSold,
       };
     });
 
-    // Attach varian + stok + diskon
+    // 🔧 Attach varian + stok + diskon (produk dengan/ tanpa varian)
     const productsWithVariants =
       await attachVariantsStockDiscountWithRealDiscount(productsWithExtras);
 
+    // ✅ Response akhir
     return res.status(200).json({
       message: `✅ Ditemukan ${products.length} produk dalam kategori "${category.name}"`,
       category: category.name,
@@ -648,7 +665,6 @@ router.get("/by-category/:category_id", async (req, res) => {
     });
   }
 });
-
 
 // Produk terkait (suggestions)
 
