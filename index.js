@@ -133,7 +133,7 @@ app.use("/auth", authRoutes);
 app.use("/product", productRoutes);
 app.use(wilayah);
 app.use("/categories", cache("10 minutes"), category);
-app.use("/search", cache("2 minutes"), search);
+app.use("/search", search);
 app.use("/clean", clean);
 app.use("/order", order);
 app.use("/cart", cache("10 seconds"), cart);
