@@ -725,6 +725,7 @@ async function getWilayahName(url, id) {
   return found.name;
 }
 
+
 // =======================
 // Seller update route
 // =======================
@@ -773,10 +774,13 @@ router.put(
         role,
         is_delivery_available,
         delivery_fee,
-        bank_code,
-        account_holder_name,
-        account_number,
       } = body;
+
+      // === 3. Validasi delivery_fee jika is_delivery_available true ===
+      if (String(is_delivery_available).toLowerCase() === "true" && !delivery_fee) {
+        console.log("❌ [VALIDATION] Delivery fee wajib diisi jika delivery tersedia");
+        return res.status(400).json({ error: "❌ Delivery fee wajib diisi jika delivery tersedia" });
+      }
 
       // === 4. Siapkan payload update ===
       const updateSellerPayload = {};
@@ -792,13 +796,22 @@ router.put(
       if (latitude) updateSellerPayload.latitude = parseFloat(latitude);
       if (longitude) updateSellerPayload.longitude = parseFloat(longitude);
       if (role) updateSellerPayload.role = role;
-      if (typeof is_delivery_available !== "undefined")
-        updateSellerPayload.is_delivery_available =
-          String(is_delivery_available).toLowerCase() === "true";
-      if (delivery_fee)
+      
+      // === 5. Atur is_delivery_available dan delivery_fee ===
+      if (typeof is_delivery_available !== "undefined") {
+        const isDeliveryAvailable = String(is_delivery_available).toLowerCase() === "true";
+        updateSellerPayload.is_delivery_available = isDeliveryAvailable;
+        
+        // Jika is_delivery_available false, set delivery_fee ke 0
+        updateSellerPayload.delivery_fee = isDeliveryAvailable 
+          ? parseFloat(delivery_fee) 
+          : 0;
+      } else if (delivery_fee) {
+        // Jika hanya delivery_fee yang diupdate tanpa is_delivery_available
         updateSellerPayload.delivery_fee = parseFloat(delivery_fee);
+      }
 
-      // === 5. Upload Gambar jika ada ===
+      // === 6. Upload Gambar jika ada ===
       if (req.file) {
         const filename = `store_${sellerId}_${Date.now()}.webp`;
         const buffer = await sharp(req.file.buffer)
@@ -826,7 +839,7 @@ router.put(
         updateSellerPayload.store_image_url = publicUrl.publicUrl;
       }
 
-      // === 6. Update Wilayah jika ada ===
+      // === 7. Update Wilayah jika ada ===
       if (provinsi_id) {
         updateSellerPayload.provinsi = await getWilayahName(
           "https://www.emsifa.com/api-wilayah-indonesia/api/provinces.json",
@@ -925,7 +938,6 @@ router.put(
     }
   }
 );
-
 // ======================== DELETE USER ========================
 router.post("/login/google", async (req, res) => {
   const { id_token } = req.body;
