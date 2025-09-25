@@ -5,8 +5,45 @@ const {
   attachVariantsStockDiscountWithRealDiscount,
 } = require("../utils/applyDiscountAndVariants");
 
+// Helper function to get unified seller name
+const getUnifiedSellerName = (seller) => {
+  return seller.store_name || seller.name || seller.business_name || "Unknown Seller";
+};
+
+// Helper function to attach ratings and followers
+const attachRatingsAndFollowers = async (sellers) => {
+  // Get ratings
+  const { data: ratings, error: ratingError } = await supabase
+    .from("ratings")
+    .select(`id, rating, product_id, products!inner(id, seller_id)`);
+
+  if (ratingError) throw ratingError;
+
+  const ratingMap = new Map();
+  for (const r of ratings) {
+    const sid = r.products.seller_id;
+    if (!ratingMap.has(sid)) ratingMap.set(sid, []);
+    ratingMap.get(sid).push(r.rating);
+  }
+
+  // Get followers
+  const { data: followers, error: followerError } = await supabase
+    .from("follows")
+    .select("seller_id");
+
+  if (followerError) throw followerError;
+
+  const followerMap = new Map();
+  for (const f of followers) {
+    const sid = f.seller_id;
+    followerMap.set(sid, (followerMap.get(sid) || 0) + 1);
+  }
+
+  return { ratingMap, followerMap };
+};
+
 // ===============================
-// 🔍 Search Produk by Keyword
+// 🔍 Search Produk by Keyword or Seller Name
 // ===============================
 router.get("/", async (req, res) => {
   const { q, limit = 20, offset = 0 } = req.query;
@@ -21,11 +58,16 @@ router.get("/", async (req, res) => {
       .map((k) => k.trim().toLowerCase())
       .filter(Boolean);
     keywords = [...new Set(keywords)];
+    const searchTerm = `%${q.toLowerCase()}%`;
 
+    // Search products by keywords or seller name
     const { data: productResults, error: productErr } = await supabase
       .from("products")
-      .select("*")
-      .contains("keywords", keywords)
+      .select(`
+        *,
+        sellers!inner(id, store_name, name, business_name)
+      `)
+      .or(`keywords.cs.{${keywords.join(',')}},seller_name.ilike.${searchTerm}`)
       .range(parseInt(offset), parseInt(offset) + parseInt(limit) - 1);
 
     if (productErr) throw productErr;
@@ -37,13 +79,32 @@ router.get("/", async (req, res) => {
       });
     }
 
-    const productsWithVariants =
-      await attachVariantsStockDiscountWithRealDiscount(productResults);
+    const productsWithVariants = await attachVariantsStockDiscountWithRealDiscount(productResults);
+
+    // Attach ratings and followers
+    const { ratingMap, followerMap } = await attachRatingsAndFollowers(productResults.map(p => p.sellers));
+
+    const enhancedProducts = productsWithVariants.map(product => {
+      const sellerRatings = ratingMap.get(product.seller_id) || [];
+      const avgRating = sellerRatings.length > 0
+        ? (sellerRatings.reduce((a, b) => a + b, 0) / sellerRatings.length).toFixed(2)
+        : "0.00";
+      const totalFollowers = followerMap.get(product.seller_id) || 0;
+
+      return {
+        ...product,
+        seller_name: getUnifiedSellerName(product.sellers),
+        average_rating: avgRating,
+        total_reviews: sellerRatings.length,
+        total_followers: totalFollowers,
+        sellers: undefined // Remove raw sellers data
+      };
+    });
 
     res.status(200).json({
-      message: `✅ Ditemukan ${productsWithVariants.length} produk`,
+      message: `✅ Ditemukan ${enhancedProducts.length} produk`,
       keywords,
-      products: productsWithVariants,
+      products: enhancedProducts,
       pagination: { limit: parseInt(limit), offset: parseInt(offset) },
     });
   } catch (error) {
@@ -56,7 +117,6 @@ router.get("/", async (req, res) => {
 // ===============================
 // 🧑 Search Toko (seller_name)
 // ===============================
-// routes/seller.js
 router.get("/seller", async (req, res) => {
   const { q, limit = 20, offset = 0 } = req.query;
 
@@ -67,16 +127,15 @@ router.get("/seller", async (req, res) => {
   try {
     const searchTerm = `%${q.toLowerCase()}%`;
 
-    // Ambil seller yang cocok
+    // Search sellers by store_name, name, or business_name
     const { data: sellers, error: sellerError } = await supabase
       .from("sellers")
       .select("*")
-      .ilike("store_name", searchTerm)
+      .or(`store_name.ilike.${searchTerm},name.ilike.${searchTerm},business_name.ilike.${searchTerm}`)
       .range(parseInt(offset), parseInt(offset) + parseInt(limit) - 1);
 
     if (sellerError) throw sellerError;
 
-    // Kalau kosong, langsung balikin aja
     if (!sellers || sellers.length === 0) {
       return res.status(200).json({
         message: "✅ Tidak ada seller ditemukan",
@@ -85,10 +144,11 @@ router.get("/seller", async (req, res) => {
       });
     }
 
-    // Ambil semua seller_id dari hasil pencarian
-    const sellerIds = sellers.map((s) => s.id);
+    // Attach ratings and followers
+    const { ratingMap, followerMap } = await attachRatingsAndFollowers(sellers);
 
-    // Ambil semua produk yang seller_id-nya masuk dari hasil pencarian
+    // Get products for found sellers
+    const sellerIds = sellers.map((s) => s.id);
     const { data: products, error: productError } = await supabase
       .from("products")
       .select("*")
@@ -96,26 +156,48 @@ router.get("/seller", async (req, res) => {
 
     if (productError) throw productError;
 
-    const productsWithVariants =
-      await attachVariantsStockDiscountWithRealDiscount(products);
+    const productsWithVariants = await attachVariantsStockDiscountWithRealDiscount(products);
 
-    // Kelompokkan produk berdasarkan seller_id
-    const groupedProducts = {};
+    // Group products by seller_id
+    const productMap = new Map();
     for (const product of productsWithVariants) {
-      if (!groupedProducts[product.seller_id]) {
-        groupedProducts[product.seller_id] = [];
+      if (!productMap.has(product.seller_id)) {
+        productMap.set(product.seller_id, []);
       }
-      groupedProducts[product.seller_id].push(product);
+      productMap.get(product.seller_id).push(product);
     }
 
-    // Gabungkan seller dengan produknya
-    const sellersWithProducts = sellers.map((seller) => ({
-      ...seller,
-      products: groupedProducts[seller.id] || [],
-    }));
+    // Combine sellers with their products and metrics
+    const sellersWithProducts = sellers.map((seller) => {
+      const sellerRatings = ratingMap.get(seller.id) || [];
+      const avgRating = sellerRatings.length > 0
+        ? (sellerRatings.reduce((a, b) => a + b, 0) / sellerRatings.length).toFixed(2)
+        : "0.00";
+      const totalFollowers = followerMap.get(seller.id) || 0;
+      const totalSold = (productMap.get(seller.id) || []).reduce((acc, p) => acc + (p.sold_count || 0), 0);
+
+      // Sort products: by sold_count desc, then by rating desc
+      let products = productMap.get(seller.id) || [];
+      products = products.sort((a, b) => {
+        if ((b.sold_count || 0) !== (a.sold_count || 0)) {
+          return (b.sold_count || 0) - (a.sold_count || 0);
+        }
+        return (b.average_rating || 0) - (a.average_rating || 0);
+      }).slice(0, 3); // Take top 3
+
+      return {
+        ...seller,
+        seller_name: getUnifiedSellerName(seller),
+        products,
+        average_rating: avgRating,
+        total_reviews: sellerRatings.length,
+        total_followers: totalFollowers,
+        total_sold: totalSold,
+      };
+    });
 
     return res.status(200).json({
-      message: `✅ Ditemukan ${sellers.length} seller beserta produk`,
+      message: `✅ Ditemukan ${sellers.length} seller beserta 3 produk terbaik`,
       sellers: sellersWithProducts,
       pagination: { limit: parseInt(limit), offset: parseInt(offset) },
     });
@@ -133,11 +215,15 @@ router.get("/seller", async (req, res) => {
 router.get("/meta", async (req, res) => {
   try {
     const q = req.query.q || "";
+    const searchTerm = `%${q}%`;
 
     const { data: mainProducts, error: mainError } = await supabase
       .from("products")
-      .select("*")
-      .or(`product_name.ilike.%${q}%,keywords.cs.{${q}}`);
+      .select(`
+        *,
+        sellers!inner(id, store_name, name, business_name)
+      `)
+      .or(`product_name.ilike.${searchTerm},keywords.cs.{${q}},seller_name.ilike.${searchTerm}`);
 
     if (mainError) throw mainError;
 
@@ -148,10 +234,7 @@ router.get("/meta", async (req, res) => {
 
     if (variantError) throw variantError;
 
-    const variantProductIds = [
-      ...new Set(variantProducts.map((v) => v.product_id)),
-    ];
-
+    const variantProductIds = [...new Set(variantProducts.map((v) => v.product_id))];
     let additionalProducts = [];
     if (variantProductIds.length > 0) {
       const mainProductIds = mainProducts.map((p) => p.id);
@@ -162,7 +245,10 @@ router.get("/meta", async (req, res) => {
       if (missingProductIds.length > 0) {
         const { data: missingProducts, error: missingError } = await supabase
           .from("products")
-          .select("*")
+          .select(`
+            *,
+            sellers!inner(id, store_name, name, business_name)
+          `)
           .in("id", missingProductIds);
 
         if (missingError) throw missingError;
@@ -171,12 +257,31 @@ router.get("/meta", async (req, res) => {
     }
 
     const products = [...mainProducts, ...additionalProducts];
-    const productsWithVariants =
-      await attachVariantsStockDiscountWithRealDiscount(products);
+    const productsWithVariants = await attachVariantsStockDiscountWithRealDiscount(products);
+
+    // Attach ratings and followers
+    const { ratingMap, followerMap } = await attachRatingsAndFollowers(products.map(p => p.sellers));
+
+    const enhancedProducts = productsWithVariants.map(product => {
+      const sellerRatings = ratingMap.get(product.seller_id) || [];
+      const avgRating = sellerRatings.length > 0
+        ? (sellerRatings.reduce((a, b) => a + b, 0) / sellerRatings.length).toFixed(2)
+        : "0.00";
+      const totalFollowers = followerMap.get(product.seller_id) || 0;
+
+      return {
+        ...product,
+        seller_name: getUnifiedSellerName(product.sellers),
+        average_rating: avgRating,
+        total_reviews: sellerRatings.length,
+        total_followers: totalFollowers,
+        sellers: undefined // Remove raw sellers data
+      };
+    });
 
     return res.status(200).json({
-      message: `✅ ${productsWithVariants.length} produk ditemukan`,
-      products: productsWithVariants,
+      message: `✅ ${enhancedProducts.length} produk ditemukan`,
+      products: enhancedProducts,
     });
   } catch (error) {
     return res.status(500).json({
@@ -201,7 +306,10 @@ router.get("/suggest", async (req, res) => {
 
     const { data: products, error } = await supabase
       .from("products")
-      .select("*")
+      .select(`
+        *,
+        sellers!inner(id, store_name, name, business_name)
+      `)
       .or(`product_name.ilike.${searchTerm},seller_name.ilike.${searchTerm}`)
       .limit(parseInt(limit));
 
@@ -214,13 +322,32 @@ router.get("/suggest", async (req, res) => {
         .forEach((k) => keywordSet.add(k));
     });
 
-    const productsWithVariants =
-      await attachVariantsStockDiscountWithRealDiscount(products);
+    const productsWithVariants = await attachVariantsStockDiscountWithRealDiscount(products);
+
+    // Attach ratings and followers
+    const { ratingMap, followerMap } = await attachRatingsAndFollowers(products.map(p => p.sellers));
+
+    const enhancedProducts = productsWithVariants.map(product => {
+      const sellerRatings = ratingMap.get(product.seller_id) || [];
+      const avgRating = sellerRatings.length > 0
+        ? (sellerRatings.reduce((a, b) => a + b, 0) / sellerRatings.length).toFixed(2)
+        : "0.00";
+      const totalFollowers = followerMap.get(product.seller_id) || 0;
+
+      return {
+        ...product,
+        seller_name: getUnifiedSellerName(product.sellers),
+        average_rating: avgRating,
+        total_reviews: sellerRatings.length,
+        total_followers: totalFollowers,
+        sellers: undefined // Remove raw sellers data
+      };
+    });
 
     res.status(200).json({
       message: "✅ Suggestion ditemukan",
       keywords: [...keywordSet],
-      products: productsWithVariants,
+      products: enhancedProducts,
     });
   } catch (error) {
     res
@@ -238,17 +365,39 @@ router.get("/allproduct", async (req, res) => {
   try {
     const { data: products, error } = await supabase
       .from("products")
-      .select("*")
+      .select(`
+        *,
+        sellers!inner(id, store_name, name, business_name)
+      `)
       .range(parseInt(offset), parseInt(offset) + parseInt(limit) - 1);
 
     if (error) throw error;
 
-    const productsWithVariants =
-      await attachVariantsStockDiscountWithRealDiscount(products);
+    const productsWithVariants = await attachVariantsStockDiscountWithRealDiscount(products);
+
+    // Attach ratings and followers
+    const { ratingMap, followerMap } = await attachRatingsAndFollowers(products.map(p => p.sellers));
+
+    const enhancedProducts = productsWithVariants.map(product => {
+      const sellerRatings = ratingMap.get(product.seller_id) || [];
+      const avgRating = sellerRatings.length > 0
+        ? (sellerRatings.reduce((a, b) => a + b, 0) / sellerRatings.length).toFixed(2)
+        : "0.00";
+      const totalFollowers = followerMap.get(product.seller_id) || 0;
+
+      return {
+        ...product,
+        seller_name: getUnifiedSellerName(product.sellers),
+        average_rating: avgRating,
+        total_reviews: sellerRatings.length,
+        total_followers: totalFollowers,
+        sellers: undefined // Remove raw sellers data
+      };
+    });
 
     return res.status(200).json({
       message: `✅ ${products.length} produk`,
-      products: productsWithVariants,
+      products: enhancedProducts,
       pagination: { limit: parseInt(limit), offset: parseInt(offset) },
     });
   } catch (error) {
