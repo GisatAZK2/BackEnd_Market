@@ -239,7 +239,7 @@ router.get("/nearby-by-location", async (req, res) => {
   try {
     const { data: sellers, error: sellerErr } = await supabase
       .from("sellers")
-      .select("id, name, latitude, longitude");
+      .select("id, name, latitude, longitude, is_delivery_available, delivery_fee");
 
     if (sellerErr) throw sellerErr;
 
@@ -249,6 +249,17 @@ router.get("/nearby-by-location", async (req, res) => {
         *,
         ratings!left (
           rating
+        ),
+        seller:sellers (
+          id,
+          name,
+          email,
+          phone,
+          store_name,
+          store_address,
+          store_image_url,
+          is_delivery_available,
+          delivery_fee
         )
       `);
 
@@ -281,6 +292,8 @@ router.get("/nearby-by-location", async (req, res) => {
           distanceInKm: +distanceInKm.toFixed(2),
           avg_rating: avgRating ? Number(avgRating.toFixed(2)) : null,
           total_ratings: product.ratings ? product.ratings.length : 0,
+          is_delivery_available: product.seller.is_delivery_available,
+          ...(product.seller.is_delivery_available && { delivery_fee: product.seller.delivery_fee })
         };
       })
       .filter((p) => p.distanceInKm <= 40);
@@ -301,8 +314,6 @@ router.get("/nearby-by-location", async (req, res) => {
   }
 });
 
-
-// Produk terlaris (berdasarkan jumlah order)
 // Produk terlaris (berdasarkan field "terjual" di tabel products)
 router.get("/terlaris", async (req, res) => {
   try {
@@ -313,6 +324,17 @@ router.get("/terlaris", async (req, res) => {
         *,
         ratings!left (
           rating
+        ),
+        seller:sellers (
+          id,
+          name,
+          email,
+          phone,
+          store_name,
+          store_address,
+          store_image_url,
+          is_delivery_available,
+          delivery_fee
         )
       `);
 
@@ -332,6 +354,8 @@ router.get("/terlaris", async (req, res) => {
         avg_rating: avgRating ? Number(avgRating.toFixed(2)) : null,
         total_ratings: p.ratings ? p.ratings.length : 0,
         total_terjual: p.terjual ?? 0, // pake field "terjual"
+        is_delivery_available: p.seller.is_delivery_available,
+        ...(p.seller.is_delivery_available && { delivery_fee: p.seller.delivery_fee })
       };
     });
 
@@ -355,22 +379,32 @@ router.get("/terlaris", async (req, res) => {
   }
 });
 
-
 router.get("/allproduct", async (req, res) => {
   try {
-    // Ambil semua produk + rata-rata rating
+    // Ambil semua produk + rata-rata rating + data seller
     const { data: products, error } = await supabase
       .from("products")
       .select(`
         *,
         ratings!left (
           rating
+        ),
+        seller:sellers (
+          id,
+          name,
+          email,
+          phone,
+          store_name,
+          store_address,
+          store_image_url,
+          is_delivery_available,
+          delivery_fee
         )
       `);
 
     if (error) throw error;
 
-    // Hitung rata-rata rating per produk
+    // Hitung rata-rata rating per produk dan tambahkan field is_delivery_available dan delivery_fee
     const productsWithExtras = products.map((p) => {
       let avgRating = null;
 
@@ -383,6 +417,8 @@ router.get("/allproduct", async (req, res) => {
         ...p,
         avg_rating: avgRating ? Number(avgRating.toFixed(2)) : null,
         total_ratings: p.ratings ? p.ratings.length : 0,
+        is_delivery_available: p.seller.is_delivery_available,
+        ...(p.seller.is_delivery_available && { delivery_fee: p.seller.delivery_fee })
       };
     });
 
@@ -411,6 +447,17 @@ router.get("/sorted", async (req, res) => {
         *,
         ratings!left (
           rating
+        ),
+        seller:sellers (
+          id,
+          name,
+          email,
+          phone,
+          store_name,
+          store_address,
+          store_image_url,
+          is_delivery_available,
+          delivery_fee
         )
       `);
 
@@ -429,6 +476,8 @@ router.get("/sorted", async (req, res) => {
         ...p,
         avg_rating: avgRating ? Number(avgRating.toFixed(2)) : null,
         total_ratings: p.ratings ? p.ratings.length : 0,
+        is_delivery_available: p.seller.is_delivery_available,
+        ...(p.seller.is_delivery_available && { delivery_fee: p.seller.delivery_fee })
       };
     });
 
@@ -454,6 +503,7 @@ router.get("/sorted", async (req, res) => {
   }
 });
 
+// Produk trending
 router.get("/trending", async (req, res) => {
   try {
     // 1. Ambil semua kategori
@@ -505,6 +555,17 @@ router.get("/trending", async (req, res) => {
         *,
         ratings!left (
           rating
+        ),
+        seller:sellers (
+          id,
+          name,
+          email,
+          phone,
+          store_name,
+          store_address,
+          store_image_url,
+          is_delivery_available,
+          delivery_fee
         )
       `);
 
@@ -524,6 +585,8 @@ router.get("/trending", async (req, res) => {
         ...p,
         avg_rating: avgRating ? Number(avgRating.toFixed(2)) : null,
         total_ratings: p.ratings ? p.ratings.length : 0,
+        is_delivery_available: p.seller.is_delivery_available,
+        ...(p.seller.is_delivery_available && { delivery_fee: p.seller.delivery_fee })
       };
     });
 
@@ -588,8 +651,7 @@ router.get("/trending", async (req, res) => {
   }
 });
 
-// === Ambil produk berdasarkan kategori ===
-// === Ambil produk berdasarkan kategori ===
+// Ambil produk berdasarkan kategori
 router.get("/by-category/:category_id", async (req, res) => {
   const { category_id } = req.params;
 
@@ -616,6 +678,17 @@ router.get("/by-category/:category_id", async (req, res) => {
         ),
         order_items!left (
           quantity
+        ),
+        seller:sellers (
+          id,
+          name,
+          email,
+          phone,
+          store_name,
+          store_address,
+          store_image_url,
+          is_delivery_available,
+          delivery_fee
         )
       `
       )
@@ -644,6 +717,8 @@ router.get("/by-category/:category_id", async (req, res) => {
         avg_rating: avgRating ? Number(avgRating.toFixed(2)) : null,
         total_ratings: p.ratings ? p.ratings.length : 0,
         total_sold: totalSold,
+        is_delivery_available: p.seller.is_delivery_available,
+        ...(p.seller.is_delivery_available && { delivery_fee: p.seller.delivery_fee })
       };
     });
 
@@ -666,9 +741,8 @@ router.get("/by-category/:category_id", async (req, res) => {
   }
 });
 
-// Produk terkait (suggestions)
 
-// === ROUTE GET PRODUCT DETAIL ===
+
 router.get("/:id", async (req, res) => {
   const { id } = req.params;
 
@@ -705,7 +779,9 @@ router.get("/:id", async (req, res) => {
           phone,
           store_name,
           store_address,
-          store_image_url
+          store_image_url,
+          is_delivery_available,
+          delivery_fee
         )
       `
       )
@@ -719,7 +795,20 @@ router.get("/:id", async (req, res) => {
     const productsWithVariants =
       await attachVariantsStockDiscountWithRealDiscount([product]);
 
-    const result = { ...productsWithVariants[0], seller: product.seller };
+    const result = { 
+      ...productsWithVariants[0], 
+      seller: {
+        id: product.seller.id,
+        name: product.seller.name,
+        email: product.seller.email,
+        phone: product.seller.phone,
+        store_name: product.seller.store_name,
+        store_address: product.seller.store_address,
+        store_image_url: product.seller.store_image_url
+      },
+      is_delivery_available: product.seller.is_delivery_available,
+      ...(product.seller.is_delivery_available && { delivery_fee: product.seller.delivery_fee })
+    };
 
     cache.set(`product_${id}`, result);
     return res
@@ -789,7 +878,7 @@ router.get("/:productId/ratings", async (req, res) => {
 });
 
 
-// == Ambil Produk Berdasarkan Sugesti Produk name
+// Ambil produk berdasarkan sugesti produk name
 router.get("/:id/suggestions", async (req, res) => {
   const { id } = req.params;
   try {
@@ -800,6 +889,17 @@ router.get("/:id/suggestions", async (req, res) => {
         *,
         ratings!left (
           rating
+        ),
+        seller:sellers (
+          id,
+          name,
+          email,
+          phone,
+          store_name,
+          store_address,
+          store_image_url,
+          is_delivery_available,
+          delivery_fee
         )
       `)
       .eq("id", id)
@@ -821,6 +921,8 @@ router.get("/:id/suggestions", async (req, res) => {
       name: product.product_name,
       avg_rating: avgRating ? Number(avgRating.toFixed(2)) : null,
       total_ratings: product.ratings ? product.ratings.length : 0,
+      is_delivery_available: product.seller.is_delivery_available,
+      ...(product.seller.is_delivery_available && { delivery_fee: product.seller.delivery_fee })
     };
 
     if (!product.product_name) {
@@ -855,6 +957,17 @@ router.get("/:id/suggestions", async (req, res) => {
         *,
         ratings!left (
           rating
+        ),
+        seller:sellers (
+          id,
+          name,
+          email,
+          phone,
+          store_name,
+          store_address,
+          store_image_url,
+          is_delivery_available,
+          delivery_fee
         )
       `)
       .or(orFilter)
@@ -874,6 +987,8 @@ router.get("/:id/suggestions", async (req, res) => {
         ...p,
         avg_rating: avgRating ? Number(avgRating.toFixed(2)) : null,
         total_ratings: p.ratings ? p.ratings.length : 0,
+        is_delivery_available: p.seller.is_delivery_available,
+        ...(p.seller.is_delivery_available && { delivery_fee: p.seller.delivery_fee })
       };
     });
 
