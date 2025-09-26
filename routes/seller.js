@@ -9,6 +9,7 @@ const { DateTime } = require("luxon");
 const NodeCache = require("node-cache");
 const cache = new NodeCache({ stdTTL: 10 });
 
+//file mendapatkan semua seller
 // GET Semua seller + produk + total produk terjual + followers
 router.get("/allseller", async (req, res) => {
   const cached = cache.get("all_sellers_with_products");
@@ -38,7 +39,7 @@ router.get("/allseller", async (req, res) => {
       productMap.get(product.seller_id).push(product);
     }
 
-    // Ambil rating
+    // Ambil rating untuk semua produk
     const { data: ratings, error: ratingError } = await supabase
       .from("ratings")
       .select(`id, rating, product_id, products!inner(id, seller_id)`);
@@ -50,11 +51,19 @@ router.get("/allseller", async (req, res) => {
       });
     }
 
-    const ratingMap = new Map();
+    // Map rating per seller (untuk average_rating seller)
+    const sellerRatingMap = new Map();
+    // Map rating per product (untuk avg_rating dan total_ratings per produk)
+    const productRatingMap = new Map();
     for (const r of ratings) {
       const sid = r.products.seller_id;
-      if (!ratingMap.has(sid)) ratingMap.set(sid, []);
-      ratingMap.get(sid).push(r.rating);
+      const pid = r.product_id;
+
+      if (!sellerRatingMap.has(sid)) sellerRatingMap.set(sid, []);
+      sellerRatingMap.get(sid).push(r.rating);
+
+      if (!productRatingMap.has(pid)) productRatingMap.set(pid, []);
+      productRatingMap.get(pid).push(r.rating);
     }
 
     // Ambil followers semua seller
@@ -89,11 +98,28 @@ router.get("/allseller", async (req, res) => {
     }
 
     const sellersWithProducts = sellers.map((seller) => {
-      const products = productMap.get(seller.id) || [];
+      let products = productMap.get(seller.id) || [];
+
+      // Tambahkan avg_rating, total_ratings, is_delivery_available, dan delivery_fee ke setiap produk (konsisten dengan file product)
+      products = products.map((p) => {
+        const productRatings = productRatingMap.get(p.id) || [];
+        const avgRating = productRatings.length > 0
+          ? Number((productRatings.reduce((a, b) => a + b, 0) / productRatings.length).toFixed(2))
+          : null;
+
+        return {
+          ...p,
+          avg_rating: avgRating,
+          total_ratings: productRatings.length,
+          is_delivery_available: seller.is_delivery_available,
+          ...(seller.is_delivery_available && { delivery_fee: seller.delivery_fee })
+        };
+      });
+
       const totalSold = products.reduce((acc, p) => acc + (p.terjual || 0), 0);
 
-      const sellerRatings = ratingMap.get(seller.id) || [];
-      const avgRating =
+      const sellerRatings = sellerRatingMap.get(seller.id) || [];
+      const avgSellerRating =
         sellerRatings.length > 0
           ? (sellerRatings.reduce((a, b) => a + b, 0) / sellerRatings.length).toFixed(2)
           : "0.00";
@@ -105,7 +131,7 @@ router.get("/allseller", async (req, res) => {
         seller: { ...seller, products: undefined },
         products,
         total_sold: totalSold,
-        average_rating: avgRating,
+        average_rating: avgSellerRating,
         total_reviews: sellerRatings.length,
         total_followers: totalFollowers,
         is_followed: isFollowed,
@@ -126,8 +152,6 @@ router.get("/allseller", async (req, res) => {
   }
 });
 
-
-// GET Seller by ID + produk + followers
 // GET Seller by ID + produk + followers + is_followed
 router.get("/:id", async (req, res) => {
   const sellerId = req.params.id;
@@ -153,10 +177,15 @@ router.get("/:id", async (req, res) => {
       return res.status(404).json({ message: "❌ Seller tidak ditemukan" });
     }
 
-    // Ambil produk seller
+    // Ambil produk seller dengan ratings
     const { data: products, error: productError } = await supabase
       .from("products")
-      .select("*")
+      .select(`
+        *,
+        ratings!left (
+          rating
+        )
+      `)
       .eq("seller_id", sellerId);
 
     if (productError) {
@@ -166,15 +195,33 @@ router.get("/:id", async (req, res) => {
       });
     }
 
-    const productsWithVariants =
-      await attachVariantsStockDiscountWithRealDiscount(products);
+    // Hitung avg_rating dan total_ratings per produk (konsisten dengan file product)
+    let productsWithExtras = products.map((p) => {
+      let avgRating = null;
 
-    const totalSold = productsWithVariants.reduce(
+      if (p.ratings && p.ratings.length > 0) {
+        const sum = p.ratings.reduce((acc, r) => acc + r.rating, 0);
+        avgRating = sum / p.ratings.length;
+      }
+
+      return {
+        ...p,
+        avg_rating: avgRating ? Number(avgRating.toFixed(2)) : null,
+        total_ratings: p.ratings ? p.ratings.length : 0,
+        is_delivery_available: seller.is_delivery_available,
+        ...(seller.is_delivery_available && { delivery_fee: seller.delivery_fee })
+      };
+    });
+
+    // Attach variants + stock + discount
+    productsWithExtras = await attachVariantsStockDiscountWithRealDiscount(productsWithExtras);
+
+    const totalSold = productsWithExtras.reduce(
       (acc, p) => acc + (p.terjual || 0),
       0
     );
 
-    // hitung followers seller ini
+    // Hitung followers seller ini
     const { count: followerCount, error: followerError } = await supabase
       .from("follows")
       .select("*", { count: "exact", head: true })
@@ -187,7 +234,7 @@ router.get("/:id", async (req, res) => {
       });
     }
 
-    // cek apakah user mengikuti seller ini
+    // Cek apakah user mengikuti seller ini
     let isFollowed = false;
     if (userInfo?.id) {
       const { data: followData, error: followError } = await supabase
@@ -195,7 +242,7 @@ router.get("/:id", async (req, res) => {
         .select("id")
         .eq("user_id", userInfo.id)
         .eq("seller_id", sellerId)
-        .maybeSingle(); // gunakan maybeSingle agar tidak error jika tidak ada
+        .maybeSingle();
 
       if (!followError && followData) {
         isFollowed = true;
@@ -204,17 +251,17 @@ router.get("/:id", async (req, res) => {
 
     const result = {
       seller,
-      products: productsWithVariants,
+      products: productsWithExtras,
       total_sold: totalSold,
       total_followers: followerCount || 0,
       is_followed: isFollowed,
     };
 
-    // cache dengan key unik per user
+    // Cache dengan key unik per user
     cache.set(`seller_${sellerId}_${userInfo?.id || "guest"}`, result);
 
     return res.status(200).json({
-      message: `✅ Seller & ${productsWithVariants.length} produk berhasil diambil`,
+      message: `✅ Seller & ${productsWithExtras.length} produk berhasil diambil`,
       ...result,
     });
   } catch (err) {
