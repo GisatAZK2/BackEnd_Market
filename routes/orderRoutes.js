@@ -945,19 +945,24 @@ router.post("/cart/checkout", async (req, res) => {
           });
         }
       } else if (paymentMethod.toLowerCase() === "cod") {
-        // For COD, set minimal payment details
+        // For COD, set minimal payment details and directly set to paid since no immediate payment processing
         await supabase
           .from("orders")
           .update({
             payment_id: `COD-${order.id}`, // Custom payment ID for COD
             payment_channel: "cod", // Custom channel for COD
             payment_expiry: null, // No expiry for COD
+            payment_status: "paid",
+            status: "processing"
           })
           .eq("id", order.id);
 
+        paymentStatus = "paid";
         order.payment_id = `COD-${order.id}`;
         order.payment_channel = "cod";
         order.payment_expiry = null;
+        order.payment_status = "paid";
+        order.status = "processing";
       }
 
       // 🔹 Snapshot order items and send email
@@ -1096,7 +1101,6 @@ router.post("/cart/checkout", async (req, res) => {
     return res.status(500).json({ message: "❌ Terjadi kesalahan server", error: err.message });
   }
 });
-
 // =====================================
 // 🛒 POST /cart/delivery-fee
 // =====================================
