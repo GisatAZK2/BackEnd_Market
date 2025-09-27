@@ -98,7 +98,7 @@ router.post("/store-discount/create", async (req, res) => {
 
 /**
  * GET /store-discount/available-products
- * Ambil semua produk/varian yang sedang ikut diskon aktif
+ * Ambil semua produk/varian yang sedang ikut diskon aktif atau yang belum mencapai end_time
  */
 router.get("/store-discount/available-products", async (req, res) => {
   try {
@@ -123,7 +123,7 @@ router.get("/store-discount/available-products", async (req, res) => {
     const sellerName = sellerData.name;
     const now = new Date().toISOString();
 
-    // 🔹 Ambil semua item diskon aktif
+    // 🔹 Ambil semua item diskon yang belum mencapai end_time
     const { data: discountItems = [], error: discountErr } = await supabase
       .from("store_discount_items")
       .select(`
@@ -136,8 +136,7 @@ router.get("/store-discount/available-products", async (req, res) => {
         products(id, product_name, product_description, stock, seller_name, product_image_url),
         product_variants(id, variant_name, variant_stock, variant_image_url)
       `)
-      .gte("store_discounts.start_time", now)
-      .lte("store_discounts.end_time", now);
+      .gte("store_discounts.end_time", now); // ambil semua yang end_time >= sekarang
 
     if (discountErr) throw discountErr;
 
@@ -310,7 +309,7 @@ router.get("/store-discount/available-products", async (req, res) => {
     });
 
     return res.json({
-      message: "✅ Daftar produk dengan status diskon",
+      message: "✅ Daftar produk dengan status diskon (aktif & belum selesai)",
       items: mergedProducts,
     });
   } catch (err) {
