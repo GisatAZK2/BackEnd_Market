@@ -452,8 +452,6 @@ router.get("/received", async (req, res) => {
 });
 
 // file backend
-// file backend
-
 router.post("/cart/checkout", async (req, res) => {
   const startTime = Date.now();
   console.log("===== 🛒 [CHECKOUT ROUTE DIPANGGIL] =====");
@@ -947,35 +945,19 @@ router.post("/cart/checkout", async (req, res) => {
           });
         }
       } else if (paymentMethod.toLowerCase() === "cod") {
-        // For COD, set payment_status to "paid" directly as per request
+        // For COD, set minimal payment details
         await supabase
           .from("orders")
           .update({
-            payment_status: "paid",
-            status: "processing",
             payment_id: `COD-${order.id}`, // Custom payment ID for COD
             payment_channel: "cod", // Custom channel for COD
             payment_expiry: null, // No expiry for COD
           })
           .eq("id", order.id);
 
-        paymentStatus = "paid";
-        order.payment_status = "paid";
-        order.status = "processing";
         order.payment_id = `COD-${order.id}`;
         order.payment_channel = "cod";
         order.payment_expiry = null;
-
-        // Optional: Mint to seller if considering COD as paid (as per simplification)
-        const totalPrice = Number(order.total_price);
-        const platformFee = 0;
-        const netToSeller = totalPrice - platformFee;
-        if (netToSeller > 0) {
-          await mintSellerBalance(order.seller_id, netToSeller, {
-            orderId: order.id,
-            metadata: { source: "cod_payment_credit", grossAmount: totalPrice, platformFee },
-          });
-        }
       }
 
       // 🔹 Snapshot order items and send email
@@ -1114,6 +1096,7 @@ router.post("/cart/checkout", async (req, res) => {
     return res.status(500).json({ message: "❌ Terjadi kesalahan server", error: err.message });
   }
 });
+
 // =====================================
 // 🛒 POST /cart/delivery-fee
 // =====================================
