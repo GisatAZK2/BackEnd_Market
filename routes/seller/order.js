@@ -936,9 +936,6 @@ router.put("/orders/:id/status", async (req, res) => {
           status = "siap di ambil";
           payload.pickup_deadline = now.plus({ hours: 12 }).toISO();
         } else if (action === "complete") {
-          if (barcodeId && barcodeId !== orderId.toString()) {
-            throw new Error("⚠️ Barcode ID tidak valid untuk order ini.");
-          }
           status = "diterima";
           payload.confirm_by_buyers_deadline = now.plus({ hours: 5 }).toISO();
         }
