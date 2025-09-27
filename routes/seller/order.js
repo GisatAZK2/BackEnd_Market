@@ -188,8 +188,6 @@ function safeParseImageUrl(data) {
     return data; // fallback kalau bukan JSON valid
   }
 }
-// rute seller
-
 // ======================
 // GET Semua Order Seller
 // ======================
@@ -323,7 +321,7 @@ router.get("/seller/all", async (req, res) => {
               seller_info: sellerData || null,
               seller_full_address: sellerFullAddress || null,
             }),
-        can_process: order.payment_status === "paid" // true if paid, false if pending or other
+        can_process: order.payment_status === "paid" || order.payment_channel === "cod" || order.payment_channel === "balance"
       };
     });
 
@@ -613,6 +611,7 @@ router.get("/seller/completed", async (req, res) => {
   }
 });
 
+
 // ======================
 // GET Detail Order Seller
 // ======================
@@ -729,7 +728,7 @@ router.get("/seller/:orderId", async (req, res) => {
             seller_info: sellerData || null,
             seller_full_address: sellerFullAddress || null,
           }),
-      can_process: orderData.payment_status === "paid" // true if paid, false if pending or other
+      can_process: orderData.payment_status === "paid" || orderData.payment_channel === "cod" || orderData.payment_channel === "balance"
     };
 
     orderCache.set(cacheKey, orderResult);
@@ -739,7 +738,6 @@ router.get("/seller/:orderId", async (req, res) => {
     return res.status(500).json({ message: "❌ Terjadi kesalahan server", error: err.message });
   }
 });
-
 
 router.put("/orders/:id/status", async (req, res) => {
   const startTime = Date.now();
