@@ -1133,9 +1133,8 @@ router.get("/flash-sale/:id", requireSeller, async (req, res) => {
   }
 });
 
-/**
- * 📌 3. Cek Produk Avaible Untuk Di flash sale edit
- */
+
+// Assume requireSeller is a middleware that sets req.seller_id if authenticated as seller
 router.get("/flash-sale/:id/products/available", requireSeller, async (req, res) => {
   try {
     const seller_id = req.seller_id;
@@ -1188,17 +1187,16 @@ router.get("/flash-sale/:id/products/available", requireSeller, async (req, res)
     // Kasih tag sesuai rules
     const taggedProducts = products.map(prod => {
       if (!prod.variants || !prod.variants.length) {
-        // Produk tanpa varian → flag + stock harus tetap dipakai
+        // Produk tanpa varian → kasih flag in_flash_sale
         const inFlashSale = usedMap.has(`${prod.id}-no-variant`);
         return {
           ...prod,
-          variant_mode: false,
           in_flash_sale: inFlashSale,
           variants: []
         };
       }
 
-      // Produk dengan varian → flag di tiap varian
+      // Produk dengan varian → kasih flag di tiap varian, root pakai variant_mode
       const variants = prod.variants.map(v => {
         const inFlashSale = usedMap.has(`${prod.id}-${v.id}`);
         return { ...v, in_flash_sale: inFlashSale };
@@ -1207,7 +1205,6 @@ router.get("/flash-sale/:id/products/available", requireSeller, async (req, res)
       return {
         ...prod,
         variant_mode: true,
-        in_flash_sale: variants.every(v => v.in_flash_sale), // semua varian udah ke flash sale
         variants
       };
     });
