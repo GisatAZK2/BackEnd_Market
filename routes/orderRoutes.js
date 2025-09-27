@@ -907,7 +907,7 @@ router.post("/cart/checkout", async (req, res) => {
             .from("orders")
             .update({
               payment_status: "paid",
-              status: "processing",
+              status: "pending",
               payment_method: "balance",
               payment_id: `BAL-${order.id}`, // Custom payment ID for balance
               payment_channel: "balance", // Custom channel for balance
@@ -917,7 +917,7 @@ router.post("/cart/checkout", async (req, res) => {
 
           paymentStatus = "paid";
           order.payment_status = "paid";
-          order.status = "processing";
+          order.status = "pending";
           order.payment_id = `BAL-${order.id}`;
           order.payment_channel = "balance";
           order.payment_expiry = null;
@@ -945,15 +945,14 @@ router.post("/cart/checkout", async (req, res) => {
           });
         }
       } else if (paymentMethod.toLowerCase() === "cod") {
-        // For COD, set minimal payment details and directly set to paid since no immediate payment processing
+        // For COD, set minimal payment details
         await supabase
           .from("orders")
           .update({
             payment_id: `COD-${order.id}`, // Custom payment ID for COD
             payment_channel: "cod", // Custom channel for COD
             payment_expiry: null, // No expiry for COD
-            payment_status: "paid",
-            status: "processing"
+            payment_status: "paid" // Set to paid immediately
           })
           .eq("id", order.id);
 
@@ -962,7 +961,6 @@ router.post("/cart/checkout", async (req, res) => {
         order.payment_channel = "cod";
         order.payment_expiry = null;
         order.payment_status = "paid";
-        order.status = "processing";
       }
 
       // 🔹 Snapshot order items and send email
@@ -1043,7 +1041,7 @@ router.post("/cart/checkout", async (req, res) => {
           buyer_username: userInfo.username,
           seller_username: seller?.store_name || "Toko Seller",
           pickup_method: order.pickup_method,
-          new_status: paymentStatus === "paid" ? "processing" : "pending",
+          new_status: "pending",
           seller_address: sellerAddress,
           total_price: Number(order.total_price),
           delivery_fee: Number(seller?.delivery_fee || 0),
