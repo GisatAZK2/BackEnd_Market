@@ -951,7 +951,6 @@ router.put("/orders/:id/status", async (req, res) => {
         } else if (action === "complete") {
           status = "diterima";
           payload.confirm_by_buyers_deadline = now.plus({ hours: 5 }).toISO();
-          payload.order_completed = true;
         }
       }
 
