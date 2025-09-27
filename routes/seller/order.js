@@ -739,8 +739,7 @@ router.get("/seller/:orderId", async (req, res) => {
     return res.status(500).json({ message: "❌ Terjadi kesalahan server", error: err.message });
   }
 });
-// -----------------------------
-// Update order status route
+
 
 router.put("/orders/:id/status", async (req, res) => {
   const startTime = Date.now();
@@ -910,13 +909,13 @@ router.put("/orders/:id/status", async (req, res) => {
       const commonActions = {
         accept: () => {
           if (
-              (order.payment_method === "digital" || order.payment_method === "balance") &&
-              order.status !== "processing" &&  order.payment_status !== "paid"
-            ) {
-              throw new Error(
-                "⚠️ Order dengan pembayaran digital atau balance hanya bisa diterima dari status 'paid'."
-              );
-            }
+            (order.payment_method === "digital" || order.payment_method === "balance") &&
+            order.status !== "processing" && order.payment_status !== "paid"
+          ) {
+            throw new Error(
+              "⚠️ Order dengan pembayaran digital atau balance hanya bisa diterima dari status 'paid'."
+            );
+          }
           if (order.payment_method === "cod" && order.status !== "pending") {
             throw new Error("⚠️ Order dengan pembayaran COD hanya bisa diterima dari status 'pending'.");
           }
@@ -949,7 +948,6 @@ router.put("/orders/:id/status", async (req, res) => {
         if (action === "ship") {
           status = "sedang di antar";
           payload.delivery_deadline = now.plus({ hours: 12 }).toISO();
-          payload.awb_number = req.body.awb_number || null;
         } else if (action === "complete") {
           status = "diterima";
           payload.confirm_by_buyers_deadline = now.plus({ hours: 5 }).toISO();
@@ -974,7 +972,6 @@ router.put("/orders/:id/status", async (req, res) => {
       };
       return statusFlow[order.status]?.includes(newStatus) || false;
     };
-
 
     // MAIN FLOW
     console.log(`🔄 Fetching order ${orderId}...`);
@@ -1198,61 +1195,60 @@ router.put("/orders/:id/status", async (req, res) => {
 
 // Handle Order Completion - Move balance to withdrawable
 async function handleOrderCompletion(sellerId, orderId, order) {
-      try {
-        console.log(`💰 Processing balance movement for completed order ${orderId}`);
-        
-        // Ambil current balance
-        const currentBalance = await getSellerBalance(sellerId);
-        console.log(
-          `💳 Current balance - Total: ${currentBalance.balance}, Withdrawable: ${currentBalance.withdrawable_balance}`
-        );
-        
-        // Hitung net amount to seller (tanpa platform fee)
-        const grossAmount = Number(order.total_price || 0);
-        const netToSeller = grossAmount;
-        
-        console.log(`💸 Distribution - Gross: ${grossAmount}, Net: ${netToSeller}`);
-        
-        // Simulasi: asumsikan sebelumnya sudah di-credit ke total balance saat payment confirmed
-        // Sekarang kita move dari total ke withdrawable
-        const newTotalBalance = currentBalance.balance; // Tetap sama
-        const newWithdrawableBalance = currentBalance.withdrawable_balance + netToSeller;
-        
-        // Update balances
-        const { data: balanceData, error: balanceError } = await supabase
-          .from("seller_balances")
-          .update({ 
-            balance: newTotalBalance,
-            withdrawable_balance: newWithdrawableBalance 
-          })
-          .eq("seller_id", sellerId)
-          .select()
-          .single();
-        
-        if (balanceError) throw balanceError;
-        
-        // Record transaction
-        await recordSellerTransaction({
-          sellerId,
-          amount: netToSeller,
-          type: "move_to_withdrawable",
-          orderId,
-          metadata: { 
-            source: "order_completed", 
-            grossAmount,
-            action: "released_to_withdrawable"
-          },
-        });
-        
-        console.log(
-          `✅ Balance moved: +${netToSeller} to withdrawable. New withdrawable: ${newWithdrawableBalance}`
-        );
-        
-      } catch (balanceErr) {
-        console.error("❌ Balance movement error:", balanceErr.message);
-        // Jangan throw - biarkan order tetap completed
-      }
+  try {
+    console.log(`💰 Processing balance movement for completed order ${orderId}`);
+    
+    // Ambil current balance
+    const currentBalance = await getSellerBalance(sellerId);
+    console.log(
+      `💳 Current balance - Total: ${currentBalance.balance}, Withdrawable: ${currentBalance.withdrawable_balance}`
+    );
+    
+    // Hitung net amount to seller (tanpa platform fee)
+    const grossAmount = Number(order.total_price || 0);
+    const netToSeller = grossAmount;
+    
+    console.log(`💸 Distribution - Gross: ${grossAmount}, Net: ${netToSeller}`);
+    
+    // Simulasi: asumsikan sebelumnya sudah di-credit ke total balance saat payment confirmed
+    // Sekarang kita move dari total ke withdrawable
+    const newTotalBalance = currentBalance.balance; // Tetap sama
+    const newWithdrawableBalance = currentBalance.withdrawable_balance + netToSeller;
+    
+    // Update balances
+    const { data: balanceData, error: balanceError } = await supabase
+      .from("seller_balances")
+      .update({ 
+        balance: newTotalBalance,
+        withdrawable_balance: newWithdrawableBalance 
+      })
+      .eq("seller_id", sellerId)
+      .select()
+      .single();
+    
+    if (balanceError) throw balanceError;
+    
+    // Record transaction
+    await recordSellerTransaction({
+      sellerId,
+      amount: netToSeller,
+      type: "move_to_withdrawable",
+      orderId,
+      metadata: { 
+        source: "order_completed", 
+        grossAmount,
+        action: "released_to_withdrawable"
+      },
+    });
+    
+    console.log(
+      `✅ Balance moved: +${netToSeller} to withdrawable. New withdrawable: ${newWithdrawableBalance}`
+    );
+    
+  } catch (balanceErr) {
+    console.error("❌ Balance movement error:", balanceErr.message);
+    // Jangan throw - biarkan order tetap completed
+  }
 }
-
 
 module.exports = router;
