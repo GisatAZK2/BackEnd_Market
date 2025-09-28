@@ -110,7 +110,7 @@ async function getXenditInvoice(invoiceId) {
 }
 
 // ========================
-// ✅ Payment channel logos & limits
+// ✅ Payment channel logos, limits & bank codes
 // ========================
 function Listpaymentchanel() {
   const CHANNEL_LOGOS = {
@@ -188,7 +188,23 @@ function Listpaymentchanel() {
     SHOPEEPAY: { min_amount: 1, max_amount: 20000000 },
   };
 
-  return { CHANNEL_LOGOS, CHANNEL_LIMITS };
+
+// ========================
+// 🏦 Daftar Kode Bank (filtered by CHANNEL_LIMITS)
+// ========================
+const BANK_CODES = {
+  BCA: "014",
+  MANDIRI: "008",
+  BNI: "009",
+  BRI: "002",
+  CIMB: "022",
+  PERMATA: "013",
+  BJB: "110",
+  BNC: "490",
+  BSI: "451",
+};
+
+  return { CHANNEL_LOGOS, CHANNEL_LIMITS, BANK_CODES };
 }
 
 module.exports = { getXenditMode, getXenditChannels, getXenditInvoice, Listpaymentchanel };

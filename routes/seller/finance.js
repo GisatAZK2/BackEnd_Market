@@ -5,6 +5,7 @@ const crypto = require("crypto");
 const { v4: uuidv4 } = require("uuid");
 const fetch = require("node-fetch");
 const bcrypt = require("bcryptjs");
+const {Listpaymentchanel} = require("../../utils/listpaymentchanel");
 
 // ===== Utility =====
 function stableStringify(obj) {
@@ -413,6 +414,31 @@ router.get("/balance", async (req, res) => {
   }
 });
 
+//get list bank code
+router.get("/listbank", async (req, res) => {
+  try {
+    const { CHANNEL_LOGOS, BANK_CODES } = Listpaymentchanel();
+
+    // Gabungkan data berdasarkan key yang sama
+    const bankList = Object.entries(BANK_CODES).map(([bankName, code]) => ({
+      name: bankName,
+      code,
+      logo: CHANNEL_LOGOS[bankName] || null, // gunakan logo dari CHANNEL_LOGOS jika tersedia
+    }));
+
+    return res.json({
+      message: "✅ Daftar bank berhasil diambil",
+      total: bankList.length,
+      banks: bankList,
+    });
+  } catch (error) {
+    console.error("❌ Error mengambil daftar bank:", error);
+    return res.status(500).json({
+      message: "❌ Gagal mengambil daftar bank",
+      error: error.message,
+    });
+  }
+});
 
 
 module.exports = router;
