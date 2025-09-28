@@ -725,7 +725,6 @@ async function getWilayahName(url, id) {
   return found.name;
 }
 
-
 // =======================
 // Seller update route
 // =======================
@@ -865,20 +864,21 @@ router.put(
         );
       }
 
-      if (bank_code) {
-        updateBalancePayload.bank_code = bank_code;
-        sensitiveFields.bank_code = bank_code;
+      // === 8. Update bank_code, account_holder_name, account_number ===
+      if (body.bank_code) {
+        updateBalancePayload.bank_code = body.bank_code;
+        sensitiveFields.bank_code = body.bank_code;
       }
-      if (account_holder_name) {
-        updateBalancePayload.account_holder_name = account_holder_name;
-        sensitiveFields.account_holder_name = account_holder_name;
+      if (body.account_holder_name) {
+        updateBalancePayload.account_holder_name = body.account_holder_name;
+        sensitiveFields.account_holder_name = body.account_holder_name;
       }
-      if (account_number) {
-        updateBalancePayload.account_number = account_number;
-        sensitiveFields.account_number = account_number;
+      if (body.account_number) {
+        updateBalancePayload.account_number = body.account_number;
+        sensitiveFields.account_number = body.account_number;
       }
 
-      // === 8. Update DB Seller ===
+      // === 9. Update DB Seller ===
       if (Object.keys(updateSellerPayload).length > 0) {
         const { error: sellerError } = await supabase
           .from("sellers")
@@ -890,7 +890,7 @@ router.put(
         }
       }
 
-      // === 9. Update DB Seller Balances ===
+      // === 10. Update DB Seller Balances ===
       if (Object.keys(updateBalancePayload).length > 0) {
         const { error: balanceError } = await supabase
           .from("seller_balances")
@@ -902,7 +902,7 @@ router.put(
         }
       }
 
-      // === 10. Sinkronisasi seller_name ke Products ===
+      // === 11. Sinkronisasi seller_name ke Products ===
       if (name) {
         await supabase
           .from("products")
@@ -910,7 +910,7 @@ router.put(
           .eq("seller_id", sellerId);
       }
 
-      // === 11. Kirim Email Notifikasi Data Sensitif ===
+      // === 12. Kirim Email Notifikasi Data Sensitif ===
       if (Object.keys(sensitiveFields).length > 0 && sellerInfo.email) {
         try {
           const response = await axios.post(
