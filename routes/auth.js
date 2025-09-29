@@ -621,7 +621,6 @@ async function getWilayahName(url, id) {
 }
 
 // file backend
-
 router.put("/user/:id", upload.single("avatar"), async (req, res) => {
   try {
     const userId = req.params.id;
@@ -666,6 +665,67 @@ router.put("/user/:id", upload.single("avatar"), async (req, res) => {
       account_number,
     });
 
+    // ============ Validate avatar file ============
+    let avatarUrl = null;
+    if (req.file) {
+      const validTypes = ["image/jpeg", "image/png"];
+      if (!validTypes.includes(req.file.mimetype)) {
+        console.error("[VALIDATION ERROR] Invalid file type:", req.file.mimetype);
+        return res.status(400).json({ error: "Hanya file JPEG atau PNG yang diizinkan." });
+      }
+
+      if (req.file.size > 5 * 1024 * 1024) {
+        console.error("[VALIDATION ERROR] File size exceeds 5MB:", req.file.size);
+        return res.status(400).json({ error: "Ukuran file maksimum adalah 5MB." });
+      }
+
+      console.log("[AVATAR] File upload detected:", req.file.originalname);
+      const fileExt = path.extname(req.file.originalname);
+      const fileName = `avatar_${Date.now()}${fileExt}`;
+      console.log("[AVATAR] Generated file name:", fileName);
+
+      // Fetch existing avatar to delete it later
+      const { data: existingUser } = await supabase
+        .from("users")
+        .select("avatar")
+        .eq("id", userId)
+        .single();
+
+      console.log("[SUPABASE] Uploading file to Supabase storage...");
+      const { error: uploadError } = await supabase.storage
+        .from("avatars")
+        .upload(fileName, req.file.buffer, {
+          contentType: req.file.mimetype,
+          upsert: true,
+        });
+
+      if (uploadError) {
+        console.error("[SUPABASE ERROR] Failed to upload avatar:", uploadError.message);
+        return res.status(500).json({ error: "Gagal mengunggah avatar.", detail: uploadError.message });
+      }
+      console.log("[SUPABASE] File uploaded successfully");
+
+      console.log("[SUPABASE] Fetching public URL for avatar...");
+      const { data: publicUrlData } = supabase.storage
+        .from("avatars")
+        .getPublicUrl(fileName);
+      avatarUrl = publicUrlData.publicUrl;
+      console.log("[SUPABASE] Public URL for avatar:", avatarUrl);
+
+      // Delete old avatar if it exists
+      if (existingUser?.avatar) {
+        const oldFileName = existingUser.avatar.split("/").pop();
+        console.log("[SUPABASE] Deleting old avatar:", oldFileName);
+        const { error: deleteError } = await supabase.storage
+          .from("avatars")
+          .remove([oldFileName]);
+        if (deleteError) {
+          console.error("[SUPABASE WARNING] Failed to delete old avatar:", deleteError.message);
+          // Continue despite deletion failure to avoid blocking the update
+        }
+      }
+    }
+
     // ============ Build payload users ============
     const updateUsers = {};
     if (username) {
@@ -675,6 +735,10 @@ router.put("/user/:id", upload.single("avatar"), async (req, res) => {
     if (password) {
       updateUsers.password = await bcrypt.hash(password, 10);
       console.log("[PAYLOAD] Password hashed and added to updateUsers");
+    }
+    if (avatarUrl) {
+      updateUsers.avatar = avatarUrl;
+      console.log("[PAYLOAD] Added avatar to updateUsers:", avatarUrl);
     }
 
     // Wilayah
@@ -737,35 +801,6 @@ router.put("/user/:id", upload.single("avatar"), async (req, res) => {
       console.log("[PAYLOAD] Added alamat_lengkap to updateUsers:", alamat_lengkap);
     }
 
-    // Avatar
-    if (req.file) {
-      console.log("[AVATAR] File upload detected:", req.file.originalname);
-      const fileExt = path.extname(req.file.originalname);
-      const fileName = `avatar_${Date.now()}${fileExt}`;
-      console.log("[AVATAR] Generated file name:", fileName);
-
-      console.log("[SUPABASE] Uploading file to Supabase storage...");
-      const { error: uploadError } = await supabase.storage
-        .from("avatars")
-        .upload(fileName, req.file.buffer, {
-          contentType: req.file.mimetype,
-          upsert: true,
-        });
-
-      if (uploadError) {
-        console.error("[SUPABASE ERROR] Failed to upload avatar:", uploadError);
-        throw uploadError;
-      }
-      console.log("[SUPABASE] File uploaded successfully");
-
-      console.log("[SUPABASE] Fetching public URL for avatar...");
-      const { data: publicUrlData } = supabase.storage
-        .from("avatars")
-        .getPublicUrl(fileName);
-      updateUsers.avatar = publicUrlData.publicUrl;
-      console.log("[SUPABASE] Public URL for avatar:", updateUsers.avatar);
-    }
-
     // ============ Build payload user_balances ============
     const updateBalances = {};
     if (bank_code) {
@@ -787,15 +822,16 @@ router.put("/user/:id", upload.single("avatar"), async (req, res) => {
       console.log("[DATABASE] Updating users table with payload:", updateUsers);
       const { data, error: userError } = await supabase
         .from("users")
-        .update(clean(updateUsers))
+        .update(updateUsers) // Removed clean() to avoid potential issues
         .eq("id", userId)
         .select(
           "id, email, username, avatar, provinsi, kota_kabupaten, kecamatan, kelurahan, kode_pos, nama_penerima, no_telepon, alamat_lengkap"
-        );
+        )
+        .single();
 
       if (userError) {
-        console.error("[DATABASE ERROR] Failed to update users table:", userError);
-        throw userError;
+        console.error("[DATABASE ERROR] Failed to update users table:", userError.message);
+        throw new Error(`Gagal memperbarui data pengguna: ${userError.message}`);
       }
       userData = data;
       console.log("[DATABASE] Users table updated successfully:", userData);
@@ -806,11 +842,12 @@ router.put("/user/:id", upload.single("avatar"), async (req, res) => {
         .select(
           "id, email, username, avatar, provinsi, kota_kabupaten, kecamatan, kelurahan, kode_pos, nama_penerima, no_telepon, alamat_lengkap"
         )
-        .eq("id", userId);
+        .eq("id", userId)
+        .single();
 
       if (fetchError) {
-        console.error("[DATABASE ERROR] Failed to fetch users table:", fetchError);
-        throw fetchError;
+        console.error("[DATABASE ERROR] Failed to fetch users table:", fetchError.message);
+        throw new Error(`Gagal mengambil data pengguna: ${fetchError.message}`);
       }
       userData = data;
       console.log("[DATABASE] Users data fetched successfully:", userData);
@@ -820,12 +857,12 @@ router.put("/user/:id", upload.single("avatar"), async (req, res) => {
       console.log("[DATABASE] Updating user_balances table with payload:", updateBalances);
       const { error: balanceError } = await supabase
         .from("user_balances")
-        .update(clean(updateBalances))
+        .update(updateBalances)
         .eq("user_id", userId);
 
       if (balanceError) {
-        console.error("[DATABASE ERROR] Failed to update user_balances table:", balanceError);
-        throw balanceError;
+        console.error("[DATABASE ERROR] Failed to update user_balances table:", balanceError.message);
+        throw new Error(`Gagal memperbarui data saldo: ${balanceError.message}`);
       }
       console.log("[DATABASE] user_balances table updated successfully");
     }
@@ -833,14 +870,13 @@ router.put("/user/:id", upload.single("avatar"), async (req, res) => {
     console.log("[SUCCESS] User update completed for ID:", userId);
     res.json({
       message: "✅ User berhasil diupdate.",
-      user: userData[0],
+      user: userData,
     });
   } catch (err) {
     console.error("[ERROR] Update user failed:", err.message);
     res.status(500).json({ error: "Gagal update user.", detail: err.message });
   }
 });
-
 // ======================== DELETE USER ========================
 router.delete("/user/:id", async (req, res) => {
   const cookie = req.cookies.user_info;
