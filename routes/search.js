@@ -42,6 +42,25 @@ const attachRatingsAndFollowers = async (sellers) => {
   return { ratingMap, followerMap };
 };
 
+// Helper function to get total sold (terjual) from products table
+const calculateTotalSold = async (productIds) => {
+  if (!productIds || productIds.length === 0) return new Map();
+
+  const { data: products, error: productError } = await supabase
+    .from("products")
+    .select("id, terjual")
+    .in("id", productIds);
+
+  if (productError) throw productError;
+
+  const soldMap = new Map();
+  for (const product of products) {
+    soldMap.set(product.id, product.terjual || 0);
+  }
+
+  return soldMap;
+};
+
 // ===============================
 // 🔍 Search Produk by Keyword or Seller Name
 // ===============================
@@ -82,38 +101,42 @@ router.get("/", async (req, res) => {
 
     const productsWithVariants = await attachVariantsStockDiscountWithRealDiscount(productResults);
 
+    // Calculate total sold for each product
+    const productIds = productsWithVariants.map(p => p.id);
+    const soldMap = await calculateTotalSold(productIds);
+
     // Attach ratings and followers
     const { ratingMap, followerMap } = await attachRatingsAndFollowers(productResults.map(p => p.sellers));
 
     const enhancedProducts = productsWithVariants.map(product => {
       const sellerRatings = ratingMap.get(product.seller_id) || [];
-      const avgSellerRating = sellerRatings.length > 0
+      const averageSellerRating = sellerRatings.length > 0
         ? (sellerRatings.reduce((a, b) => a + b, 0) / sellerRatings.length).toFixed(2)
         : "0.00";
       const totalFollowers = followerMap.get(product.seller_id) || 0;
 
-      // Calculate per-product avg_rating and total_ratings
-      let avgProductRating = null;
-      let totalProductReviews = 0;
+      // Calculate per-product avg_rating and total_reviews
+      let avg_rating = null;
+      let total_reviews = 0;
       if (product.ratings && product.ratings.length > 0) {
         const sum = product.ratings.reduce((acc, r) => acc + r.rating, 0);
-        avgProductRating = (sum / product.ratings.length).toFixed(2);
-        totalProductReviews = product.ratings.length;
+        avg_rating = (sum / product.ratings.length).toFixed(2);
+        total_reviews = product.ratings.length;
       }
 
       return {
         ...product,
         seller_name: getUnifiedSellerName(product.sellers),
-        seller_average_rating: avgSellerRating, // Seller average
-        seller_total_reviews: sellerRatings.length, // Seller reviews
+        seller_average_rating: averageSellerRating,
+        seller_total_reviews: sellerRatings.length,
         total_followers: totalFollowers,
-        average_rating: avgProductRating ? Number(avgProductRating) : null, // Product avg rating
-        total_reviews: totalProductReviews, // Product ratings count
-        terjual: product.sold_count || 0, // Terjual (sold_count)
+        avg_rating: avg_rating ? Number(avg_rating) : null,
+        total_reviews: total_reviews,
+        terjual: soldMap.get(product.id) || 0,
         is_delivery_available: product.sellers.is_delivery_available,
         ...(product.sellers.is_delivery_available && { delivery_fee: product.sellers.delivery_fee }),
-        sellers: undefined, // Remove raw sellers data
-        ratings: undefined // Remove raw ratings data
+        sellers: undefined,
+        ratings: undefined
       };
     });
 
@@ -177,6 +200,10 @@ router.get("/seller", async (req, res) => {
 
     const productsWithVariants = await attachVariantsStockDiscountWithRealDiscount(products);
 
+    // Calculate total sold for each product
+    const productIds = productsWithVariants.map(p => p.id);
+    const soldMap = await calculateTotalSold(productIds);
+
     // Group products by seller_id
     const productMap = new Map();
     for (const product of productsWithVariants) {
@@ -189,45 +216,44 @@ router.get("/seller", async (req, res) => {
     // Combine sellers with their products and metrics
     const sellersWithProducts = sellers.map((seller) => {
       const sellerRatings = ratingMap.get(seller.id) || [];
-      const avgSellerRating = sellerRatings.length > 0
+      const averageSellerRating = sellerRatings.length > 0
         ? (sellerRatings.reduce((a, b) => a + b, 0) / sellerRatings.length).toFixed(2)
         : "0.00";
       const totalFollowers = followerMap.get(seller.id) || 0;
-      const totalSold = (productMap.get(seller.id) || []).reduce((acc, p) => acc + (p.sold_count || 0), 0);
+      const sellerProducts = productMap.get(seller.id) || [];
+      const totalSold = sellerProducts.reduce((acc, p) => acc + (soldMap.get(p.id) || 0), 0);
 
       // Sort products: by sold_count desc, then by rating desc
-      let products = productMap.get(seller.id) || [];
-      products = products.map(p => {
-        // Calculate per-product avg_rating and total_ratings
-        let avgProductRating = null;
-        let totalProductReviews = 0;
+      let products = sellerProducts.map(p => {
+        let avg_rating = null;
+        let total_reviews = 0;
         if (p.ratings && p.ratings.length > 0) {
           const sum = p.ratings.reduce((acc, r) => acc + r.rating, 0);
-          avgProductRating = (sum / p.ratings.length).toFixed(2);
-          totalProductReviews = p.ratings.length;
+          avg_rating = (sum / p.ratings.length).toFixed(2);
+          total_reviews = p.ratings.length;
         }
 
         return {
           ...p,
-          average_rating: avgProductRating ? Number(avgProductRating) : null,
-          total_reviews: totalProductReviews,
-          terjual: p.sold_count || 0,
+          avg_rating: avg_rating ? Number(avg_rating) : null,
+          total_reviews: total_reviews,
+          terjual: soldMap.get(p.id) || 0,
           is_delivery_available: seller.is_delivery_available,
           ...(seller.is_delivery_available && { delivery_fee: seller.delivery_fee }),
-          ratings: undefined // Remove raw ratings
+          ratings: undefined
         };
       }).sort((a, b) => {
-        if ((b.sold_count || 0) !== (a.sold_count || 0)) {
-          return (b.sold_count || 0) - (a.sold_count || 0);
+        if ((b.terjual || 0) !== (a.terjual || 0)) {
+          return (b.terjual || 0) - (a.terjual || 0);
         }
-        return (b.average_rating || 0) - (a.average_rating || 0);
+        return (b.avg_rating || 0) - (a.avg_rating || 0);
       }).slice(0, 3); // Take top 3
 
       return {
         ...seller,
         seller_name: getUnifiedSellerName(seller),
         products,
-        average_rating: avgSellerRating,
+        average_rating: averageSellerRating,
         total_reviews: sellerRatings.length,
         total_followers: totalFollowers,
         total_sold: totalSold,
@@ -296,7 +322,6 @@ router.get("/meta", async (req, res) => {
 
       if (mainError) throw mainError;
 
-      // Also search by seller's store_name
       const { data: sellerProducts, error: sellerError } = await supabase
         .from("products")
         .select(
@@ -354,6 +379,10 @@ router.get("/meta", async (req, res) => {
     const productsWithVariants =
       await attachVariantsStockDiscountWithRealDiscount(products);
 
+    // Calculate total sold for each product
+    const productIds = productsWithVariants.map(p => p.id);
+    const soldMap = await calculateTotalSold(productIds);
+
     // Attach ratings and followers
     const { ratingMap, followerMap } = await attachRatingsAndFollowers(
       products.map((p) => p.sellers)
@@ -361,7 +390,7 @@ router.get("/meta", async (req, res) => {
 
     const enhancedProducts = productsWithVariants.map((product) => {
       const sellerRatings = ratingMap.get(product.seller_id) || [];
-      const avgSellerRating =
+      const averageSellerRating =
         sellerRatings.length > 0
           ? (
               sellerRatings.reduce((a, b) => a + b, 0) / sellerRatings.length
@@ -369,24 +398,24 @@ router.get("/meta", async (req, res) => {
           : "0.00";
       const totalFollowers = followerMap.get(product.seller_id) || 0;
 
-      // Calculate per-product avg_rating and total_ratings
-      let avgProductRating = null;
-      let totalProductReviews = 0;
+      // Calculate per-product avg_rating and total_reviews
+      let avg_rating = null;
+      let total_reviews = 0;
       if (product.ratings && product.ratings.length > 0) {
         const sum = product.ratings.reduce((acc, r) => acc + r.rating, 0);
-        avgProductRating = (sum / product.ratings.length).toFixed(2);
-        totalProductReviews = product.ratings.length;
+        avg_rating = (sum / product.ratings.length).toFixed(2);
+        total_reviews = product.ratings.length;
       }
 
       return {
         ...product,
         seller_name: getUnifiedSellerName(product.sellers),
-        seller_average_rating: avgSellerRating,
+        seller_average_rating: averageSellerRating,
         seller_total_reviews: sellerRatings.length,
         total_followers: totalFollowers,
-        average_rating: avgProductRating ? Number(avgProductRating) : null,
-        total_reviews: totalProductReviews,
-        terjual: product.sold_count || 0,
+        avg_rating: avg_rating ? Number(avg_rating) : null,
+        total_reviews: total_reviews,
+        terjual: soldMap.get(product.id) || 0,
         is_delivery_available: product.sellers.is_delivery_available,
         ...(product.sellers.is_delivery_available && { delivery_fee: product.sellers.delivery_fee }),
         sellers: undefined,
@@ -406,6 +435,9 @@ router.get("/meta", async (req, res) => {
   }
 });
 
+// ===============================
+// 🔍 Suggest Keywords + Produk
+// ===============================
 router.get("/suggest", async (req, res) => {
   const { q, limit = 10, search_type } = req.query;
 
@@ -525,13 +557,17 @@ router.get("/suggest", async (req, res) => {
     const productsWithVariants =
       await attachVariantsStockDiscountWithRealDiscount(products);
 
+    // Calculate total sold for each product
+    const productIds = productsWithVariants.map(p => p.id);
+    const soldMap = await calculateTotalSold(productIds);
+
     const { ratingMap, followerMap } = await attachRatingsAndFollowers(
       products.map((p) => p.sellers)
     );
 
     const enhancedProducts = productsWithVariants.map((product) => {
       const sellerRatings = ratingMap.get(product.seller_id) || [];
-      const avgSellerRating =
+      const averageSellerRating =
         sellerRatings.length > 0
           ? (
               sellerRatings.reduce((a, b) => a + b, 0) / sellerRatings.length
@@ -539,25 +575,25 @@ router.get("/suggest", async (req, res) => {
           : "0.00";
       const totalFollowers = followerMap.get(product.seller_id) || 0;
 
-      // Calculate per-product avg_rating and total_ratings
-      let avgProductRating = null;
-      let totalProductReviews = 0;
+      // Calculate per-product avg_rating and total_reviews
+      let avg_rating = null;
+      let total_reviews = 0;
       if (product.ratings && product.ratings.length > 0) {
         const sum = product.ratings.reduce((acc, r) => acc + r.rating, 0);
-        avgProductRating = (sum / product.ratings.length).toFixed(2);
-        totalProductReviews = product.ratings.length;
+        avg_rating = (sum / product.ratings.length).toFixed(2);
+        total_reviews = product.ratings.length;
       }
 
       return {
         ...product,
         seller_name: product.sellers?.store_name,
         seller_email: product.sellers?.email,
-        seller_average_rating: avgSellerRating,
+        seller_average_rating: averageSellerRating,
         seller_total_reviews: sellerRatings.length,
         total_followers: totalFollowers,
-        average_rating: avgProductRating ? Number(avgProductRating) : null,
-        total_reviews: totalProductReviews,
-        terjual: product.sold_count || 0,
+        avg_rating: avg_rating ? Number(avg_rating) : null,
+        total_reviews: total_reviews,
+        terjual: soldMap.get(product.id) || 0,
         is_delivery_available: product.sellers.is_delivery_available,
         ...(product.sellers.is_delivery_available && { delivery_fee: product.sellers.delivery_fee }),
         sellers: undefined,
@@ -594,60 +630,67 @@ router.get("/allproduct", async (req, res) => {
   const { limit = 50, offset = 0 } = req.query;
 
   try {
+    // Ambil semua produk + rata-rata rating + data seller
     const { data: products, error } = await supabase
       .from("products")
       .select(`
         *,
-        sellers!inner(id, store_name, name, business_name, is_delivery_available, delivery_fee),
-        ratings!left(rating)
+        ratings!left(rating),
+        sellers!inner(id, name, email, phone, store_name, store_address, store_image_url, is_delivery_available, delivery_fee)
       `)
       .range(parseInt(offset), parseInt(offset) + parseInt(limit) - 1);
 
     if (error) throw error;
 
+    // Attach varian + stock + diskon
     const productsWithVariants = await attachVariantsStockDiscountWithRealDiscount(products);
+
+    // Calculate total sold for each product
+    const productIds = productsWithVariants.map(p => p.id);
+    const soldMap = await calculateTotalSold(productIds);
 
     // Attach ratings and followers
     const { ratingMap, followerMap } = await attachRatingsAndFollowers(products.map(p => p.sellers));
 
     const enhancedProducts = productsWithVariants.map(product => {
       const sellerRatings = ratingMap.get(product.seller_id) || [];
-      const avgSellerRating = sellerRatings.length > 0
+      const averageSellerRating = sellerRatings.length > 0
         ? (sellerRatings.reduce((a, b) => a + b, 0) / sellerRatings.length).toFixed(2)
         : "0.00";
       const totalFollowers = followerMap.get(product.seller_id) || 0;
 
-      // Calculate per-product avg_rating and total_ratings
-      let avgProductRating = null;
-      let totalProductReviews = 0;
+      // Calculate per-product avg_rating and total_reviews
+      let avg_rating = null;
+      let total_reviews = 0;
       if (product.ratings && product.ratings.length > 0) {
         const sum = product.ratings.reduce((acc, r) => acc + r.rating, 0);
-        avgProductRating = (sum / product.ratings.length).toFixed(2);
-        totalProductReviews = product.ratings.length;
+        avg_rating = (sum / product.ratings.length).toFixed(2);
+        total_reviews = product.ratings.length;
       }
 
       return {
         ...product,
         seller_name: getUnifiedSellerName(product.sellers),
-        seller_average_rating: avgSellerRating,
+        seller_average_rating: averageSellerRating,
         seller_total_reviews: sellerRatings.length,
         total_followers: totalFollowers,
-        average_rating: avgProductRating ? Number(avgProductRating) : null,
-        total_reviews: totalProductReviews,
-        terjual: product.sold_count || 0,
+        avg_rating: avg_rating ? Number(avg_rating) : null,
+        total_reviews: total_reviews,
+        terjual: soldMap.get(product.id) || 0,
         is_delivery_available: product.sellers.is_delivery_available,
         ...(product.sellers.is_delivery_available && { delivery_fee: product.sellers.delivery_fee }),
-        sellers: undefined, // Remove raw sellers data
-        ratings: undefined // Remove raw ratings data
+        sellers: undefined,
+        ratings: undefined
       };
     });
 
     return res.status(200).json({
-      message: `✅ ${products.length} produk`,
+      message: `✅ ${enhancedProducts.length} produk`,
       products: enhancedProducts,
       pagination: { limit: parseInt(limit), offset: parseInt(offset) },
     });
   } catch (error) {
+    console.error("❌ Gagal ambil produk:", error);
     return res.status(500).json({
       message: "❌ Gagal mengambil semua produk",
       error: error.message,
