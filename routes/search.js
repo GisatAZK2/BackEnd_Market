@@ -135,6 +135,7 @@ router.get("/", async (req, res) => {
         terjual: soldMap.get(product.id) || 0,
         is_delivery_available: product.sellers.is_delivery_available,
         ...(product.sellers.is_delivery_available && { delivery_fee: product.sellers.delivery_fee }),
+        product_image_url: Array.isArray(product.product_image_url) ? product.product_image_url[0] || "" : product.product_image_url || "",
         sellers: undefined,
         ratings: undefined
       };
@@ -240,6 +241,7 @@ router.get("/seller", async (req, res) => {
           terjual: soldMap.get(p.id) || 0,
           is_delivery_available: seller.is_delivery_available,
           ...(seller.is_delivery_available && { delivery_fee: seller.delivery_fee }),
+          product_image_url: Array.isArray(p.product_image_url) ? p.product_image_url[0] || "" : p.product_image_url || "",
           ratings: undefined
         };
       }).sort((a, b) => {
@@ -418,6 +420,7 @@ router.get("/meta", async (req, res) => {
         terjual: soldMap.get(product.id) || 0,
         is_delivery_available: product.sellers.is_delivery_available,
         ...(product.sellers.is_delivery_available && { delivery_fee: product.sellers.delivery_fee }),
+        product_image_url: Array.isArray(product.product_image_url) ? product.product_image_url[0] || "" : product.product_image_url || "",
         sellers: undefined,
         ratings: undefined
       };
@@ -596,6 +599,7 @@ router.get("/suggest", async (req, res) => {
         terjual: soldMap.get(product.id) || 0,
         is_delivery_available: product.sellers.is_delivery_available,
         ...(product.sellers.is_delivery_available && { delivery_fee: product.sellers.delivery_fee }),
+        product_image_url: Array.isArray(product.product_image_url) ? product.product_image_url[0] || "" : product.product_image_url || "",
         sellers: undefined,
         ratings: undefined
       };
@@ -679,6 +683,7 @@ router.get("/allproduct", async (req, res) => {
         terjual: soldMap.get(product.id) || 0,
         is_delivery_available: product.sellers.is_delivery_available,
         ...(product.sellers.is_delivery_available && { delivery_fee: product.sellers.delivery_fee }),
+        product_image_url: Array.isArray(product.product_image_url) ? product.product_image_url[0] || "" : product.product_image_url || "",
         sellers: undefined,
         ratings: undefined
       };
