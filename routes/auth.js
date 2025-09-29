@@ -19,7 +19,31 @@ const SEND_URL = process.env.SEND_SERVICE_URL;
 
 const router = express.Router();
 const storage = multer.memoryStorage();
-const upload = multer({ storage });
+
+const upload = multer({
+  storage,
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB limit
+  fileFilter: (req, file, cb) => {
+    // Semua jenis gambar populer
+const validTypes = [
+  "image/jpeg",
+  "image/png",
+  "image/gif",
+  "image/webp",
+  "image/bmp",
+  "image/tiff",
+  "image/svg+xml",
+  "image/heif",
+  "image/heic"
+];
+
+    if (validTypes.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error("Hanya file JPEG atau PNG yang diizinkan."));
+    }
+  },
+});
 
 
 // helper buat hapus field undefined/null
@@ -610,6 +634,8 @@ router.get("/user/:id", async (req, res) => {
   });
 });
 
+
+
 // ====================== UPDATE USER ======================
 async function getWilayahName(url, id) {
   const res = await fetch(url);
@@ -620,13 +646,12 @@ async function getWilayahName(url, id) {
   return found.name;
 }
 
-// file backend
 router.put("/user/:id", upload.single("avatar"), async (req, res) => {
   try {
     const userId = req.params.id;
     console.log(`[START] Updating user with ID: ${userId}`);
 
-    // Ambil body
+    // Extract fields from req.body
     const {
       username,
       password,
@@ -665,32 +690,27 @@ router.put("/user/:id", upload.single("avatar"), async (req, res) => {
       account_number,
     });
 
-    // ============ Validate avatar file ============
+    // Validate avatar file
     let avatarUrl = null;
     if (req.file) {
-      const validTypes = ["image/jpeg", "image/png"];
-      if (!validTypes.includes(req.file.mimetype)) {
-        console.error("[VALIDATION ERROR] Invalid file type:", req.file.mimetype);
-        return res.status(400).json({ error: "Hanya file JPEG atau PNG yang diizinkan." });
-      }
-
-      if (req.file.size > 5 * 1024 * 1024) {
-        console.error("[VALIDATION ERROR] File size exceeds 5MB:", req.file.size);
-        return res.status(400).json({ error: "Ukuran file maksimum adalah 5MB." });
-      }
-
       console.log("[AVATAR] File upload detected:", req.file.originalname);
-      const fileExt = path.extname(req.file.originalname);
-      const fileName = `avatar_${Date.now()}${fileExt}`;
+      const fileExt = path.extname(req.file.originalname).toLowerCase();
+      const fileName = `avatar_${userId}_${Date.now()}${fileExt}`;
       console.log("[AVATAR] Generated file name:", fileName);
 
       // Fetch existing avatar to delete it later
-      const { data: existingUser } = await supabase
+      const { data: existingUser, error: fetchError } = await supabase
         .from("users")
         .select("avatar")
         .eq("id", userId)
         .single();
 
+      if (fetchError) {
+        console.error("[SUPABASE ERROR] Failed to fetch existing user:", fetchError.message);
+        return res.status(500).json({ error: "Gagal mengambil data pengguna.", detail: fetchError.message });
+      }
+
+      // Upload new avatar to Supabase storage
       console.log("[SUPABASE] Uploading file to Supabase storage...");
       const { error: uploadError } = await supabase.storage
         .from("avatars")
@@ -705,6 +725,7 @@ router.put("/user/:id", upload.single("avatar"), async (req, res) => {
       }
       console.log("[SUPABASE] File uploaded successfully");
 
+      // Get public URL for the uploaded avatar
       console.log("[SUPABASE] Fetching public URL for avatar...");
       const { data: publicUrlData } = supabase.storage
         .from("avatars")
@@ -722,17 +743,21 @@ router.put("/user/:id", upload.single("avatar"), async (req, res) => {
         if (deleteError) {
           console.error("[SUPABASE WARNING] Failed to delete old avatar:", deleteError.message);
           // Continue despite deletion failure to avoid blocking the update
+        } else {
+          console.log("[SUPABASE] Old avatar deleted successfully");
         }
       }
+    } else {
+      console.log("[AVATAR] No file uploaded in this request");
     }
 
-    // ============ Build payload users ============
+    // Build payload for users table
     const updateUsers = {};
-    if (username) {
-      updateUsers.username = username;
+    if (username && username.trim()) {
+      updateUsers.username = username.trim();
       console.log("[PAYLOAD] Added username to updateUsers:", username);
     }
-    if (password) {
+    if (password && password.trim()) {
       updateUsers.password = await bcrypt.hash(password, 10);
       console.log("[PAYLOAD] Password hashed and added to updateUsers");
     }
@@ -740,8 +765,24 @@ router.put("/user/:id", upload.single("avatar"), async (req, res) => {
       updateUsers.avatar = avatarUrl;
       console.log("[PAYLOAD] Added avatar to updateUsers:", avatarUrl);
     }
+    if (nama_penerima && nama_penerima.trim()) {
+      updateUsers.nama_penerima = nama_penerima.trim();
+      console.log("[PAYLOAD] Added nama_penerima to updateUsers:", nama_penerima);
+    }
+    if (no_telepon && no_telepon.trim()) {
+      updateUsers.no_telepon = no_telepon.trim();
+      console.log("[PAYLOAD] Added no_telepon to updateUsers:", no_telepon);
+    }
+    if (alamat_lengkap && alamat_lengkap.trim()) {
+      updateUsers.alamat_lengkap = alamat_lengkap.trim();
+      console.log("[PAYLOAD] Added alamat_lengkap to updateUsers:", alamat_lengkap);
+    }
+    if (kode_pos && kode_pos.trim()) {
+      updateUsers.kode_pos = kode_pos.trim();
+      console.log("[PAYLOAD] Added kode_pos to updateUsers:", kode_pos);
+    }
 
-    // Wilayah
+    // Handle region fields
     const provId = provinsi_id || provinsi;
     const kotaId = kota_id || kota;
     const kecId = kecamatan_id || kecamatan;
@@ -750,79 +791,97 @@ router.put("/user/:id", upload.single("avatar"), async (req, res) => {
 
     if (provId) {
       console.log(`[API CALL] Fetching province name for ID: ${provId}`);
-      updateUsers.provinsi = await getWilayahName(
+      const provName = await getWilayahName(
         "https://www.emsifa.com/api-wilayah-indonesia/api/provinces.json",
         provId
       );
-      console.log("[API RESULT] Province name:", updateUsers.provinsi);
+      if (provName) {
+        updateUsers.provinsi = provName;
+        console.log("[API RESULT] Province name:", updateUsers.provinsi);
+      } else {
+        console.error("[API ERROR] Province name not found for ID:", provId);
+        return res.status(400).json({ error: "Provinsi tidak valid." });
+      }
     }
 
     if (kotaId && provId) {
       console.log(`[API CALL] Fetching regency name for province ID: ${provId}, regency ID: ${kotaId}`);
-      updateUsers.kota_kabupaten = await getWilayahName(
+      const kotaName = await getWilayahName(
         `https://www.emsifa.com/api-wilayah-indonesia/api/regencies/${provId}.json`,
         kotaId
       );
-      console.log("[API RESULT] Regency name:", updateUsers.kota_kabupaten);
+      if (kotaName) {
+        updateUsers.kota_kabupaten = kotaName;
+        console.log("[API RESULT] Regency name:", updateUsers.kota_kabupaten);
+      } else {
+        console.error("[API ERROR] Regency name not found for ID:", kotaId);
+        return res.status(400).json({ error: "Kabupaten/Kota tidak valid." });
+      }
     }
 
     if (kecId && kotaId) {
       console.log(`[API CALL] Fetching district name for regency ID: ${kotaId}, district ID: ${kecId}`);
-      updateUsers.kecamatan = await getWilayahName(
+      const kecName = await getWilayahName(
         `https://www.emsifa.com/api-wilayah-indonesia/api/districts/${kotaId}.json`,
         kecId
       );
-      console.log("[API RESULT] District name:", updateUsers.kecamatan);
+      if (kecName) {
+        updateUsers.kecamatan = kecName;
+        console.log("[API RESULT] District name:", updateUsers.kecamatan);
+      } else {
+        console.error("[API ERROR] District name not found for ID:", kecId);
+        return res.status(400).json({ error: "Kecamatan tidak valid." });
+      }
     }
 
     if (kelId && kecId) {
       console.log(`[API CALL] Fetching village name for district ID: ${kecId}, village ID: ${kelId}`);
-      updateUsers.kelurahan = await getWilayahName(
+      const kelName = await getWilayahName(
         `https://www.emsifa.com/api-wilayah-indonesia/api/villages/${kecId}.json`,
         kelId
       );
-      console.log("[API RESULT] Village name:", updateUsers.kelurahan);
+      if (kelName) {
+        updateUsers.kelurahan = kelName;
+        console.log("[API RESULT] Village name:", updateUsers.kelurahan);
+      } else {
+        console.error("[API ERROR] Village name not found for ID:", kelId);
+        return res.status(400).json({ error: "Kelurahan tidak valid." });
+      }
     }
 
-    if (kode_pos) {
-      updateUsers.kode_pos = kode_pos;
-      console.log("[PAYLOAD] Added kode_pos to updateUsers:", kode_pos);
-    }
-    if (nama_penerima) {
-      updateUsers.nama_penerima = nama_penerima;
-      console.log("[PAYLOAD] Added nama_penerima to updateUsers:", nama_penerima);
-    }
-    if (no_telepon) {
-      updateUsers.no_telepon = no_telepon;
-      console.log("[PAYLOAD] Added no_telepon to updateUsers:", no_telepon);
-    }
-    if (alamat_lengkap) {
-      updateUsers.alamat_lengkap = alamat_lengkap;
-      console.log("[PAYLOAD] Added alamat_lengkap to updateUsers:", alamat_lengkap);
-    }
-
-    // ============ Build payload user_balances ============
+    // Build payload for user_balances table
     const updateBalances = {};
-    if (bank_code) {
-      updateBalances.bank_code = bank_code;
+    if (bank_code && bank_code.trim()) {
+      updateBalances.bank_code = bank_code.trim();
       console.log("[PAYLOAD] Added bank_code to updateBalances:", bank_code);
     }
-    if (account_holder_name) {
-      updateBalances.account_holder_name = account_holder_name;
+    if (account_holder_name && account_holder_name.trim()) {
+      updateBalances.account_holder_name = account_holder_name.trim();
       console.log("[PAYLOAD] Added account_holder_name to updateBalances:", account_holder_name);
     }
-    if (account_number) {
-      updateBalances.account_number = account_number;
+    if (account_number && account_number.trim()) {
+      updateBalances.account_number = account_number.trim();
       console.log("[PAYLOAD] Added account_number to updateBalances:", account_number);
     }
 
-    // ============ Simpan ke database ============
+    // Validate bank fields (all or none)
+    if (
+      (bank_code || account_holder_name || account_number) &&
+      !(bank_code && account_holder_name && account_number)
+    ) {
+      console.error("[VALIDATION ERROR] Incomplete bank details provided");
+      return res.status(400).json({
+        error: "Jika salah satu bidang bank diisi, semua bidang bank wajib diisi.",
+      });
+    }
+
+    // Save to database
     let userData;
     if (Object.keys(updateUsers).length > 0) {
       console.log("[DATABASE] Updating users table with payload:", updateUsers);
       const { data, error: userError } = await supabase
         .from("users")
-        .update(updateUsers) // Removed clean() to avoid potential issues
+        .update(updateUsers)
         .eq("id", userId)
         .select(
           "id, email, username, avatar, provinsi, kota_kabupaten, kecamatan, kelurahan, kode_pos, nama_penerima, no_telepon, alamat_lengkap"
@@ -831,7 +890,7 @@ router.put("/user/:id", upload.single("avatar"), async (req, res) => {
 
       if (userError) {
         console.error("[DATABASE ERROR] Failed to update users table:", userError.message);
-        throw new Error(`Gagal memperbarui data pengguna: ${userError.message}`);
+        return res.status(500).json({ error: "Gagal memperbarui data pengguna.", detail: userError.message });
       }
       userData = data;
       console.log("[DATABASE] Users table updated successfully:", userData);
@@ -847,7 +906,7 @@ router.put("/user/:id", upload.single("avatar"), async (req, res) => {
 
       if (fetchError) {
         console.error("[DATABASE ERROR] Failed to fetch users table:", fetchError.message);
-        throw new Error(`Gagal mengambil data pengguna: ${fetchError.message}`);
+        return res.status(500).json({ error: "Gagal mengambil data pengguna.", detail: fetchError.message });
       }
       userData = data;
       console.log("[DATABASE] Users data fetched successfully:", userData);
@@ -857,20 +916,37 @@ router.put("/user/:id", upload.single("avatar"), async (req, res) => {
       console.log("[DATABASE] Updating user_balances table with payload:", updateBalances);
       const { error: balanceError } = await supabase
         .from("user_balances")
-        .update(updateBalances)
-        .eq("user_id", userId);
+        .upsert(
+          { user_id: userId, ...updateBalances },
+          { onConflict: "user_id" }
+        );
 
       if (balanceError) {
         console.error("[DATABASE ERROR] Failed to update user_balances table:", balanceError.message);
-        throw new Error(`Gagal memperbarui data saldo: ${balanceError.message}`);
+        return res.status(500).json({ error: "Gagal memperbarui data saldo.", detail: balanceError.message });
       }
       console.log("[DATABASE] user_balances table updated successfully");
+    }
+
+    // Fetch updated balance data to include in response
+    const { data: balanceData, error: balanceFetchError } = await supabase
+      .from("user_balances")
+      .select("bank_code, account_holder_name, account_number")
+      .eq("user_id", userId)
+      .single();
+
+    if (balanceFetchError) {
+      console.error("[DATABASE ERROR] Failed to fetch user_balances:", balanceFetchError.message);
+      // Continue without balance data to avoid blocking response
     }
 
     console.log("[SUCCESS] User update completed for ID:", userId);
     res.json({
       message: "✅ User berhasil diupdate.",
-      user: userData,
+      user: {
+        ...userData,
+        balance: balanceData || {},
+      },
     });
   } catch (err) {
     console.error("[ERROR] Update user failed:", err.message);
