@@ -864,17 +864,6 @@ router.put("/user/:id", upload.single("avatar"), async (req, res) => {
       console.log("[PAYLOAD] Added account_number to updateBalances:", account_number);
     }
 
-    // Validate bank fields (all or none)
-    if (
-      (bank_code || account_holder_name || account_number) &&
-      !(bank_code && account_holder_name && account_number)
-    ) {
-      console.error("[VALIDATION ERROR] Incomplete bank details provided");
-      return res.status(400).json({
-        error: "Jika salah satu bidang bank diisi, semua bidang bank wajib diisi.",
-      });
-    }
-
     // Save to database
     let userData;
     if (Object.keys(updateUsers).length > 0) {
