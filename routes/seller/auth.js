@@ -15,6 +15,7 @@ const fetch = require("node-fetch");
 const { v4: uuidv4 } = require("uuid");
 
 
+
 const router = express.Router();
 const storage = multer.memoryStorage();
 const upload = multer({ storage });
@@ -1094,7 +1095,6 @@ return res.json({
   }
 });
 
-
 router.delete("/seller/:id", async (req, res) => {
   const cookie = req.cookies.seller_info;
   if (!cookie) {
@@ -1116,6 +1116,73 @@ router.delete("/seller/:id", async (req, res) => {
   const mode = req.query.mode || "account-only"; // default akun saja
 
   try {
+    // Ambil data seller untuk email dan cek balance
+    const { data: seller, error: sellerError } = await supabase
+      .from("sellers")
+      .select("*")
+      .eq("id", sellerId)
+      .single();
+
+    if (sellerError || !seller) {
+      return res.status(404).json({ error: "Seller tidak ditemukan." });
+    }
+
+    // Cek balance langsung dari database
+    const { data: balanceData, error: balanceError } = await supabase
+      .from("seller_balances")
+      .select("balance, bank_code, account_number, account_holder_name")
+      .eq("seller_id", sellerId)
+      .single();
+
+    if (balanceError && balanceError.code !== 'PGRST116') {
+      throw new Error("Gagal mengambil data balance seller");
+    }
+
+    const balance = balanceData || { 
+      balance: 0, 
+      bank_code: null, 
+      account_num: null, 
+      account_holder: null 
+    };
+
+    if (balance.balance > 0) {
+      // Set status menunggu persetujuan admin
+      const { error: updateError } = await supabase
+        .from("sellers")
+        .update({ 
+          is_deleted: false, 
+          deletion_status: 'pending',
+          deletion_request_date: new Date().toISOString()
+        })
+        .eq("id", sellerId);
+
+      if (updateError) {
+        throw new Error("Gagal update status deletion");
+      }
+
+      // Kirim email notifikasi ke admin
+      const adminEmailData = {
+        seller_id: sellerId,
+        seller_name: seller.store_name || seller.full_name,
+        seller_email: seller.email,
+        balance_amount: balance.balance,
+        bank_info: {
+          bank_code: balance.bank_code,
+          account_number: balance.account_number,
+          account_holder_name: balance.account_holder_name
+        }
+      };
+
+      // Panggil fungsi kirim email (asumsikan endpoint atau fungsi tersedia)
+      await axios.post('http://localhost:4000/send-email-seller-deletion-request', { data: adminEmailData });
+
+      res.json({ 
+        message: `✅ Pengajuan penghapusan akun seller berhasil diajukan. Menunggu persetujuan admin karena ada saldo Rp ${balance.balance.toLocaleString()}. Mode: ${mode}` 
+      });
+      return;
+    }
+
+    // Jika balance == 0, lanjut hapus seperti biasa
     // Ambil semua order & produk seller
     const { data: orders } = await supabase
       .from("orders")
@@ -1210,7 +1277,5 @@ router.delete("/seller/:id", async (req, res) => {
     res.status(500).json({ error: "❌ Terjadi kesalahan saat menghapus seller." });
   }
 });
-
-
 
 module.exports = router;
