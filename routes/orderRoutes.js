@@ -778,12 +778,12 @@ router.post("/cart/checkout", async (req, res) => {
       product_id: i.productId,
       variant_id: i.variantId,
       qty: i.qty,
+      pickup_method: pickupMethod ? pickupMethod.toLowerCase() : (i.pickupMethod || "diambil").toLowerCase(),
     }));
 
-    const { data: createdOrders, error: rpcError } = await supabase.rpc("checkout_atomic", {
+    const { data: rpcResult, error: rpcError } = await supabase.rpc("checkout_atomic", {
       items_json: snakeCaseItems,
       user_id: userInfo.id,
-      pickup_method: pickupMethod,
       address_json: buyerAddress || address || null,
       payment_method: paymentMethod.toLowerCase(),
       payment_id: null, // Initially null
@@ -795,6 +795,9 @@ router.post("/cart/checkout", async (req, res) => {
       console.error("❌ Checkout atomic gagal:", rpcError);
       return res.status(400).json({ message: rpcError.message });
     }
+
+    const createdOrders = rpcResult.created_orders;
+    const warnings = rpcResult.warnings || [];
 
     // 🔹 Calculate delivery stats
     const productMap = Object.fromEntries(products.map((p) => [p.id, p]));
@@ -1080,14 +1083,19 @@ router.post("/cart/checkout", async (req, res) => {
 
     // 🔹 Format response
     const endTime = Date.now();
-    const successMessage =
+    let successMessage =
       pickupOnlyItemsCount > 0
         ? `✅ Berhasil checkout ${finalOrders.length} order. ⚠️ ${pickupOnlyItemsCount} item tidak bisa diantar, tapi bisa diambil sendiri ke toko. (⏱ ${(endTime - startTime) / 1000}s)`
         : `✅ Berhasil checkout ${finalOrders.length} order. Semua item siap diproses! (⏱ ${(endTime - startTime) / 1000}s)`;
 
+    if (warnings.length > 0) {
+      successMessage += ` ⚠️ Beberapa item menggunakan harga normal karena stok promo habis.`;
+    }
+
     return res.status(200).json({
       message: successMessage,
       orders: finalOrders,
+      warnings: warnings,
       delivery_stats: {
         total_items: totalItemsCount,
         pickup_only_items: pickupOnlyItemsCount,
@@ -1356,7 +1364,6 @@ router.post("/cart/delivery-fee", async (req, res) => {
     });
   }
 });
-
 
 router.post("/orders/:id/confirm-receive", async (req, res) => {
   try {

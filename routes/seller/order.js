@@ -27,6 +27,18 @@ function signPayload(payload) {
   return crypto.createHmac("sha256", CRYPTO_SECRET_KEY).update(str).digest("hex");
 }
 
+// ======= Helper Aman JSON ======= //
+function safeParseJSON(str, fallback = []) {
+  if (!str) return fallback;
+  try {
+    const parsed = JSON.parse(str);
+    return Array.isArray(parsed) ? parsed : fallback;
+  } catch {
+    return [str];
+  }
+}
+
+
 // Helper DB wallet operations for sellers
 async function getSellerBalance(sellerId) {
   const { data, error } = await supabase
@@ -160,20 +172,6 @@ async function mintUserBalance(userId, amount, opts = {}) {
   });
   return newBalance;
 }
-
-function safeParseImageUrl(data) {
-  if (!data) return null;
-  try {
-    const parsed = JSON.parse(data);
-    if (Array.isArray(parsed) && parsed.length > 0) {
-      return parsed[0];
-    }
-    return typeof parsed === "string" ? parsed : null;
-  } catch {
-    return data; // Fallback kalau bukan JSON valid
-  }
-}
-
 
 
 function safeParseImageUrl(data) {
@@ -804,7 +802,7 @@ router.put("/orders/:id/status", async (req, res) => {
       if (!items) {
         const { data, error } = await supabase
           .from("order_items")
-          .select("id, quantity, price_per_item, product_id, variant_id")
+          .select("id, quantity, price_per_item, product_id, variant_id, discount_source")
           .eq("order_id", orderId);
         if (error) throw new Error("Failed to fetch order items");
         items = data || [];
@@ -840,61 +838,170 @@ router.put("/orders/:id/status", async (req, res) => {
           variant_name: variant?.variant_name || null,
           quantity: item.quantity,
           total_price: item.price_per_item * item.quantity,
-          product_image_url: variant?.variant_image_url || safeParseImageUrl(product?.product_image_url) || null,
+          product_image_url: variant?.variant_image_url || safeParseJSON(product?.product_image_url)[0] || product?.product_image_url || null,
+          discount_source: item.discount_source,
         };
       });
     };
 
     const restoreStock = async (orderItems) => {
+      const now = DateTime.utc();
+
       for (const item of orderItems) {
-        if (item.variant_id) {
-          // Restore stock to product_variants
-          const { data: variant, error: variantError } = await supabase
-            .from("product_variants")
-            .select("variant_stock")
-            .eq("id", item.variant_id)
-            .single();
+        const { discount_source, quantity, product_id, variant_id } = item;
 
-          if (variantError || !variant) {
-            console.error(`❌ Failed to fetch variant ${item.variant_id}:`, variantError?.message);
-            throw new Error("Failed to fetch variant for stock restoration");
+        // Check discount validity if applicable
+        const isDiscountActive = async (source, productId, variantId) => {
+          if (source === "normal") return false;
+
+          if (source === "flash") {
+            const { data: flashSaleProduct } = await supabase
+              .from("flash_sale_products")
+              .select("flash_sale_id, flash_stock")
+              .eq("product_id", productId)
+              .eq("variant_id", variantId || null)
+              .single();
+
+            if (!flashSaleProduct) return false;
+
+            const { data: flashSale } = await supabase
+              .from("flash_sales")
+              .select("start_time, end_time, status")
+              .eq("id", flashSaleProduct.flash_sale_id)
+              .single();
+
+            if (!flashSale) return false;
+
+            const start = DateTime.fromISO(flashSale.start_time).toUTC();
+            const end = DateTime.fromISO(flashSale.end_time).toUTC();
+            return (
+              flashSale.status === "active" &&
+              start <= now &&
+              end >= now &&
+              flashSaleProduct.flash_stock !== null &&
+              flashSaleProduct.flash_stock >= 0
+            );
           }
 
-          const newStock = (variant.variant_stock || 0) + item.quantity;
-          const { error: updateError } = await supabase
-            .from("product_variants")
-            .update({ variant_stock: newStock })
-            .eq("id", item.variant_id);
+          if (source === "event") {
+            const { data: eventProduct } = await supabase
+              .from("event_products")
+              .select("event_id, event_stock")
+              .eq("product_id", productId)
+              .eq("variant_id", variantId || null)
+              .single();
 
-          if (updateError) {
-            console.error(`❌ Failed to restore stock for variant ${item.variant_id}:`, updateError.message);
-            throw new Error("Failed to restore variant stock");
+            if (!eventProduct) return false;
+
+            const { data: event } = await supabase
+              .from("events")
+              .select("start_time, end_time")
+              .eq("id", eventProduct.event_id)
+              .single();
+
+            if (!event) return false;
+
+            const start = DateTime.fromISO(event.start_time).toUTC();
+            const end = DateTime.fromISO(event.end_time).toUTC();
+            return (
+              start <= now &&
+              end >= now &&
+              eventProduct.event_stock !== null &&
+              eventProduct.event_stock >= 0
+            );
           }
-          console.log(`✅ Restored ${item.quantity} to variant ${item.variant_id} stock`);
+
+          if (source === "store") {
+            const { data: storeDiscountItem } = await supabase
+              .from("store_discount_items")
+              .select("discount_id, stock")
+              .eq("product_id", productId)
+              .eq("variant_id", variantId || null)
+              .single();
+
+            if (!storeDiscountItem) return false;
+
+            const { data: storeDiscount } = await supabase
+              .from("store_discounts")
+              .select("start_time, end_time")
+              .eq("id", storeDiscountItem.discount_id)
+              .single();
+
+            if (!storeDiscount) return false;
+
+            const start = DateTime.fromISO(storeDiscount.start_time).toUTC();
+            const end = DateTime.fromISO(storeDiscount.end_time).toUTC();
+            return (
+              start <= now &&
+              end >= now &&
+              storeDiscountItem.stock !== null &&
+              storeDiscountItem.stock >= 0
+            );
+          }
+
+          return false;
+        };
+
+        const discountActive = await isDiscountActive(discount_source, product_id, variant_id);
+
+        if (discountActive) {
+          // Restore to discount stock if still active
+          if (discount_source === "flash") {
+            const { error } = await supabase
+              .from("flash_sale_products")
+              .update({ flash_stock: supabase.raw(`flash_stock + ${quantity}`) })
+              .eq("product_id", product_id)
+              .eq("variant_id", variant_id || null);
+            if (error) throw new Error(`Failed to restore flash sale stock: ${error.message}`);
+            console.log(`✅ Restored ${quantity} to flash sale stock for product ${product_id}, variant ${variant_id || 'none'}`);
+          } else if (discount_source === "event") {
+            const { error } = await supabase
+              .from("event_products")
+              .update({ event_stock: supabase.raw(`event_stock + ${quantity}`) })
+              .eq("product_id", product_id)
+              .eq("variant_id", variant_id || null);
+            if (error) throw new Error(`Failed to restore event stock: ${error.message}`);
+            console.log(`✅ Restored ${quantity} to event stock for product ${product_id}, variant ${variant_id || 'none'}`);
+          } else if (discount_source === "store") {
+            const { error } = await supabase
+              .from("store_discount_items")
+              .update({ stock: supabase.raw(`stock + ${quantity}`) })
+              .eq("product_id", product_id)
+              .eq("variant_id", variant_id || null);
+            if (error) throw new Error(`Failed to restore store discount stock: ${error.message}`);
+            console.log(`✅ Restored ${quantity} to store discount stock for product ${product_id}, variant ${variant_id || 'none'}`);
+          }
         } else {
-          // Restore stock to products
-          const { data: product, error: productError } = await supabase
-            .from("products")
-            .select("stock")
-            .eq("id", item.product_id)
-            .single();
-
-          if (productError || !product) {
-            console.error(`❌ Failed to fetch product ${item.product_id}:`, productError?.message);
-            throw new Error("Failed to fetch product for stock restoration");
+          // Restore to normal stock if discount is not active or source is normal
+          if (variant_id) {
+            const { data: variant, error } = await supabase
+              .from("product_variants")
+              .select("variant_stock")
+              .eq("id", variant_id)
+              .single();
+            if (error || !variant) throw new Error("Failed to fetch variant for stock restoration");
+            const newStock = (variant.variant_stock || 0) + quantity;
+            const { error: updateErr } = await supabase
+              .from("product_variants")
+              .update({ variant_stock: newStock })
+              .eq("id", variant_id);
+            if (updateErr) throw new Error("Failed to restore variant stock");
+            console.log(`✅ Restored ${quantity} to variant stock ${variant_id}`);
+          } else {
+            const { data: product, error } = await supabase
+              .from("products")
+              .select("stock")
+              .eq("id", product_id)
+              .single();
+            if (error || !product) throw new Error("Failed to fetch product for stock restoration");
+            const newStock = (product.stock || 0) + quantity;
+            const { error: updateErr } = await supabase
+              .from("products")
+              .update({ stock: newStock })
+              .eq("id", product_id);
+            if (updateErr) throw new Error("Failed to restore product stock");
+            console.log(`✅ Restored ${quantity} to product stock ${product_id}`);
           }
-
-          const newStock = (product.stock || 0) + item.quantity;
-          const { error: updateError } = await supabase
-            .from("products")
-            .update({ stock: newStock })
-            .eq("id", item.product_id);
-
-          if (updateError) {
-            console.error(`❌ Failed to restore stock for product ${item.product_id}:`, updateError.message);
-            throw new Error("Failed to restore product stock");
-          }
-          console.log(`✅ Restored ${item.quantity} to product ${item.product_id} stock`);
         }
       }
     };
@@ -923,7 +1030,7 @@ router.put("/orders/:id/status", async (req, res) => {
         cancel: () => {
           status = "dibatalkan";
           payload.cancel_reason = "❌ Dibatalkan oleh seller.";
-          if (order.payment_status === "paid") {
+          if (order.payment_status === "paid" && order.payment_method !== "cod") {
             payload.refund_requested = true;
           }
         },
@@ -1047,7 +1154,7 @@ router.put("/orders/:id/status", async (req, res) => {
     }
 
     // Handle refund and stock restoration if canceled
-    if (newStatus === "dibatalkan" && updatedOrder.payment_status === "paid") {
+    if (newStatus === "dibatalkan" && updatedOrder.payment_status === "paid" && updatedOrder.payment_method !== "cod") {
       const grossAmount = Number(updatedOrder.total_price ?? 0);
       const platformFee = 0; // Sesuaikan jika ada fee
       const netAmount = grossAmount - platformFee;
@@ -1141,7 +1248,7 @@ router.put("/orders/:id/status", async (req, res) => {
       buyer_address: updatedOrder.buyer_address,
       updated_at: updatedOrder.updated_at,
       created_at: updatedOrder.created_at,
-      ...(newStatus === "dibatalkan" && updatedOrder.refund_status === "completed" && {
+      ...(newStatus === "dibatalkan" && updatedOrder.refund_status === "completed" && updatedOrder.payment_method !== "cod" && {
         refund_amount: updatedOrder.total_price,
         refund_status: "completed",
       }),
@@ -1157,7 +1264,7 @@ router.put("/orders/:id/status", async (req, res) => {
       try {
         console.log("📧 [EMAIL] Preparing to send email notification for order:", orderId);
         console.log("📧 [EMAIL] Email payload:", emailPayload);
-        await axios.post(`${SEND_URL}/send-email-order`, emailPayload);
+        await axios.post(`${process.env.SEND_URL}/send-email-order`, emailPayload);
         console.log("✅ [EMAIL] Email notification request sent successfully");
       } catch (emailErr) {
         console.error("❌ [EMAIL] Failed to send email:", emailErr.response?.data || emailErr.message);
@@ -1191,54 +1298,59 @@ router.put("/orders/:id/status", async (req, res) => {
 async function handleOrderCompletion(sellerId, orderId, order) {
   try {
     console.log(`💰 Processing balance movement for completed order ${orderId}`);
-    
-    // Ambil current balance
+
+    // Kalau payment pakai COD → skip
+    if (order.payment_method && order.payment_method.toLowerCase() === "cod") {
+      console.log(`⚠️ COD order detected. Skipping balance release for order ${orderId}`);
+      return;
+    }
+
+    // Ambil current balance seller
     const currentBalance = await getSellerBalance(sellerId);
     console.log(
       `💳 Current balance - Total: ${currentBalance.balance}, Withdrawable: ${currentBalance.withdrawable_balance}`
     );
-    
-    // Hitung net amount to seller (tanpa platform fee)
+
+    // Hitung net amount to seller (tanpa platform fee, fee bisa dipotong di sini kalau ada)
     const grossAmount = Number(order.total_price || 0);
     const netToSeller = grossAmount;
-    
+
     console.log(`💸 Distribution - Gross: ${grossAmount}, Net: ${netToSeller}`);
-    
-    // Simulasi: asumsikan sebelumnya sudah di-credit ke total balance saat payment confirmed
-    // Sekarang kita move dari total ke withdrawable
+
+    // Simulasi: balance total sudah di-credit saat payment confirmed
+    // Sekarang pindahkan ke withdrawable
     const newTotalBalance = currentBalance.balance; // Tetap sama
     const newWithdrawableBalance = currentBalance.withdrawable_balance + netToSeller;
-    
-    // Update balances
+
+    // Update balances di Supabase
     const { data: balanceData, error: balanceError } = await supabase
       .from("seller_balances")
-      .update({ 
+      .update({
         balance: newTotalBalance,
-        withdrawable_balance: newWithdrawableBalance 
+        withdrawable_balance: newWithdrawableBalance,
       })
       .eq("seller_id", sellerId)
       .select()
       .single();
-    
+
     if (balanceError) throw balanceError;
-    
-    // Record transaction
+
+    // Record transaction ke tabel transaksi
     await recordSellerTransaction({
       sellerId,
       amount: netToSeller,
       type: "move_to_withdrawable",
       orderId,
-      metadata: { 
-        source: "order_completed", 
+      metadata: {
+        source: "order_completed",
         grossAmount,
-        action: "released_to_withdrawable"
+        action: "released_to_withdrawable",
       },
     });
-    
+
     console.log(
       `✅ Balance moved: +${netToSeller} to withdrawable. New withdrawable: ${newWithdrawableBalance}`
     );
-    
   } catch (balanceErr) {
     console.error("❌ Balance movement error:", balanceErr.message);
     // Jangan throw - biarkan order tetap completed
