@@ -495,7 +495,7 @@ router.post("/cart/checkout", async (req, res) => {
     // 🔹 Validate payment channel
     if (paymentMethod.toLowerCase() === "digital") {
       const channels = await getXenditChannels();
-      const validChannel = channels.find(c => c.channel_code === selectedPaymentChannel);
+      const validChannel = channels.find((c) => c.channel_code === selectedPaymentChannel);
       if (!validChannel) {
         console.error("⚠️ Channel pembayaran tidak valid:", selectedPaymentChannel);
         return res.status(400).json({
@@ -788,7 +788,7 @@ router.post("/cart/checkout", async (req, res) => {
       payment_method: paymentMethod.toLowerCase(),
       payment_id: null, // Initially null
       payment_channel: selectedPaymentChannel || null, // Pass selectedPaymentChannel
-      payment_expiry: null // Initially null
+      payment_expiry: null, // Initially null
     });
 
     if (rpcError) {
@@ -912,9 +912,9 @@ router.post("/cart/checkout", async (req, res) => {
               payment_status: "paid",
               status: "pending",
               payment_method: "balance",
-              payment_id: `BAL-${order.id}`, // Custom payment ID for balance
-              payment_channel: "balance", // Custom channel for balance
-              payment_expiry: null, // No expiry for balance payment
+              payment_id: `BAL-${order.id}`,
+              payment_channel: "balance",
+              payment_expiry: null,
             })
             .eq("id", order.id);
 
@@ -948,14 +948,13 @@ router.post("/cart/checkout", async (req, res) => {
           });
         }
       } else if (paymentMethod.toLowerCase() === "cod") {
-        // For COD, set minimal payment details
         await supabase
           .from("orders")
           .update({
-            payment_id: `COD-${order.id}`, // Custom payment ID for COD
-            payment_channel: "cod", // Custom channel for COD
-            payment_expiry: null, // No expiry for COD
-            payment_status: "paid" // Set to paid immediately
+            payment_id: `COD-${order.id}`,
+            payment_channel: "cod",
+            payment_expiry: null,
+            payment_status: "paid",
           })
           .eq("id", order.id);
 
@@ -1000,6 +999,7 @@ router.post("/cart/checkout", async (req, res) => {
           variant_final_price: i.variant?.final_price ?? null,
           variant_discount_percentage: i.variantDiscountPercentage,
           variant_image_url: i.variant?.variant_image_url || null,
+          // Note: discount_source is now handled by checkout_atomic in order_items
         }));
 
         await supabase.from("order_item_details").insert(snapshotItems);

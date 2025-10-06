@@ -845,134 +845,35 @@ router.put("/orders/:id/status", async (req, res) => {
     };
 
     const restoreStock = async (orderItems) => {
-      const now = DateTime.utc();
-
       for (const item of orderItems) {
         const { discount_source, quantity, product_id, variant_id } = item;
 
-        // Check discount validity if applicable
-        const isDiscountActive = async (source, productId, variantId) => {
-          if (source === "normal") return false;
-
-          if (source === "flash") {
-            const { data: flashSaleProduct } = await supabase
-              .from("flash_sale_products")
-              .select("flash_sale_id, flash_stock")
-              .eq("product_id", productId)
-              .eq("variant_id", variantId || null)
-              .single();
-
-            if (!flashSaleProduct) return false;
-
-            const { data: flashSale } = await supabase
-              .from("flash_sales")
-              .select("start_time, end_time, status")
-              .eq("id", flashSaleProduct.flash_sale_id)
-              .single();
-
-            if (!flashSale) return false;
-
-            const start = DateTime.fromISO(flashSale.start_time).toUTC();
-            const end = DateTime.fromISO(flashSale.end_time).toUTC();
-            return (
-              flashSale.status === "active" &&
-              start <= now &&
-              end >= now &&
-              flashSaleProduct.flash_stock !== null &&
-              flashSaleProduct.flash_stock >= 0
-            );
-          }
-
-          if (source === "event") {
-            const { data: eventProduct } = await supabase
-              .from("event_products")
-              .select("event_id, event_stock")
-              .eq("product_id", productId)
-              .eq("variant_id", variantId || null)
-              .single();
-
-            if (!eventProduct) return false;
-
-            const { data: event } = await supabase
-              .from("events")
-              .select("start_time, end_time")
-              .eq("id", eventProduct.event_id)
-              .single();
-
-            if (!event) return false;
-
-            const start = DateTime.fromISO(event.start_time).toUTC();
-            const end = DateTime.fromISO(event.end_time).toUTC();
-            return (
-              start <= now &&
-              end >= now &&
-              eventProduct.event_stock !== null &&
-              eventProduct.event_stock >= 0
-            );
-          }
-
-          if (source === "store") {
-            const { data: storeDiscountItem } = await supabase
-              .from("store_discount_items")
-              .select("discount_id, stock")
-              .eq("product_id", productId)
-              .eq("variant_id", variantId || null)
-              .single();
-
-            if (!storeDiscountItem) return false;
-
-            const { data: storeDiscount } = await supabase
-              .from("store_discounts")
-              .select("start_time, end_time")
-              .eq("id", storeDiscountItem.discount_id)
-              .single();
-
-            if (!storeDiscount) return false;
-
-            const start = DateTime.fromISO(storeDiscount.start_time).toUTC();
-            const end = DateTime.fromISO(storeDiscount.end_time).toUTC();
-            return (
-              start <= now &&
-              end >= now &&
-              storeDiscountItem.stock !== null &&
-              storeDiscountItem.stock >= 0
-            );
-          }
-
-          return false;
-        };
-
-        const discountActive = await isDiscountActive(discount_source, product_id, variant_id);
-
-        if (discountActive) {
-          // Restore to discount stock if still active
-          if (discount_source === "flash") {
-            const { error } = await supabase
-              .from("flash_sale_products")
-              .update({ flash_stock: supabase.raw(`flash_stock + ${quantity}`) })
-              .eq("product_id", product_id)
-              .eq("variant_id", variant_id || null);
-            if (error) throw new Error(`Failed to restore flash sale stock: ${error.message}`);
-            console.log(`✅ Restored ${quantity} to flash sale stock for product ${product_id}, variant ${variant_id || 'none'}`);
-          } else if (discount_source === "event") {
-            const { error } = await supabase
-              .from("event_products")
-              .update({ event_stock: supabase.raw(`event_stock + ${quantity}`) })
-              .eq("product_id", product_id)
-              .eq("variant_id", variant_id || null);
-            if (error) throw new Error(`Failed to restore event stock: ${error.message}`);
-            console.log(`✅ Restored ${quantity} to event stock for product ${product_id}, variant ${variant_id || 'none'}`);
-          } else if (discount_source === "store") {
-            const { error } = await supabase
-              .from("store_discount_items")
-              .update({ stock: supabase.raw(`stock + ${quantity}`) })
-              .eq("product_id", product_id)
-              .eq("variant_id", variant_id || null);
-            if (error) throw new Error(`Failed to restore store discount stock: ${error.message}`);
-            console.log(`✅ Restored ${quantity} to store discount stock for product ${product_id}, variant ${variant_id || 'none'}`);
-          }
+        if (discount_source === "flash") {
+          const { error } = await supabase
+            .from("flash_sale_products")
+            .update({ flash_stock: supabase.raw(`flash_stock + ${quantity}`) })
+            .eq("product_id", product_id)
+            .eq("variant_id", variant_id || null);
+          if (error) throw new Error(`Failed to restore flash sale stock: ${error.message}`);
+          console.log(`✅ Restored ${quantity} to flash sale stock for product ${product_id}, variant ${variant_id || 'none'}`);
+        } else if (discount_source === "event") {
+          const { error } = await supabase
+            .from("event_products")
+            .update({ event_stock: supabase.raw(`event_stock + ${quantity}`) })
+            .eq("product_id", product_id)
+            .eq("variant_id", variant_id || null);
+          if (error) throw new Error(`Failed to restore event stock: ${error.message}`);
+          console.log(`✅ Restored ${quantity} to event stock for product ${product_id}, variant ${variant_id || 'none'}`);
+        } else if (discount_source === "store") {
+          const { error } = await supabase
+            .from("store_discount_items")
+            .update({ stock: supabase.raw(`stock + ${quantity}`) })
+            .eq("product_id", product_id)
+            .eq("variant_id", variant_id || null);
+          if (error) throw new Error(`Failed to restore store discount stock: ${error.message}`);
+          console.log(`✅ Restored ${quantity} to store discount stock for product ${product_id}, variant ${variant_id || 'none'}`);
         } else {
-          // Restore to normal stock if discount is not active or source is normal
+          // Restore to normal stock
           if (variant_id) {
             const { data: variant, error } = await supabase
               .from("product_variants")
