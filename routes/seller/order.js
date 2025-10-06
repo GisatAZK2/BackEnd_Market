@@ -838,73 +838,199 @@ router.put("/orders/:id/status", async (req, res) => {
           variant_name: variant?.variant_name || null,
           quantity: item.quantity,
           total_price: item.price_per_item * item.quantity,
-          product_image_url: variant?.variant_image_url || safeParseJSON(product?.product_image_url)[0] || product?.product_image_url || null,
+          product_image_url: variant?.variant_image_url || safeParseJSON(product?.product_image_url)?.[0] || product?.product_image_url || null,
           discount_source: item.discount_source,
         };
       });
     };
 
-    const restoreStock = async (orderItems) => {
-      for (const item of orderItems) {
-        const { discount_source, quantity, product_id, variant_id } = item;
+      const restoreStock = async (orderItems) => {
+  console.log(`🔄 Starting stock restoration for ${orderItems.length} items...`);
+  for (const item of orderItems) {
+    const { discount_source, quantity, product_id, variant_id } = item;
 
-        if (discount_source === "flash") {
-          const { error } = await supabase
-            .from("flash_sale_products")
-            .update({ flash_stock: supabase.raw(`flash_stock + ${quantity}`) })
-            .eq("product_id", product_id)
-            .eq("variant_id", variant_id || null);
-          if (error) throw new Error(`Failed to restore flash sale stock: ${error.message}`);
-          console.log(`✅ Restored ${quantity} to flash sale stock for product ${product_id}, variant ${variant_id || 'none'}`);
-        } else if (discount_source === "event") {
-          const { error } = await supabase
-            .from("event_products")
-            .update({ event_stock: supabase.raw(`event_stock + ${quantity}`) })
-            .eq("product_id", product_id)
-            .eq("variant_id", variant_id || null);
-          if (error) throw new Error(`Failed to restore event stock: ${error.message}`);
-          console.log(`✅ Restored ${quantity} to event stock for product ${product_id}, variant ${variant_id || 'none'}`);
-        } else if (discount_source === "store") {
-          const { error } = await supabase
-            .from("store_discount_items")
-            .update({ stock: supabase.raw(`stock + ${quantity}`) })
-            .eq("product_id", product_id)
-            .eq("variant_id", variant_id || null);
-          if (error) throw new Error(`Failed to restore store discount stock: ${error.message}`);
-          console.log(`✅ Restored ${quantity} to store discount stock for product ${product_id}, variant ${variant_id || 'none'}`);
+    // Parse discount_source JSONB
+    const source = discount_source?.source || "normal";
+    const sourceId = discount_source?.id || null;
+
+    console.log(`📦 Restoring stock for item: product=${product_id}, variant=${variant_id || 'none'}, source=${source}, qty=${quantity}`);
+
+    try {
+      if (source === "flash_sale") {
+        console.log(`🔄 Fetching flash sale stock for ${sourceId}...`);
+        // Fetch current flash sale stock (tetep sama)
+        let query = supabase
+          .from("flash_sale_products")
+          .select("flash_stock")
+          .eq("id", sourceId)
+          .eq("product_id", product_id);
+
+        if (variant_id) {
+          query = query.eq("variant_id", variant_id);
         } else {
-          // Restore to normal stock
-          if (variant_id) {
-            const { data: variant, error } = await supabase
-              .from("product_variants")
-              .select("variant_stock")
-              .eq("id", variant_id)
-              .single();
-            if (error || !variant) throw new Error("Failed to fetch variant for stock restoration");
-            const newStock = (variant.variant_stock || 0) + quantity;
-            const { error: updateErr } = await supabase
-              .from("product_variants")
-              .update({ variant_stock: newStock })
-              .eq("id", variant_id);
-            if (updateErr) throw new Error("Failed to restore variant stock");
-            console.log(`✅ Restored ${quantity} to variant stock ${variant_id}`);
-          } else {
-            const { data: product, error } = await supabase
-              .from("products")
-              .select("stock")
-              .eq("id", product_id)
-              .single();
-            if (error || !product) throw new Error("Failed to fetch product for stock restoration");
-            const newStock = (product.stock || 0) + quantity;
-            const { error: updateErr } = await supabase
-              .from("products")
-              .update({ stock: newStock })
-              .eq("id", product_id);
-            if (updateErr) throw new Error("Failed to restore product stock");
-            console.log(`✅ Restored ${quantity} to product stock ${product_id}`);
-          }
+          query = query.is("variant_id", null);
         }
-      }
+
+        const { data: flashData, error: fetchError } = await query.single();
+        if (fetchError || !flashData) {
+          throw new Error(`Failed to fetch flash sale stock: ${fetchError?.message}`);
+        }
+
+        const newStock = (flashData.flash_stock || 0) + quantity;
+
+        console.log(`💾 Updating flash sale stock to ${newStock}...`);
+        // FIXED: Chain eq/is berdasarkan variant_id
+        let updateQuery = supabase
+          .from("flash_sale_products")
+          .update({ flash_stock: newStock })
+          .eq("id", sourceId)
+          .eq("product_id", product_id);
+
+        if (variant_id) {
+          updateQuery = updateQuery.eq("variant_id", variant_id);
+        } else {
+          updateQuery = updateQuery.is("variant_id", null);
+        }
+
+        const { error: updateError } = await updateQuery;
+        if (updateError) throw new Error(`Failed to restore flash sale stock: ${updateError.message}`);
+        console.log(
+          `✅ Restored ${quantity} to flash sale stock for product ${product_id}, variant ${variant_id || "none"}, flash_sale_id ${sourceId}`
+        );
+      } else if (source === "event") {
+        console.log(`🔄 Fetching event stock for ${sourceId}...`);
+        // Fetch current event stock (tetep sama)
+        let query = supabase
+          .from("event_products")
+          .select("event_stock")
+          .eq("id", sourceId)
+          .eq("product_id", product_id);
+
+        if (variant_id) {
+          query = query.eq("variant_id", variant_id);
+        } else {
+          query = query.is("variant_id", null);
+        }
+
+        const { data: eventData, error: fetchError } = await query.single();
+        if (fetchError || !eventData) {
+          throw new Error(`Failed to fetch event stock: ${fetchError?.message}`);
+        }
+
+        const newStock = (eventData.event_stock || 0) + quantity;
+
+        console.log(`💾 Updating event stock to ${newStock}...`);
+        // FIXED: Chain eq/is berdasarkan variant_id
+        let updateQuery = supabase
+          .from("event_products")
+          .update({ event_stock: newStock })
+          .eq("id", sourceId)
+          .eq("product_id", product_id);
+
+        if (variant_id) {
+          updateQuery = updateQuery.eq("variant_id", variant_id);
+        } else {
+          updateQuery = updateQuery.is("variant_id", null);
+        }
+
+        const { error: updateError } = await updateQuery;
+        if (updateError) throw new Error(`Failed to restore event stock: ${updateError.message}`);
+        console.log(
+          `✅ Restored ${quantity} to event stock for product ${product_id}, variant ${variant_id || "none"}, event_id ${sourceId}`
+        );
+      } else if (source === "store_discount") {
+        console.log(`🔄 Fetching store discount stock for ${sourceId}...`);
+        // Fetch current store discount stock (tetep sama)
+        let query = supabase
+          .from("store_discount_items")
+          .select("stock")
+          .eq("id", sourceId)
+          .eq("product_id", product_id);
+
+        if (variant_id) {
+          query = query.eq("variant_id", variant_id);
+        } else {
+          query = query.is("variant_id", null);
+        }
+
+        const { data: discountData, error: fetchError } = await query.single();
+        if (fetchError || !discountData) {
+          throw new Error(`Failed to fetch store discount stock: ${fetchError?.message}`);
+        }
+
+        const newStock = (discountData.stock || 0) + quantity;
+
+        console.log(`💾 Updating store discount stock to ${newStock}...`);
+        // FIXED: Chain eq/is berdasarkan variant_id
+        let updateQuery = supabase
+          .from("store_discount_items")
+          .update({ stock: newStock })
+          .eq("id", sourceId)
+          .eq("product_id", product_id);
+
+        if (variant_id) {
+          updateQuery = updateQuery.eq("variant_id", variant_id);
+        } else {
+          updateQuery = updateQuery.is("variant_id", null);
+        }
+
+        const { error: updateError } = await updateQuery;
+        if (updateError) throw new Error(`Failed to restore store discount stock: ${updateError.message}`);
+        console.log(
+          `✅ Restored ${quantity} to store discount stock for product ${product_id}, variant ${variant_id || "none"}, store_discount_id ${sourceId}`
+        );
+      } else {
+            // Restore to normal stock
+            if (variant_id) {
+              const { data: variant, error: fetchError } = await supabase
+                .from("product_variants")
+                .select("variant_stock")
+                .eq("id", variant_id)
+                .single();
+              if (fetchError || !variant) {
+                throw new Error(`Failed to fetch variant for stock restoration: ${fetchError?.message}`);
+              }
+
+              const newStock = (variant.variant_stock || 0) + quantity;
+              const { error: updateError } = await supabase
+                .from("product_variants")
+                .update({ variant_stock: newStock })
+                .eq("id", variant_id);
+              if (updateError) {
+                throw new Error(`Failed to restore variant stock: ${updateError.message}`);
+              }
+              console.log(`✅ Restored ${quantity} to variant stock ${variant_id}`);
+            } else {
+              const { data: product, error: fetchError } = await supabase
+                .from("products")
+                .select("stock")
+                .eq("id", product_id)
+                .single();
+              if (fetchError || !product) {
+                throw new Error(`Failed to fetch product for stock restoration: ${fetchError?.message}`);
+              }
+
+              const newStock = (product.stock || 0) + quantity;
+              const { error: updateError } = await supabase
+                .from("products")
+                .update({ stock: newStock })
+                .eq("id", product_id);
+              if (updateError) {
+                throw new Error(`Failed to restore product stock: ${updateError.message}`);
+              }
+              console.log(`✅ Restored ${quantity} to product stock ${product_id}`);
+            }
+          }
+        } catch (error) {
+      console.error(
+        `❌ Failed to restore stock for item (product_id: ${product_id}, variant_id: ${
+          variant_id || "none"
+        }, source: ${source}): ${error.message}`
+      );
+      throw error; // Re-throw to trigger transaction rollback
+    }
+  }
+  console.log(`✅ Completed stock restoration for all items`);
     };
 
     const determineNewStatus = (order, action, barcodeId) => {
@@ -1194,7 +1320,6 @@ router.put("/orders/:id/status", async (req, res) => {
     });
   }
 });
-
 // Handle Order Completion - Move balance to withdrawable
 async function handleOrderCompletion(sellerId, orderId, order) {
   try {
@@ -1257,5 +1382,4 @@ async function handleOrderCompletion(sellerId, orderId, order) {
     // Jangan throw - biarkan order tetap completed
   }
 }
-
 module.exports = router;

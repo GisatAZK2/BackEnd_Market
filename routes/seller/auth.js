@@ -1174,7 +1174,7 @@ router.delete("/seller/:id", async (req, res) => {
       };
 
       // Panggil fungsi kirim email (asumsikan endpoint atau fungsi tersedia)
-      await axios.post('http://localhost:4000/send-email-seller-deletion-request', { data: adminEmailData });
+      await axios.post(f`${SEND_URL}/send-email-seller-deletion-request`, { data: adminEmailData });
 
       res.json({ 
         message: `✅ Pengajuan penghapusan akun seller berhasil diajukan. Menunggu persetujuan admin karena ada saldo Rp ${balance.balance.toLocaleString()}. Mode: ${mode}` 

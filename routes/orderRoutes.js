@@ -967,41 +967,62 @@ router.post("/cart/checkout", async (req, res) => {
 
       // 🔹 Snapshot order items and send email
       (async () => {
-        const orderItems = itemsToCheckout
-          .filter((item) => productMap[item.productId]?.seller_id === order.seller_id)
-          .map((item) => {
-            const product = productMap[item.productId];
-            const variant = product?.variants?.find((v) => v.id === item.variantId);
-            const finalPrice = variant?.final_price ?? product?.finalPrice;
-            return {
-              product,
-              variant,
-              finalPrice,
-              discountPercentage: product?.discount_percentage ?? 0,
-              variantDiscountPercentage: variant?.applied_discount ?? 0,
-              qty: item.qty,
-              productId: item.productId,
-              variantId: item.variantId,
-            };
+        // Fetch order_items from DB to handle partial discounts correctly
+        const { data: orderItemsData, error: orderItemsError } = await supabase
+          .from("order_items")
+          .select("*")
+          .eq("order_id", order.id);
+
+        if (orderItemsError || !orderItemsData) {
+          console.error(`❌ Gagal fetch order_items untuk order ${order.id}:`, orderItemsError?.message);
+          return;
+        }
+
+        const snapshotItems = [];
+        const emailProducts = [];
+
+        for (const orderItem of orderItemsData) {
+          const product = productMap[orderItem.product_id];
+          if (!product) continue;
+
+          const variant = orderItem.variant_id ? product.variants?.find((v) => v.id === orderItem.variant_id) : null;
+
+          // Base price for discount calculation
+          const basePrice = variant ? variant.variant_price : product.product_price;
+
+          // Calculate discount percentage from price_per_item and basePrice
+          const discountPercentage = basePrice > 0 
+            ? Math.round((1 - orderItem.price_per_item / basePrice) * 100) 
+            : 0;
+
+          // Snapshot data
+          snapshotItems.push({
+            order_id: order.id,
+            product_id: orderItem.product_id,
+            product_name: product.product_name,
+            product_price: basePrice,  // Use base price as original
+            final_price: orderItem.price_per_item,
+            discount_percentage: discountPercentage,
+            product_image_url: safeParseImageUrl(product.product_image_url),
+            variant_id: variant?.id || null,
+            variant_name: variant?.variant_name || null,
+            variant_price: variant?.price ?? null,
+            variant_final_price: orderItem.price_per_item,  // Use RPC's final price
+            variant_discount_percentage: discountPercentage,
+            variant_image_url: variant?.variant_image_url || null,
           });
 
-        const snapshotItems = orderItems.map((i) => ({
-          order_id: order.id,
-          product_id: i.productId,
-          product_name: i.product.product_name,
-          product_price: i.product.price,
-          final_price: i.finalPrice,
-          discount_percentage: i.discountPercentage,
-          product_image_url: safeParseImageUrl(i.product.product_image_url),
-          variant_id: i.variant?.id || null,
-          variant_name: i.variant?.variant_name || null,
-          variant_price: i.variant?.price ?? null,
-          variant_final_price: i.variant?.final_price ?? null,
-          variant_discount_percentage: i.variantDiscountPercentage,
-          variant_image_url: i.variant?.variant_image_url || null,
-          // Note: discount_source is now handled by checkout_atomic in order_items
-        }));
+          // Email products data (separate entries for partial discounts)
+          emailProducts.push({
+            product_name: product.product_name,
+            variant_name: variant?.variant_name || null,
+            quantity: orderItem.quantity,
+            total_price: orderItem.price_per_item * orderItem.quantity,
+            product_image_url: variant?.variant_image_url || safeParseImageUrl(product.product_image_url),
+          });
+        }
 
+        // Insert snapshots
         await supabase.from("order_item_details").insert(snapshotItems);
         await supabase.from("order_details_items").insert(snapshotItems);
 
@@ -1031,14 +1052,7 @@ router.post("/cart/checkout", async (req, res) => {
 
         await axios.post(`${SEND_URL}/send-email-order`, {
           order_id: order.id,
-          products: orderItems.map((i) => ({
-            product_name: i.product.product_name,
-            variant_name: i.variant?.variant_name || null,
-            quantity: i.qty,
-            total_price: i.finalPrice * i.qty,
-            product_image_url:
-              i.variant?.variant_image_url || safeParseImageUrl(i.product.product_image_url),
-          })),
+          products: emailProducts,
           buyer_email: userInfo.email,
           seller_email: seller?.email,
           buyer_username: userInfo.username,
