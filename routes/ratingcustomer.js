@@ -17,7 +17,7 @@ const requireUser = (req, res, next) => {
     }
     req.user = userInfo;
     next();
-  } catch (err) {
+  } catch {
     return res.status(400).json({ message: "❌ Cookie user_info tidak valid." });
   }
 };

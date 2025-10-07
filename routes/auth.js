@@ -7,7 +7,6 @@ const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 const multer = require("multer");
 const sharp = require("sharp");
 const path = require("path");
-const fs = require("fs");
 const axios = require("axios");
 const detectSpam = require("../middleware/detectSpam");
 const verifyCaptcha = require("../middleware/verifyCaptcha");
@@ -46,12 +45,6 @@ const validTypes = [
 });
 
 
-// helper buat hapus field undefined/null
-function clean(obj) {
-  return Object.fromEntries(
-    Object.entries(obj).filter(([_, v]) => v !== undefined && v !== null)
-  );
-}
 
 
 // ======================== REGISTER ========================
@@ -424,14 +417,12 @@ router.post("/user/change-pin/:id", async (req, res) => {
       return res.status(400).json({ error: "PIN harus 4-6 digit." });
     }
 
-    // ✅ Ambil email dari cookies user_info
-    let email = null;
-    try {
+   /* try {
       const userInfo = req.cookies?.user_info ? JSON.parse(req.cookies.user_info) : null;
       email = userInfo?.email || null;
     } catch (err) {
       console.error("❌ Error parsing cookies user_info:", err.message);
-    }
+    }*/
 
     // Ambil balance user
     const { data: balance, error: balanceError } = await supabase
@@ -536,7 +527,7 @@ router.get("/user/:id", async (req, res) => {
   let userInfo;
   try {
     userInfo = JSON.parse(cookie);
-  } catch (e) {
+  } catch{
     return res.status(400).json({ error: "Cookie tidak valid." });
   }
 
@@ -950,7 +941,7 @@ router.delete("/user/:id", async (req, res) => {
   let userInfo;
   try {
     userInfo = JSON.parse(cookie);
-  } catch (e) {
+  } catch {
     return res.status(400).json({ error: "Cookie tidak valid." });
   }
 

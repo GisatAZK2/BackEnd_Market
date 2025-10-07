@@ -1,7 +1,6 @@
 const express = require("express");
 const supabase = require("../../config/supabase");
 const router = express.Router();
-const { DateTime } = require("luxon");
 const QRCode = require('qrcode');
 const PDFDocument = require('pdfkit');
 const axios = require('axios');
@@ -232,8 +231,7 @@ router.post("/seller/generate-awb", async (req, res) => {
           .font("Helvetica")
           .text(sellerFullAddress, 25, 90, { width: 105 });
         
-        var receiverBottom = 90 + hAddr + 5;
-      }
+        }
 
       // Sender information
       if (order.pickup_method.toLowerCase() === "diantar") {
@@ -285,8 +283,6 @@ router.post("/seller/generate-awb", async (req, res) => {
           .fontSize(7)
           .font("Helvetica")
           .text(`Kota: ${order.buyer?.kota_kabupaten || "-"}`, 145, ySend, { width: 85 });
-
-        var senderBottom = ySend + 10;
       }
 
       // Dynamic Y start for product
@@ -333,9 +329,6 @@ router.post("/seller/generate-awb", async (req, res) => {
         y += item.variant_name ? 25 : 20;
       });
 
-      // Calculate product section height
-      const productSectionHeight = y - yStart;
-      
       // Prices section - only show for delivery
       if (order.pickup_method.toLowerCase() === "diantar") {
         doc.roundedRect(20, y + 10, 95, 30, 4).fillColor("#dbeafe").fill();

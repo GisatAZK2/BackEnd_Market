@@ -1,5 +1,4 @@
 const express = require("express");
-const path = require("path");
 const multer = require("multer");
 const { v4: uuidv4 } = require("uuid");
 const sharp = require("sharp");
@@ -7,8 +6,6 @@ const supabase = require("../config/supabase");
 const generateKeywords = require("../utils/keywordGenerator");
 const seedrandom = require("seedrandom");
 const {
-  applyDiscount,
-  getActiveDiscountForProduct,
   attachVariantsStockDiscountWithRealDiscount,
 } = require("../utils/applyDiscountAndVariants");
 const NodeCache = require("node-cache");

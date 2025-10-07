@@ -13,7 +13,7 @@ function getUserFromCookie(req) {
     return typeof req.cookies.user_info === "string"
       ? JSON.parse(req.cookies.user_info)
       : req.cookies.user_info;
-  } catch (e) {
+  } catch {
     return null;
   }
 }

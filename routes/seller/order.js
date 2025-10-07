@@ -3,11 +3,8 @@
 const express = require("express");
 const supabase = require("../../config/supabase");
 const axios = require("axios");
-const QRCode = require("qrcode");
-const PDFDocument = require("pdfkit");
 const router = express.Router();
 
-const SEND_URL = process.env.SEND_SERVICE_URL;
 const CRYPTO_SECRET_KEY = process.env.CRYPTO_SECRET_KEY || "please_set_a_real_secret_in_env";
 
 const NodeCache = require("node-cache");
@@ -288,7 +285,7 @@ router.get("/seller/all", async (req, res) => {
 
           const { alamat_lengkap = "", kelurahan = "", kecamatan = "", kota_kabupaten = "", provinsi = "", kode_pos = "" } = buyerInfo;
           buyerFullAddress = [alamat_lengkap, kelurahan, kecamatan, kota_kabupaten, provinsi, kode_pos].filter(Boolean).join(", ");
-        } catch (e) {
+        } catch {
           console.warn("⚠️ Gagal parse buyer_address:", order.buyer_address);
         }
       }
@@ -302,7 +299,7 @@ router.get("/seller/all", async (req, res) => {
 
           const { store_address = "", kelurahan = "", kecamatan = "", kota_kabupaten = "", provinsi = "" } = sellerData;
           sellerFullAddress = [store_address, kelurahan, kecamatan, kota_kabupaten, provinsi].filter(Boolean).join(", ");
-        } catch (e) {
+        } catch {
           console.warn("⚠️ Gagal parse seller_address:", order.seller_address);
         }
       }
@@ -432,7 +429,7 @@ router.get("/seller/cancelled", async (req, res) => {
 
           const { alamat_lengkap = "", kelurahan = "", kecamatan = "", kota_kabupaten = "", provinsi = "", kode_pos = "" } = buyerInfo;
           buyerFullAddress = [alamat_lengkap, kelurahan, kecamatan, kota_kabupaten, provinsi, kode_pos].filter(Boolean).join(", ");
-        } catch (e) {
+        } catch {
           console.warn("⚠️ Gagal parse buyer_address:", order.buyer_address);
         }
       }
@@ -445,7 +442,7 @@ router.get("/seller/cancelled", async (req, res) => {
 
           const { store_address = "", kelurahan = "", kecamatan = "", kota_kabupaten = "", provinsi = "" } = sellerData;
           sellerFullAddress = [store_address, kelurahan, kecamatan, kota_kabupaten, provinsi].filter(Boolean).join(", ");
-        } catch (e) {
+        } catch {
           console.warn("⚠️ Gagal parse seller_address:", order.seller_address);
         }
       }
@@ -571,7 +568,7 @@ router.get("/seller/completed", async (req, res) => {
 
           const { alamat_lengkap = "", kelurahan = "", kecamatan = "", kota_kabupaten = "", provinsi = "", kode_pos = "" } = buyerInfo;
           buyerFullAddress = [alamat_lengkap, kelurahan, kecamatan, kota_kabupaten, provinsi, kode_pos].filter(Boolean).join(", ");
-        } catch (e) {
+        } catch {
           console.warn("⚠️ Gagal parse buyer_address:", order.buyer_address);
         }
       }
@@ -584,7 +581,7 @@ router.get("/seller/completed", async (req, res) => {
 
           const { store_address = "", kelurahan = "", kecamatan = "", kota_kabupaten = "", provinsi = "" } = sellerData;
           sellerFullAddress = [store_address, kelurahan, kecamatan, kota_kabupaten, provinsi].filter(Boolean).join(", ");
-        } catch (e) {
+        } catch {
           console.warn("⚠️ Gagal parse seller_address:", order.seller_address);
         }
       }
@@ -694,7 +691,7 @@ router.get("/seller/:orderId", async (req, res) => {
 
         const { alamat_lengkap = "", kelurahan = "", kecamatan = "", kota_kabupaten = "", provinsi = "", kode_pos = "" } = buyerInfo;
         buyerFullAddress = [alamat_lengkap, kelurahan, kecamatan, kota_kabupaten, provinsi, kode_pos].filter(Boolean).join(", ");
-      } catch (e) {
+      } catch {
         console.warn("⚠️ Gagal parse buyer_address:", orderData.buyer_address);
       }
     }
@@ -709,7 +706,7 @@ router.get("/seller/:orderId", async (req, res) => {
 
         const { store_address = "", kelurahan = "", kecamatan = "", kota_kabupaten = "", provinsi = "" } = sellerData;
         sellerFullAddress = [store_address, kelurahan, kecamatan, kota_kabupaten, provinsi].filter(Boolean).join(", ");
-      } catch (e) {
+      } catch {
         console.warn("⚠️ Gagal parse seller_address:", orderData.seller_address);
       }
     }
@@ -1033,7 +1030,7 @@ router.put("/orders/:id/status", async (req, res) => {
   console.log(`✅ Completed stock restoration for all items`);
     };
 
-    const determineNewStatus = (order, action, barcodeId) => {
+    const determineNewStatus = ( order, action ) => {
       const now = DateTime.now().setZone("Asia/Jakarta");
       const payload = {};
       let status = "";
@@ -1343,13 +1340,12 @@ async function handleOrderCompletion(sellerId, orderId, order) {
 
     console.log(`💸 Distribution - Gross: ${grossAmount}, Net: ${netToSeller}`);
 
-    // Simulasi: balance total sudah di-credit saat payment confirmed
     // Sekarang pindahkan ke withdrawable
     const newTotalBalance = currentBalance.balance; // Tetap sama
     const newWithdrawableBalance = currentBalance.withdrawable_balance + netToSeller;
 
     // Update balances di Supabase
-    const { data: balanceData, error: balanceError } = await supabase
+    const { error: balanceError } = await supabase
       .from("seller_balances")
       .update({
         balance: newTotalBalance,

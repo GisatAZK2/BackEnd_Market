@@ -4,7 +4,6 @@ const supabase = require("../../config/supabase");
 const crypto = require("crypto");
 const { v4: uuidv4 } = require("uuid");
 const fetch = require("node-fetch");
-const bcrypt = require("bcryptjs");
 const {Listpaymentchanel} = require("../../utils/listpaymentchanel");
 
 // ===== Utility =====

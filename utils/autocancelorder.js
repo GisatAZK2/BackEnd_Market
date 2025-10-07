@@ -66,22 +66,6 @@ async function recordSellerTransaction({ sellerId, amount, type, orderId = null,
   return data;
 }
 
-async function mintSellerBalance(sellerId, amount, opts = {}) {
-  if (amount <= 0) throw new Error("Amount harus > 0");
-  const current = await getSellerBalance(sellerId);
-  const newBalance = current.balance + Number(amount);
-  const newWithdrawableBalance = current.withdrawable_balance;
-  await upsertSellerBalance(sellerId, newBalance, newWithdrawableBalance);
-  await recordSellerTransaction({
-    sellerId,
-    amount,
-    type: "credit",
-    orderId: opts.orderId || null,
-    metadata: opts.metadata || {},
-  });
-  return newBalance;
-}
-
 async function withdrawSellerBalance(sellerId, amount, opts = {}) {
   if (amount <= 0) throw new Error("Amount harus > 0");
   const current = await getSellerBalance(sellerId);

@@ -3,7 +3,6 @@ const router = express.Router();
 const supabase = require("../config/supabase");
 const axios = require("axios");
 const bcrypt = require("bcrypt"); 
-const { Xendit } = require("xendit-node");
 const { DateTime } = require("luxon");
 const crypto = require("crypto");
 const NodeCache = require("node-cache");
@@ -37,19 +36,11 @@ if (!CRYPTO_SECRET_KEY) {
   console.warn("⚠️ CRYPTO_SECRET_KEY belum diset - signatures tidak aman.");
 }
 
-// ==============================
-// Xendit init
-// ==============================
-const xendit = new Xendit({ secretKey: XENDIT_SECRET_KEY });
-
 const XENDIT_BASE_URL = "https://api.xendit.co";
 
 // Cache setup
 const cache = new NodeCache({ stdTTL: 60, checkperiod: 120 });
 const orderCache = new NodeCache({ stdTTL: 30, checkperiod: 60 });
-
-const cacheGet = (k) => cache.get(k);
-const cacheSet = (k, v, ttlSec = 60) => cache.set(k, v, ttlSec);
 
 // Helper crypto utilities
 function signPayload(payload) {
@@ -197,22 +188,6 @@ async function recordUserTransaction({ userId, amount, type, orderId = null, met
   return data;
 }
 
-async function mintUserBalance(userId, amount, opts = {}) {
-  if (amount <= 0) throw new Error("Amount harus > 0");
-  const current = await getUserBalance(userId);
-  const newBalance = Number(current.balance) + Number(amount);
-  const newWithdrawableBalance = Number(current.balance) + Number(amount);
-  await upsertUserBalance(userId, newBalance, newWithdrawableBalance);
-  await recordUserTransaction({
-    userId,
-    amount,
-    type: "credit",
-    orderId: opts.orderId || null,
-    metadata: opts.metadata || {},
-  });
-  return newBalance;
-}
-
 async function withdrawUserBalance(userId, amount, opts = {}) {
   if (amount <= 0) throw new Error("Amount harus > 0");
   const current = await getUserBalance(userId);
@@ -243,10 +218,6 @@ function safeParseImageUrl(data) {
   } catch {
     return data; // Fallback kalau bukan JSON valid
   }
-}
-
-function formatCurrencyNumber(v) {
-  return Math.round(Number(v));
 }
 
 // ======================
@@ -1155,7 +1126,7 @@ router.post("/cart/delivery-fee", async (req, res) => {
     if (!products) {
       const { data, error } = await supabase
         .from("products")
-        .select("id, seller_id, product_price, product_name, product_image_url")
+        .select("id, seller_id, product_price, product_name, product_image_url, stock")
         .in("id", productIds);
 
       if (error || !data?.length) {
@@ -1232,8 +1203,17 @@ router.post("/cart/delivery-fee", async (req, res) => {
 
         const totalProduk = group.items.reduce((sum, item) => {
           const productData = productMap.get(item.productId);
-          const price =
-            productData?.finalPrice ?? productData?.product_price ?? 0;
+          let price = productData?.product_price ?? 0;
+
+          // Jika ada varian, cari harga varian
+          if (item.variantId && productData?.variants?.length) {
+            const variant = productData.variants.find(v => v.id === item.variantId);
+            price = variant?.final_price ?? variant?.variant_price ?? price;
+          } else {
+            // Gunakan finalPrice jika ada diskon, kalau tidak pakai product_price
+            price = productData?.finalPrice ?? productData?.product_price ?? 0;
+          }
+
           return sum + price * (item.qty || 1);
         }, 0);
 
@@ -1302,36 +1282,36 @@ router.post("/cart/delivery-fee", async (req, res) => {
     // =============================
     // 6. Ambil wallet & payment methods
     // =============================
-      const wallet = await getUserBalance(userInfo.id);
+    const wallet = await getUserBalance(userInfo.id);
 
-      // ✅ Ambil daftar channel dari Xendit
-      const channels = await getXenditChannels();
+    // ✅ Ambil daftar channel dari Xendit
+    const channels = await getXenditChannels();
 
-      // ✅ Ambil logo + limits dari util
-      const { CHANNEL_LOGOS, CHANNEL_LIMITS } = await Listpaymentchanel();
+    // ✅ Ambil logo + limits dari util
+    const { CHANNEL_LOGOS, CHANNEL_LIMITS } = await Listpaymentchanel();
 
-      // 🚀 Mapping channels dengan filter min/max + logo
-      const mappedChannels = channels.map((c) => {
-        const limits = CHANNEL_LIMITS[c.channel_code] || {};
-        const logo = CHANNEL_LOGOS[c.channel_code] || null;
+    // 🚀 Mapping channels dengan filter min/max + logo
+    const mappedChannels = channels.map((c) => {
+      const limits = CHANNEL_LIMITS[c.channel_code] || {};
+      const logo = CHANNEL_LOGOS[c.channel_code] || null;
 
-        const isAvailable =
-          grandTotalSemua >= (limits.min_amount || 0) &&
-          (limits.max_amount ? grandTotalSemua <= limits.max_amount : true);
+      const isAvailable =
+        grandTotalSemua >= (limits.min_amount || 0) &&
+        (limits.max_amount ? grandTotalSemua <= limits.max_amount : true);
 
-        return {
-          channel_code: c.channel_code,
-          name: c.name,
-          type: c.channel_category,
-          is_enabled: c.is_enabled,
-          currency: c.currency,
-          logo,
-          min_amount: limits.min_amount || 0,
-          max_amount: limits.max_amount || null,
-          available: isAvailable,
-          note: isAvailable ? "bisa bayar" : "tidak bisa bayar",
-        };
-      });
+      return {
+        channel_code: c.channel_code,
+        name: c.name,
+        type: c.channel_category,
+        is_enabled: c.is_enabled,
+        currency: c.currency,
+        logo,
+        min_amount: limits.min_amount || 0,
+        max_amount: limits.max_amount || null,
+        available: isAvailable,
+        note: isAvailable ? "bisa bayar" : "tidak bisa bayar",
+      };
+    });
 
     // =============================
     // 7. Return response

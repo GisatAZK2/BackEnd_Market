@@ -4,7 +4,6 @@ const multer = require("multer");
 const sharp = require("sharp");
 const { v4: uuidv4 } = require("uuid");
 const { DateTime } = require("luxon");
-const cron = require("node-cron");
 const {
   attachVariantsStockDiscount,
   attachVariantsStockDiscountWithRealDiscount,

@@ -5,14 +5,13 @@ const supabase = require("../config/supabase");
 const {
   attachVariantsStockDiscountWithRealDiscount,
 } = require("../utils/applyDiscountAndVariants");
-const { DateTime } = require("luxon");
+
 const NodeCache = require("node-cache");
 const cache = new NodeCache({ stdTTL: 10 });
 
 //file mendapatkan semua seller
 // GET Semua seller + produk + total produk terjual + followers
 router.get("/allseller", async (req, res) => {
-  const cached = cache.get("all_sellers_with_products");
   const userInfo = req.cookies?.user_info ? JSON.parse(req.cookies.user_info) : null;
 
   try {

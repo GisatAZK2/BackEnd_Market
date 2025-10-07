@@ -31,7 +31,7 @@ router.get('/:id', async (req, res) => {
       if (Array.isArray(parsed) && parsed.length > 0) {
         ogImage = parsed[0];
       }
-    } catch (e) {
+    } catch {
       if (product.product_image_url) ogImage = product.product_image_url;
     }
 

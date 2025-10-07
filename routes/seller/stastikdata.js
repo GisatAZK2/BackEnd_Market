@@ -261,7 +261,7 @@ router.get("/order/daily", async (req, res) => {
           buyerInfo = typeof order.buyer_address === "string"
             ? JSON.parse(order.buyer_address)
             : order.buyer_address;
-        } catch (e) {
+        } catch {
           console.warn("⚠️ Gagal parse buyer_address:", order.buyer_address);
         }
       }

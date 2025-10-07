@@ -11,7 +11,7 @@ const getUnifiedSellerName = (seller) => {
 };
 
 // Helper function to attach ratings and followers
-const attachRatingsAndFollowers = async (sellers) => {
+const attachRatingsAndFollowers = async () => {
   // Get ratings
   const { data: ratings, error: ratingError } = await supabase
     .from("ratings")

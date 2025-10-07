@@ -7,22 +7,16 @@ const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 const multer = require("multer");
 const sharp = require("sharp");
 const path = require("path");
-const fs = require("fs");
 const axios = require("axios");
 const detectSpam = require("../../middleware/detectSpam");
 const verifyCaptcha = require("../../middleware/verifyCaptcha");
 const fetch = require("node-fetch");
-const { v4: uuidv4 } = require("uuid");
-
-
 
 const router = express.Router();
 const storage = multer.memoryStorage();
 const upload = multer({ storage });
 
-
 const SEND_URL = process.env.SEND_SERVICE_URL;
-
 
 router.post(
   "/register",
@@ -967,7 +961,7 @@ router.post("/login/google", async (req, res) => {
       const otp = Math.floor(100000 + Math.random() * 900000).toString();
       const expiresAt = new Date(Date.now() + 5 * 60 * 1000).toISOString();
 
-      const { error: insertErr, data: newUser } = await supabase.from("users").insert([{
+      const { error: insertErr } = await supabase.from("users").insert([{
         email,
         username,
         password: null,
@@ -1104,7 +1098,7 @@ router.delete("/seller/:id", async (req, res) => {
   let sellerInfo;
   try {
     sellerInfo = JSON.parse(cookie);
-  } catch (err) {
+  } catch {
     return res.status(400).json({ error: "❌ Cookie seller tidak valid." });
   }
 
@@ -1174,7 +1168,7 @@ router.delete("/seller/:id", async (req, res) => {
       };
 
       // Panggil fungsi kirim email (asumsikan endpoint atau fungsi tersedia)
-      await axios.post(f`${SEND_URL}/send-email-seller-deletion-request`, { data: adminEmailData });
+      await axios.post(`${SEND_URL}/send-email-seller-deletion-request`, { data: adminEmailData });
 
       res.json({ 
         message: `✅ Pengajuan penghapusan akun seller berhasil diajukan. Menunggu persetujuan admin karena ada saldo Rp ${balance.balance.toLocaleString()}. Mode: ${mode}` 

@@ -1,21 +1,11 @@
 const express = require("express");
 const supabase = require("../../config/supabase");
-const multer = require("multer");
-const sharp = require("sharp");
-const { v4: uuidv4 } = require("uuid");
 const { DateTime } = require("luxon");
-const cron = require("node-cron");
 const {
-  attachVariantsStockDiscount,
   attachVariantsStockDiscountWithRealDiscount,
 } = require("../../utils/applyDiscountAndVariants");
 
 const router = express.Router();
-
-const upload = multer({ limits: { fileSize: 10 * 1024 * 1024 } });
-async function convertToWebp(buffer) {
-  return sharp(buffer).webp({ quality: 80 }).toBuffer();
-}
 
 /* ===== STORE DISCOUNT CREATE ===== */
 // ================= CREATE DISCOUNT =================
@@ -1589,7 +1579,7 @@ router.post("/event/register", async (req, res) => {
     return res.status(400).json({ message: "❌ event_id & products wajib" });
   }
 
-  const { data: event, error: eventError } = await supabase
+  const { data: event } = await supabase
     .from("events")
     .select("*, categories, min_stock, min_discount")
     .eq("id", event_id)
@@ -2026,7 +2016,9 @@ router.get("/event/:eventId/available-products", async (req, res) => {
             if (Array.isArray(parsed)) {
               eventCategoryIds.push(...parsed);
             }
-          } catch (_) {}
+          } catch {
+            // skip invalid JSON
+          }
         }
       });
     }
@@ -2038,8 +2030,6 @@ router.get("/event/:eventId/available-products", async (req, res) => {
       .eq("event_id", eventId);
 
     if (epError) throw epError;
-
-    const usedProductIds = [...new Set(eventProducts.map((ep) => ep.product_id))];
 
     // === Ambil semua produk seller ===
     const { data: products, error: prodError } = await supabase

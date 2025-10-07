@@ -2,21 +2,13 @@ const express = require("express");
 const router = express.Router();
 const supabase = require("../config/supabase");
 const axios = require("axios");
-const { Xendit } = require("xendit-node");
 const { DateTime } = require("luxon");
 const crypto = require("crypto");
-const NodeCache = require("node-cache");
-const bcrypt = require("bcryptjs");
-const { v4: uuidv4 } = require("uuid");
-const {
-  attachVariantsStockDiscountWithRealDiscount
-} = require("../utils/applyDiscountAndVariants");
 
 // Environment variables
 const SEND_URL = process.env.SEND_SERVICE_URL;
 const XENDIT_SECRET_KEY = process.env.XENDIT_SECRET_KEY;
 const WITHDRAW_SECRET = process.env.WITHDRAW_SECRET || "please_set_a_real_withdraw_secret_in_env";
-const FRONTEND_URL = process.env.FRONTEND_URL;
 const CRYPTO_SECRET_KEY = process.env.CRYPTO_SECRET_KEY || "please_set_a_real_secret_in_env";
 
 if (!XENDIT_SECRET_KEY) {
@@ -28,17 +20,6 @@ if (!CRYPTO_SECRET_KEY) {
 if (!WITHDRAW_SECRET) {
   console.warn("⚠️ WITHDRAW_SECRET belum diset - withdrawal signatures tidak aman.");
 }
-
-// Xendit init
-const xendit = new Xendit({ secretKey: XENDIT_SECRET_KEY });
-const { Invoice } = xendit;
-
-// Cache setup
-const cache = new NodeCache({ stdTTL: 60, checkperiod: 120 });
-const orderCache = new NodeCache({ stdTTL: 30, checkperiod: 60 });
-
-const cacheGet = (k) => cache.get(k);
-const cacheSet = (k, v, ttlSec = 60) => cache.set(k, v, ttlSec);
 
 // ===== Utility: stable stringify =====
 function stableStringify(obj) {
@@ -77,24 +58,6 @@ function mapXenditToDBStatus(xStatus) {
     canceled: "cancelled",
   };
   return mapping[s] || s;
-}
-
-// Helper function to parse image URLs
-function safeParseImageUrl(data) {
-  if (!data) return null;
-  try {
-    const parsed = JSON.parse(data);
-    if (Array.isArray(parsed) && parsed.length > 0) {
-      return parsed[0];
-    }
-    return typeof parsed === "string" ? parsed : null;
-  } catch {
-    return data; // Fallback kalau bukan JSON valid
-  }
-}
-
-function formatCurrencyNumber(v) {
-  return Math.round(Number(v));
 }
 
 // Helper DB wallet operations for sellers
@@ -264,26 +227,6 @@ async function mintUserBalance(userId, amount, opts = {}) {
   });
   return newBalance;
 }
-
-async function withdrawUserBalance(userId, amount, opts = {}) {
-  if (amount <= 0) throw new Error("Amount harus > 0");
-  const current = await getUserBalance(userId);
-  if (Number(current.withdrawable_balance) < Number(amount)) {
-    throw new Error("Insufficient withdrawable funds");
-  }
-  const newBalance = Number(current.balance) - Number(amount);
-  const newWithdrawableBalance = Number(current.withdrawable_balance) - Number(amount);
-  await upsertUserBalance(userId, newBalance, newWithdrawableBalance);
-  await recordUserTransaction({
-    userId,
-    amount,
-    type: "debit",
-    orderId: opts.orderId || null,
-    metadata: opts.metadata || {},
-  });
-  return newBalance;
-}
-
 
 // 🔔 Webhook untuk payment order
 // ==================================

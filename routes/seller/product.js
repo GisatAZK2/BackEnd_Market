@@ -1,12 +1,10 @@
 const express = require("express");
-const path = require("path");
 const multer = require("multer");
 const { v4: uuidv4 } = require("uuid");
 const sharp = require("sharp");
 const supabase = require("../../config/supabase");
 const generateKeywords = require("../../utils/keywordGenerator");
 const {
-  applyDiscount,
   attachVariantsStockDiscountWithRealDiscount,
 } = require("../../utils/applyDiscountAndVariants");
 const NodeCache = require("node-cache");
@@ -218,7 +216,7 @@ router.get("/allproduct", async (req, res) => {
   let sellerInfo;
   try {
     sellerInfo = JSON.parse(sellerCookie);
-  } catch (e) {
+  } catch {
     return res.status(400).json({ message: "❌ Cookie seller tidak valid" });
   }
 
@@ -288,7 +286,7 @@ router.get("/by-category/:category_id", async (req, res) => {
   let sellerInfo;
   try {
     sellerInfo = JSON.parse(sellerCookie);
-  } catch (e) {
+  } catch {
     return res.status(400).json({ message: "❌ Cookie seller tidak valid" });
   }
 
@@ -355,7 +353,7 @@ router.get("/:id", async (req, res) => {
   let sellerInfo;
   try {
     sellerInfo = JSON.parse(sellerCookie);
-  } catch (e) {
+  } catch {
     return res.status(400).json({ message: "❌ Cookie seller tidak valid" });
   }
 
