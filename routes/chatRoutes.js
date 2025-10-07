@@ -6,69 +6,47 @@ const cookieParser = require("cookie-parser");
 module.exports = (app, server) => {
   const GO_CHAT_SERVICE = process.env.GO_CHAT_SERVICE || "http://localhost:8080";
 
-  // Define separate allowed origins for customer and seller
-  const allowedCustomerOrigins = process.env.CORS_ORIGIN_CUSTOMER
-    ? process.env.CORS_ORIGIN_CUSTOMER.split(",").map((o) => o.trim())
-    : [];
-  const allowedSellerOrigins = process.env.CORS_ORIGIN_SELLER
-    ? process.env.CORS_ORIGIN_SELLER.split(",").map((o) => o.trim())
-    : [];
+ app.use(
+  cors({
+    origin: (origin, callback) => {
+      console.log("Request Origin:", origin);
+      console.log("Allowed Origins:", process.env.CORS_ORIGIN);
+      if (!origin) return callback(null, true);
 
-  // Dynamic CORS configuration based on request path
-  const dynamicCors = (req, cb) => {
-    const isSellerPath =
-      req.originalUrl.includes("/seller/v1") ||
-      req.originalUrl.startsWith("/ws-seller");
+      const allowedOrigins = process.env.CORS_ORIGIN
+        ? process.env.CORS_ORIGIN.split(",").map((o) => o.trim())
+        : [];
 
-    const allowedOrigins = isSellerPath ? allowedSellerOrigins : allowedCustomerOrigins;
+      console.log("Parsed Allowed Origins:", allowedOrigins);
 
-    const options = {
-      origin: (origin, callback) => {
-        console.log("Request Origin:", origin);
-        console.log("Allowed Origins for this path:", allowedOrigins);
-        if (!origin) return callback(null, true);
+      if (
+        process.env.NODE_ENV !== "production" &&
+        origin.includes("localhost")
+      ) {
+        console.log("Allowing localhost in non-production");
+        return callback(null, true);
+      }
 
-        const cleanedOrigin = origin.replace(/\/$/, "");
+      if (allowedOrigins.includes(origin)) {
+        console.log("Origin allowed:", origin);
+        return callback(null, true);
+      }
 
-        // Special allowance for sharecihuy.sytes.net (consistent with main app)
-        if (cleanedOrigin === "https://sharecihuy.sytes.net") {
-          console.log("Allowing special origin: https://sharecihuy.sytes.net");
-          return callback(null, true);
-        }
-
-        if (
-          process.env.NODE_ENV !== "production" &&
-          origin.includes("localhost")
-        ) {
-          console.log("Allowing localhost in non-production");
-          return callback(null, true);
-        }
-
-        if (allowedOrigins.includes(cleanedOrigin)) {
-          console.log("Origin allowed:", origin);
-          return callback(null, true);
-        }
-
-        return callback(new Error("Not allowed by CORS (chat)"));
-      },
-      credentials: true,
-      allowedHeaders: [
-        "Content-Type",
-        "Authorization",
-        "X-Requested-With",
-        "Accept",
-        "Origin",
-        "x-api-key",
-        "ngrok-skip-browser-warning"
-      ],
-      methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    };
-
-    cb(null, options);
-  };
-
-  // Apply dynamic CORS globally, but since chat routes are specific, it will use path-based logic
-  app.use(cors(dynamicCors));
+      return callback(new Error("Not allowed by CORS (chat)"));
+    },
+    credentials: true,
+    allowedHeaders: [
+      "Content-Type",
+      "Authorization",
+      "X-Requested-With",
+      "Accept",
+      "Origin",
+      "x-api-key",
+      "ngrok-skip-browser-warning"
+    ],
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+  })
+);
   app.use(cookieParser());
 
   // === Proxy REST ke Go service ===
