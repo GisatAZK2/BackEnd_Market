@@ -330,7 +330,6 @@ router.get("/store-discount/all", async (req, res) => {
 });
 
 // ================= GET DISCOUNT =================
-// ================= GET DISCOUNT (Produk + Variants) =================
 router.get("/store-discount/:id", async (req, res) => {
   const sellerInfo = req.cookies?.seller_info
     ? JSON.parse(req.cookies.seller_info)
@@ -343,7 +342,7 @@ router.get("/store-discount/:id", async (req, res) => {
   const { id } = req.params;
 
   try {
-    // Ambil diskon utama
+    // 🔹 Fetch main discount
     const { data: discount, error } = await supabase
       .from("store_discounts")
       .select("*")
@@ -355,69 +354,133 @@ router.get("/store-discount/:id", async (req, res) => {
       return res.status(404).json({ message: "❌ Diskon tidak ditemukan" });
     }
 
-    // Ambil items diskon
-    const { data: rawItems = [] } = await supabase
+    // 🔹 Fetch discount items (produk yang termasuk diskon)
+    const { data: rawItems = [], error: itemsError } = await supabase
       .from("store_discount_items")
       .select(`
         id,
+        discount_id,
         product_id,
         variant_id,
         stock,
         discount_percentage,
-        products(*),
-        product_variants(*)
-      `)
-      .eq("discount_id", discount.id);
-
-    // Map hasil berdasarkan apakah punya variant atau tidak
-    const items = rawItems.map(
-      ({
-        id,
-        stock,
-        discount_percentage,
-        product_id,
-        variant_id,
-        products,
-        product_variants,
-      }) => {
-        // Jika ada variant_id → masuk ke dalam product_variants
-        if (variant_id && product_variants) {
-          return {
-            id,
-            product_id,
-            variant_id,
-            products,
-            product_variants: {
-              ...product_variants,
-              store_discount_stock: stock,
-              discount_percentage,
-            },
-          };
-        }
-
-        // Jika tidak ada variant → tetap taruh di level item
-        return {
+        products (
           id,
-          product_id,
-          variant_id,
-          store_discount_stock: stock,
-          discount_percentage,
-          products,
-          product_variants,
-        };
-      }
-    );
+          product_name,
+          product_image_url,
+          stock
+        )
+      `)
+      .eq("discount_id", discount.id)
+      .order("id", { ascending: true });
 
+    if (itemsError) {
+      console.error("❌ Error fetching discount items:", itemsError);
+      return res.status(500).json({
+        message: "❌ Error server",
+        error: itemsError.message,
+      });
+    }
+
+    // 🔹 Fetch variants separately for reliability
+    const variantIds = [...new Set(rawItems.filter(item => item.variant_id).map(item => item.variant_id))];
+    let variantsMap = {};
+    if (variantIds.length > 0) {
+      const { data: variants, error: vError } = await supabase
+        .from("product_variants")
+        .select("id, variant_name, variant_image_url, variant_stock")
+        .in("id", variantIds);
+      if (!vError && variants) {
+        variantsMap = variants.reduce((acc, v) => {
+          acc[v.id] = v;
+          return acc;
+        }, {});
+      } else {
+        console.error("❌ Error fetching variants:", vError);
+      }
+    }
+
+    // 🔹 Fallback image default
+    const fallbackImage = "/images/fallback-placeholder.png";
+
+    // 🔹 Mapping rawItems → mappedItems
+    const mappedItems = rawItems.map((item) => {
+      const {
+        id,
+        product_id: originalProductId,
+        variant_id,
+        stock: allocatedStock,
+        discount_percentage,
+        products,
+      } = item;
+
+      const product_variants = variant_id ? variantsMap[variant_id] : null;
+
+      // 🔹 Tentukan gambar utama
+      let finalImage = fallbackImage;
+      if (product_variants?.variant_image_url) {
+        finalImage = product_variants.variant_image_url;
+      } else if (Array.isArray(products?.product_image_url)) {
+        finalImage = products.product_image_url[0] || fallbackImage;
+      } else if (products?.product_image_url) {
+        finalImage = products.product_image_url;
+      }
+
+      // 🔹 Tentukan nama produk
+      let finalProductName = products?.product_name || "";
+      if (product_variants?.variant_name) {
+        finalProductName = `${products?.product_name} - ${product_variants.variant_name}`;
+      }
+
+      // 🔹 Stock available
+      const finalStock = product_variants?.variant_stock ?? (products?.stock ?? 0);
+
+      // 🔹 Effective product_id for FE (composite for variants)
+      let effectiveProductId = originalProductId;
+      if (variant_id) {
+        effectiveProductId = `${originalProductId}-${variant_id}`;
+      }
+
+      return {
+        id,
+        product_id: effectiveProductId,
+        variant_id,
+        store_discount_stock: allocatedStock,
+        discount_percentage,
+        products: {
+          id: originalProductId,
+          product_name: finalProductName,
+          product_image_url: finalImage,
+          stock: finalStock,
+        },
+      };
+    });
+
+    // 🔹 Deduplikasi berdasarkan kombinasi original product_id + variant_id
+    const seen = new Set();
+    const items = mappedItems.filter((item) => {
+      const originalKey = `${item.products.id}-${item.variant_id || "no_variant"}`;
+      if (seen.has(originalKey)) return false;
+      seen.add(originalKey);
+      return true;
+    });
+
+    // 🔹 Return response
     return res.json({
       message: "✅ Diskon berhasil diambil",
-      data: { ...discount, items },
+      data: {
+        ...discount,
+        items,
+      },
     });
   } catch (err) {
     console.error("❌ Error get discount by id:", err);
-    res.status(500).json({ message: "❌ Error server", error: err.message });
+    return res.status(500).json({
+      message: "❌ Error server",
+      error: err.message,
+    });
   }
 });
-
 
 router.post("/store-discount/duplicate/:id", async (req, res) => {
   const sellerInfo = req.cookies?.seller_info
@@ -476,7 +539,6 @@ router.post("/store-discount/duplicate/:id", async (req, res) => {
 });
 
 
-// ================= EDIT DISCOUNT =================
 router.put("/store-discount/edit/:id", async (req, res) => {
   const sellerInfo = req.cookies?.seller_info
     ? JSON.parse(req.cookies.seller_info)
@@ -489,14 +551,30 @@ router.put("/store-discount/edit/:id", async (req, res) => {
 
   try {
     for (const item of items) {
+      // Parse combined product_id if it looks like product_uuid-variant_uuid (concatenated with '-')
+      let product_id_parsed = item.product_id;
+      let variant_id_parsed = null;
+      if (item.product_id.length === 73 && item.product_id[36] === '-') {
+        // Assume format: 36-char UUID + '-' + 36-char UUID
+        product_id_parsed = item.product_id.substring(0, 36);
+        variant_id_parsed = item.product_id.substring(37);
+      } else if (item.product_id.includes('|')) {
+        // Fallback for '|' separator if needed
+        const parts = item.product_id.split('|');
+        product_id_parsed = parts[0];
+        if (parts[1]) {
+          variant_id_parsed = parts[1];
+        }
+      }
+
       let query = supabase
         .from("store_discount_items")
         .select("*")
         .eq("discount_id", req.params.id)
-        .eq("product_id", item.product_id);
+        .eq("product_id", product_id_parsed);
 
-      if (item.variant_id) {
-        query = query.eq("variant_id", item.variant_id);
+      if (variant_id_parsed) {
+        query = query.eq("variant_id", variant_id_parsed);
       } else {
         query = query.is("variant_id", null);
       }
@@ -505,33 +583,34 @@ router.put("/store-discount/edit/:id", async (req, res) => {
       if (existErr) throw existErr;
 
       if (existing) {
+        // Only update if existing; do not create new
         // hitung selisih stok
         const diff = (item.stock ?? existing.stock) - existing.stock;
 
         if (diff > 0) {
           // stok bertambah → kurangi stok produk/varian
-          if (item.variant_id) {
+          if (variant_id_parsed) {
             await supabase.rpc("decrease_variant_stock", {
-              variant_id_input: item.variant_id,
+              variant_id_input: variant_id_parsed,
               qty: diff,
             });
           } else {
             await supabase.rpc("decrease_product_stock", {
-              product_id_input: item.product_id,
+              product_id_input: product_id_parsed,
               qty: diff,
             });
           }
         } else if (diff < 0) {
           // stok berkurang → balikin stok produk/varian
           const restore = Math.abs(diff);
-          if (item.variant_id) {
+          if (variant_id_parsed) {
             await supabase.rpc("increase_variant_stock", {
-              variant_id_input: item.variant_id,
+              variant_id_input: variant_id_parsed,
               qty: restore,
             });
           } else {
             await supabase.rpc("increase_product_stock", {
-              product_id_input: item.product_id,
+              product_id_input: product_id_parsed,
               qty: restore,
             });
           }
@@ -545,26 +624,8 @@ router.put("/store-discount/edit/:id", async (req, res) => {
           })
           .eq("id", existing.id);
       } else {
-        // item baru → langsung kurangi stok
-        if (item.variant_id) {
-          await supabase.rpc("decrease_variant_stock", {
-            variant_id_input: item.variant_id,
-            qty: item.stock,
-          });
-        } else {
-          await supabase.rpc("decrease_product_stock", {
-            product_id_input: item.product_id,
-            qty: item.stock,
-          });
-        }
-
-        await supabase.from("store_discount_items").insert([{
-          discount_id: req.params.id,
-          product_id: item.product_id,
-          variant_id: item.variant_id || null,
-          stock: item.stock,
-          discount_percentage: item.discount_percentage,
-        }]);
+        // Skip if not existing; do not insert new
+        console.warn(`Item not found for product_id: ${product_id_parsed}, variant_id: ${variant_id_parsed}`);
       }
     }
 
@@ -583,47 +644,72 @@ router.delete("/store-discount/:id", async (req, res) => {
   if (!sellerInfo?.id)
     return res.status(401).json({ error: "❌ Harus login sebagai seller" });
 
-  const { product_id, variant_id } = req.query;
+  const { product_id } = req.query; // variant_id might not be needed if combined
 
   try {
     if (product_id) {
+      // Parse combined product_id if it looks like product_uuid-variant_uuid (concatenated with '-')
+      let product_id_parsed = product_id;
+      let variant_id_parsed = null;
+      if (product_id.length === 73 && product_id[36] === '-') {
+        // Assume format: 36-char UUID + '-' + 36-char UUID
+        product_id_parsed = product_id.substring(0, 36);
+        variant_id_parsed = product_id.substring(37);
+      } else if (product_id.includes('|')) {
+        // Fallback for '|' separator if needed
+        const parts = product_id.split('|');
+        product_id_parsed = parts[0];
+        if (parts[1]) {
+          variant_id_parsed = parts[1];
+        }
+      }
+
       // Mode hapus item tertentu
-      const { data: itemsToDelete, error: fetchErr } = await supabase
+      let query = supabase
         .from("store_discount_items")
         .select("*")
         .eq("discount_id", req.params.id)
-        .eq("product_id", product_id)
-        .maybeSingle();
+        .eq("product_id", product_id_parsed);
 
+      if (variant_id_parsed) {
+        query = query.eq("variant_id", variant_id_parsed);
+      } else {
+        query = query.is("variant_id", null);
+      }
+
+      const { data: itemsToDelete, error: fetchErr } = await query.maybeSingle();
       if (fetchErr) return res.status(500).json({ message: "❌ Gagal ambil item", error: fetchErr.message });
 
       if (itemsToDelete) {
         // balikin stock
         const qty = itemsToDelete.stock || 0;
-        if (variant_id) {
+        if (variant_id_parsed) {
           await supabase.rpc("increase_variant_stock", {
-            variant_id_input: variant_id,
+            variant_id_input: variant_id_parsed,
             qty,
           });
         } else {
           await supabase.rpc("increase_product_stock", {
-            product_id_input: product_id,
+            product_id_input: product_id_parsed,
             qty,
           });
         }
       }
 
-      let query = supabase.from("store_discount_items").delete()
+      let deleteQuery = supabase.from("store_discount_items").delete()
         .eq("discount_id", req.params.id)
-        .eq("product_id", product_id);
+        .eq("product_id", product_id_parsed);
 
-      if (variant_id) query.eq("variant_id", variant_id);
-      else query.is("variant_id", null);
+      if (variant_id_parsed) {
+        deleteQuery = deleteQuery.eq("variant_id", variant_id_parsed);
+      } else {
+        deleteQuery = deleteQuery.is("variant_id", null);
+      }
 
-      const { error } = await query;
+      const { error } = await deleteQuery;
       if (error) return res.status(500).json({ message: "❌ Gagal hapus item", error: error.message });
 
-      return res.json({ message: `✅ Item ${product_id}${variant_id ? ' varian ' + variant_id : ''} berhasil dihapus dari diskon` });
+      return res.json({ message: `✅ Item ${product_id_parsed}${variant_id_parsed ? ' varian ' + variant_id_parsed : ''} berhasil dihapus dari diskon` });
     } else {
       // Mode hapus seluruh diskon
       const { data: allItems, error: fetchErr } = await supabase
@@ -658,7 +744,6 @@ router.delete("/store-discount/:id", async (req, res) => {
     return res.status(500).json({ message: "❌ Error server", error: err.message });
   }
 });
-
 
 /* ===== SELLER REGISTER PRODUK KE FLASH SALE ===== */
 /* ===== REGISTER PRODUK FLASH SALE ===== */

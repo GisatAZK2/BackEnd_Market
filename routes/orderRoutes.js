@@ -966,6 +966,16 @@ router.post("/cart/checkout", async (req, res) => {
             ? Math.round((1 - orderItem.price_per_item / basePrice) * 100) 
             : 0;
 
+          // Handle product_image_url: if array, take first element; otherwise, use as is
+          const parsedImageUrl = Array.isArray(product.product_image_url) 
+            ? product.product_image_url[0] || null 
+            : safeParseImageUrl(product.product_image_url);
+          const parsedVariantImageUrl = variant?.variant_image_url 
+            ? (Array.isArray(variant.variant_image_url) 
+                ? variant.variant_image_url[0] || null 
+                : safeParseImageUrl(variant.variant_image_url)) 
+            : null;
+
           // Snapshot data
           snapshotItems.push({
             order_id: order.id,
@@ -974,13 +984,13 @@ router.post("/cart/checkout", async (req, res) => {
             product_price: basePrice,  // Use base price as original
             final_price: orderItem.price_per_item,
             discount_percentage: discountPercentage,
-            product_image_url: safeParseImageUrl(product.product_image_url),
+            product_image_url: parsedImageUrl,
             variant_id: variant?.id || null,
             variant_name: variant?.variant_name || null,
             variant_price: variant?.price ?? null,
             variant_final_price: orderItem.price_per_item,  // Use RPC's final price
             variant_discount_percentage: discountPercentage,
-            variant_image_url: variant?.variant_image_url || null,
+            variant_image_url: parsedVariantImageUrl,
           });
 
           // Email products data (separate entries for partial discounts)
@@ -989,7 +999,7 @@ router.post("/cart/checkout", async (req, res) => {
             variant_name: variant?.variant_name || null,
             quantity: orderItem.quantity,
             total_price: orderItem.price_per_item * orderItem.quantity,
-            product_image_url: variant?.variant_image_url || safeParseImageUrl(product.product_image_url),
+            product_image_url: parsedVariantImageUrl || parsedImageUrl,
           });
         }
 
