@@ -59,13 +59,14 @@ async function attachVariantsStockDiscountWithRealDiscount(products) {
   const eventMap = Object.fromEntries(events.map((e) => [e.id, e]));
   const flashSaleMap = Object.fromEntries(flashSales.map((f) => [f.id, f]));
 
-  // ====== Kalkulasi Diskon dengan Prioritas ======
-  const calcDiscount = (productId, variantId = null) => {
+  // ====== Kalkulasi Diskon dan Stok dengan Prioritas ======
+  const calcDiscountAndStock = (productId, variantId = null) => {
     const activeDiscounts = {
       flash_sale: null,
       event: null,
       store_discount: null,
     };
+    let totalStock = 0; // Untuk menghitung stok total
 
     // === EVENT ===
     eventProducts
@@ -77,16 +78,19 @@ async function attachVariantsStockDiscountWithRealDiscount(products) {
       .forEach((ep) => {
         const event = eventMap[ep.event_id];
         if (!event) return;
-        if (ep.event_stock !== null && ep.event_stock <= 0) return; // stok habis
 
         const start = DateTime.fromISO(event.start_time).toUTC();
         const end = DateTime.fromISO(event.end_time).toUTC();
         if (start <= now && end >= now) {
-          activeDiscounts.event = {
-            discount: ep.event_discount,
-            source: "event",
-            details: { ...event, discount: ep.event_discount },
-          };
+          // Tambahkan stok event jika ada
+          if (ep.event_stock !== null && ep.event_stock > 0) {
+            totalStock += ep.event_stock;
+            activeDiscounts.event = {
+              discount: ep.event_discount,
+              source: "event",
+              details: { ...event, discount: ep.event_discount },
+            };
+          }
         }
       });
 
@@ -99,19 +103,20 @@ async function attachVariantsStockDiscountWithRealDiscount(products) {
       )
       .forEach((fsp) => {
         const flashSale = flashSaleMap[fsp.flash_sale_id];
-        if (!flashSale) return;
-        if (flashSale.status === "disabled") return;
-        if (fsp.flash_stock !== null && fsp.flash_stock <= 0) return; // stok habis
+        if (!flashSale || flashSale.status === "disabled") return;
 
         const start = DateTime.fromISO(flashSale.start_time).toUTC();
         const end = DateTime.fromISO(flashSale.end_time).toUTC();
-
         if (flashSale.status === "active" && start <= now && end >= now) {
-          activeDiscounts.flash_sale = {
-            discount: fsp.discount_percentage,
-            source: "flash_sale",
-            details: { ...flashSale, discount: fsp.discount_percentage },
-          };
+          // Tambahkan stok flash sale jika ada
+          if (fsp.flash_stock !== null && fsp.flash_stock > 0) {
+            totalStock += fsp.flash_stock;
+            activeDiscounts.flash_sale = {
+              discount: fsp.discount_percentage,
+              source: "flash_sale",
+              details: { ...flashSale, discount: fsp.discount_percentage },
+            };
+          }
         }
       });
 
@@ -125,11 +130,13 @@ async function attachVariantsStockDiscountWithRealDiscount(products) {
         (i) => i.product_id === productId && i.variant_id === null
       );
     if (matched?.store_discounts) {
-      if (!(matched.stock !== null && matched.stock <= 0)) {
-        const sd = matched.store_discounts;
-        const start = DateTime.fromISO(sd.start_time).toUTC();
-        const end = DateTime.fromISO(sd.end_time).toUTC();
-        if (start <= now && end >= now) {
+      const sd = matched.store_discounts;
+      const start = DateTime.fromISO(sd.start_time).toUTC();
+      const end = DateTime.fromISO(sd.end_time).toUTC();
+      if (start <= now && end >= now) {
+        // Tambahkan stok store discount jika ada
+        if (matched.stock !== null && matched.stock > 0) {
+          totalStock += matched.stock;
           activeDiscounts.store_discount = {
             discount: matched.discount_percentage,
             source: "store_discount",
@@ -153,6 +160,7 @@ async function attachVariantsStockDiscountWithRealDiscount(products) {
       discountPercentage: applied ? applied.discount : 0,
       sources: applied ? [applied.source] : [],
       details: applied ? applied.details : {},
+      totalStock, // Stok total dari semua sumber
     };
   };
 
@@ -162,46 +170,51 @@ async function attachVariantsStockDiscountWithRealDiscount(products) {
 
     // === Produk tanpa varian ===
     if (productVariants.length === 0) {
-      const discount = calcDiscount(product.id);
+      const discountAndStock = calcDiscountAndStock(product.id);
+      // Tambahkan stok asli produk dengan stok diskon dan timpa field stock
+      const totalStock = (product.stock || 0) + discountAndStock.totalStock;
       return {
         ...product,
+        stock: totalStock > 0 ? totalStock : 0, // Timpa field stock
         variants: [],
-        finalStock: product.stock,
         finalPrice: applyDiscount(
           product.product_price,
-          discount.discountPercentage
+          discountAndStock.discountPercentage
         ),
-        discountPercentage: discount.discountPercentage,
-        discountSource: discount.sources,
-        discountDetails: discount.details,
+        discountPercentage: discountAndStock.discountPercentage,
+        discountSource: discountAndStock.sources,
+        discountDetails: discountAndStock.details,
       };
     }
 
     // === Produk dengan varian ===
     const variantsWithDiscount = productVariants.map((v) => {
-      const discount = calcDiscount(product.id, v.id);
+      const discountAndStock = calcDiscountAndStock(product.id, v.id);
       const finalPrice = applyDiscount(
         v.variant_price,
-        discount.discountPercentage
+        discountAndStock.discountPercentage
       );
+      // Tambahkan stok asli varian dengan stok diskon
+      const totalStock = (v.variant_stock || 0) + discountAndStock.totalStock;
 
       return {
         id: v.id,
         variant_name: v.variant_name,
         variant_price: v.variant_price,
         variant_image_url: v.variant_image_url,
-        variant_stock: v.variant_stock,
+        variant_stock: totalStock > 0 ? totalStock : 0, // Pastikan stok tidak negatif
         original_price: v.variant_price,
         final_price: finalPrice,
-        applied_discount: discount.discountPercentage,
-        discount_source: discount.sources,
-        discount_details: discount.details,
+        applied_discount: discountAndStock.discountPercentage,
+        discount_source: discountAndStock.sources,
+        discount_details: discountAndStock.details,
       };
     });
 
     return {
       ...product,
       variants: variantsWithDiscount,
+      stock: product.stock, // Stok produk utama tetap dari field asli
     };
   });
 }
