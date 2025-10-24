@@ -1196,8 +1196,6 @@ router.get("/flash-sale/:id", requireSeller, async (req, res) => {
   }
 });
 
-
-// Assume requireSeller is a middleware that sets req.seller_id if authenticated as seller
 router.get("/flash-sale/:id/products/available", requireSeller, async (req, res) => {
   try {
     const seller_id = req.seller_id;
@@ -1239,7 +1237,7 @@ router.get("/flash-sale/:id/products/available", requireSeller, async (req, res)
         product_image_url,
         stock,
         product_price,
-        variants:product_variants(id, variant_name, variant_stock, variant_image_url)
+        variants:product_variants(id, variant_name, variant_image_url, variant_stock)
       `)
       .eq("seller_id", seller_id);
 
@@ -1247,41 +1245,54 @@ router.get("/flash-sale/:id/products/available", requireSeller, async (req, res)
       return res.status(500).json({ message: "❌ Gagal ambil produk", error: prodErr });
     }
 
-    // Kasih tag sesuai rules
-    const taggedProducts = products.map(prod => {
+    // Format produk sesuai kebutuhan frontend
+    const formattedProducts = products.map(prod => {
       if (!prod.variants || !prod.variants.length) {
-        // Produk tanpa varian → kasih flag in_flash_sale
+        // Produk tanpa varian
         const inFlashSale = usedMap.has(`${prod.id}-no-variant`);
         return {
-          ...prod,
+          id: prod.id,
+          product_name: prod.product_name,
+          product_image_url: Array.isArray(prod.product_image_url) ? prod.product_image_url[0] : prod.product_image_url,
+          stock: prod.stock,
+          product_price: prod.product_price,
           in_flash_sale: inFlashSale,
+          variant_mode: false,
           variants: []
         };
       }
 
-      // Produk dengan varian → kasih flag di tiap varian, root pakai variant_mode
-      const variants = prod.variants.map(v => {
-        const inFlashSale = usedMap.has(`${prod.id}-${v.id}`);
-        return { ...v, in_flash_sale: inFlashSale };
-      });
+      // Produk dengan varian
+      const variants = prod.variants.map(v => ({
+        id: v.id,
+        variant_name: v.variant_name,
+        variant_image_url: v.variant_image_url,
+        variant_stock: v.variant_stock,
+        in_flash_sale: usedMap.has(`${prod.id}-${v.id}`)
+      }));
 
       return {
-        ...prod,
+        id: prod.id,
+        product_name: prod.product_name,
+        product_image_url: Array.isArray(prod.product_image_url) ? prod.product_image_url[0] : prod.product_image_url,
+        stock: prod.stock,
+        product_price: prod.product_price,
+        in_flash_sale: false,
         variant_mode: true,
         variants
       };
     });
 
     return res.json({
-      message: "✅ Semua produk seller dengan status flash sale",
-      data: taggedProducts
+      data: {
+        items: formattedProducts
+      }
     });
   } catch (err) {
     console.error(err);
     return res.status(500).json({ message: "❌ Terjadi kesalahan server", error: err.message });
   }
 });
-
 /**
  * 📌 4. Edit flash sale (update produk dalam flash sale)
  */

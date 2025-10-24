@@ -539,10 +539,22 @@ router.get("/by-category/:category_id", async (req, res) => {
   }
 });
 
-router.get("/:id", async (req, res) => {
-  const { id } = req.params;
 
-  // Cek cache
+function extractUUID(str) {
+  const match = str.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
+  return match ? match[0] : null;
+}
+
+// ================= GET PRODUCT =================
+router.get("/:id", async (req, res) => {
+  const { id: rawId } = req.params;
+  const id = extractUUID(rawId);
+
+  if (!id) {
+    return res.status(400).json({ message: "❌ ID produk tidak valid" });
+  }
+
+  // Check cache
   const cached = cache.get(`product_${id}`);
   if (cached) {
     return res.status(200).json({
@@ -591,8 +603,8 @@ router.get("/:id", async (req, res) => {
     const productsWithVariants =
       await attachVariantsStockDiscountWithRealDiscount([product]);
 
-    const result = { 
-      ...productsWithVariants[0], 
+    const result = {
+      ...productsWithVariants[0],
       seller: {
         id: product.seller.id,
         name: product.seller.name,
@@ -600,27 +612,31 @@ router.get("/:id", async (req, res) => {
         phone: product.seller.phone,
         store_name: product.seller.store_name,
         store_address: product.seller.store_address,
-        store_image_url: product.seller.store_image_url
+        store_image_url: product.seller.store_image_url,
       },
       is_delivery_available: product.seller.is_delivery_available,
-      ...(product.seller.is_delivery_available && { delivery_fee: product.seller.delivery_fee })
+      ...(product.seller.is_delivery_available && {
+        delivery_fee: product.seller.delivery_fee,
+      }),
     };
 
     cache.set(`product_${id}`, result);
-    return res
-      .status(200)
-      .json({ message: "✅ Produk ditemukan", product: result });
+    return res.status(200).json({ message: "✅ Produk ditemukan", product: result });
   } catch (err) {
-    return res
-      .status(500)
-      .json({ message: "❌ Gagal mengambil produk", error: err.message });
+    return res.status(500).json({ message: "❌ Gagal mengambil produk", error: err.message });
   }
 });
 
+// ================= GET RATINGS =================
 router.get("/:productId/ratings", async (req, res) => {
-  try {
-    const { productId } = req.params;
+  const { productId: rawProductId } = req.params;
+  const productId = extractUUID(rawProductId);
 
+  if (!productId) {
+    return res.status(400).json({ message: "❌ ID produk tidak valid" });
+  }
+
+  try {
     const { data: ratings, error } = await supabase
       .from("ratings")
       .select(
@@ -673,14 +689,21 @@ router.get("/:productId/ratings", async (req, res) => {
   }
 });
 
-// Ambil produk berdasarkan sugesti produk name
+// ================= GET SUGGESTIONS =================
 router.get("/:id/suggestions", async (req, res) => {
-  const { id } = req.params;
+  const { id: rawId } = req.params;
+  const id = extractUUID(rawId);
+
+  if (!id) {
+    return res.status(400).json({ message: "❌ ID produk tidak valid" });
+  }
+
   try {
-    // Ambil produk utama + rating
+    // Fetch main product + ratings
     const { data: product, error: prodErr } = await supabase
       .from("products")
-      .select(`
+      .select(
+        `
         *,
         ratings!left (
           rating
@@ -696,7 +719,8 @@ router.get("/:id/suggestions", async (req, res) => {
           is_delivery_available,
           delivery_fee
         )
-      `)
+      `
+      )
       .eq("id", id)
       .single();
 
@@ -705,7 +729,7 @@ router.get("/:id/suggestions", async (req, res) => {
       return res.status(404).json({ message: "❌ Produk tidak ditemukan" });
     }
 
-    // Hitung avg rating produk utama
+    // Hitung rata-rata rating
     let avgRating = null;
     if (product.ratings && product.ratings.length > 0) {
       const sum = product.ratings.reduce((acc, r) => acc + r.rating, 0);
@@ -717,17 +741,18 @@ router.get("/:id/suggestions", async (req, res) => {
       avg_rating: avgRating ? Number(avgRating.toFixed(2)) : null,
       total_ratings: product.ratings ? product.ratings.length : 0,
       is_delivery_available: product.seller.is_delivery_available,
-      ...(product.seller.is_delivery_available && { delivery_fee: product.seller.delivery_fee })
+      ...(product.seller.is_delivery_available && {
+        delivery_fee: product.seller.delivery_fee,
+      }),
     };
 
     if (!product.product_name) {
       return res.status(400).json({
-        message:
-          "❌ Produk tidak punya field product_name untuk pencarian terkait",
+        message: "❌ Produk tidak punya field product_name untuk pencarian terkait",
       });
     }
 
-    // Buat keyword dari nama produk
+    // Buat keyword pencarian
     const keywords = product.product_name
       .split(" ")
       .filter((w) => w.length > 2);
@@ -740,15 +765,12 @@ router.get("/:id/suggestions", async (req, res) => {
       });
     }
 
-    // Buat OR filter: product_name.ilike.%<kw>%
-    const orFilter = keywords
-      .map((kw) => `product_name.ilike.%${kw}%`)
-      .join(",");
+    const orFilter = keywords.map((kw) => `product_name.ilike.%${kw}%`).join(",");
 
-    // Ambil produk terkait + rating
     const { data: relatedProducts, error: relErr } = await supabase
       .from("products")
-      .select(`
+      .select(
+        `
         *,
         ratings!left (
           rating
@@ -764,14 +786,14 @@ router.get("/:id/suggestions", async (req, res) => {
           is_delivery_available,
           delivery_fee
         )
-      `)
+      `
+      )
       .or(orFilter)
       .neq("id", id)
       .limit(10);
 
     if (relErr) throw relErr;
 
-    // Hitung avg rating
     const relatedWithExtras = relatedProducts.map((p) => {
       let avgRating = null;
       if (p.ratings && p.ratings.length > 0) {
@@ -783,11 +805,12 @@ router.get("/:id/suggestions", async (req, res) => {
         avg_rating: avgRating ? Number(avgRating.toFixed(2)) : null,
         total_ratings: p.ratings ? p.ratings.length : 0,
         is_delivery_available: p.seller.is_delivery_available,
-        ...(p.seller.is_delivery_available && { delivery_fee: p.seller.delivery_fee })
+        ...(p.seller.is_delivery_available && {
+          delivery_fee: p.seller.delivery_fee,
+        }),
       };
     });
 
-    // Attach varian + stok + diskon
     const productsWithVariants =
       await attachVariantsStockDiscountWithRealDiscount(relatedWithExtras);
 
@@ -804,5 +827,4 @@ router.get("/:id/suggestions", async (req, res) => {
     });
   }
 });
-
 module.exports = router;

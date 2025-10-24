@@ -105,11 +105,21 @@ router.post("/cart/add", async (req, res) => {
       .json({ message: "❌ Harus login (cookie tidak valid)" });
   }
 
-  const { productId, variantId = null, qty = 1 } = req.body;
+  let { productId, variantId = null, qty = 1 } = req.body;
   if (!productId)
     return res.status(400).json({ message: "❌ productId wajib diisi" });
 
   try {
+    // ✅ Cek apakah productId berisi "productId-variantId"
+    const uuidPattern =
+      /^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})-([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$/;
+
+    if (uuidPattern.test(productId)) {
+      const match = productId.match(uuidPattern);
+      productId = match[1]; // UUID pertama = productId
+      variantId = match[2]; // UUID kedua = variantId
+    }
+
     const { data: cart } = await supabase
       .from("carts")
       .select("items")

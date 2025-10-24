@@ -206,12 +206,11 @@ router.get("/event/:eventId", async (req, res) => {
   }
 });
 
-/* ===== GET LIST FLASH SALE UNTUK CUSTOMER (PAKAI HELPER DISKON) ===== */
+// ===== GET LIST FLASH SALE UNTUK CUSTOMER =====
 router.get("/flash-sale-customer/list", async (req, res) => {
   try {
     // Ambil timezone dari device/browser (default ke Asia/Jakarta)
-    const tz =
-      req.query.timezone || req.headers["x-timezone"] || "Asia/Jakarta";
+    const tz = req.query.timezone || req.headers["x-timezone"] || "Asia/Jakarta";
 
     // Ambil tanggal hari ini sesuai timezone device
     const now = DateTime.local().setZone(tz);
@@ -226,14 +225,14 @@ router.get("/flash-sale-customer/list", async (req, res) => {
       .lt("start_time", endDay)
       .order("start_time", { ascending: true });
 
-    if (error) {
+    if (error || !flashSales) {
       return res.status(500).json({
         message: "❌ Gagal mengambil daftar flash sale",
-        error,
+        error: error?.message || "Data flash sales tidak tersedia",
       });
     }
 
-    if (!flashSales || flashSales.length === 0) {
+    if (flashSales.length === 0) {
       return res.json({
         message: `✅ Tidak ada flash sale untuk ${now.toISODate()}`,
         date: now.toISODate(),
@@ -249,56 +248,106 @@ router.get("/flash-sale-customer/list", async (req, res) => {
     // Ambil daftar produk flash sale
     const { data: flashSaleProducts, error: fspErr } = await supabase
       .from("flash_sale_products")
-      .select(
-        `
+      .select(`
         *,
-        products (*),
-        sellers (*),
-        product_variants (*)
-      `,
-      )
+        products (
+          id,
+          product_name,
+          product_image_url,
+          product_price,
+          stock,
+          terjual,
+          ratings!left (
+            rating
+          )
+        ),
+        sellers (
+          id,
+          name,
+          is_delivery_available,
+          delivery_fee
+        ),
+        product_variants (
+          id,
+          variant_name,
+          variant_price,
+          variant_stock,
+          variant_image_url
+        )
+      `)
       .in(
         "flash_sale_id",
         flashSales.map((fs) => fs.id),
       );
 
-    if (fspErr) {
+    if (fspErr || !flashSaleProducts) {
       return res.status(500).json({
         message: "❌ Gagal mengambil produk flash sale",
-        error: fspErr,
+        error: fspErr?.message || "Data produk flash sale tidak tersedia",
       });
     }
 
-    // Group produk per flash sale, satukan variannya
+    // Group produk per flash sale, pisahkan varian sebagai produk terpisah
     const flashSaleProductsMap = {};
     for (const fsp of flashSaleProducts) {
+      if (!fsp || !fsp.flash_sale_id) continue;
+
       if (!flashSaleProductsMap[fsp.flash_sale_id]) {
-        flashSaleProductsMap[fsp.flash_sale_id] = {};
+        flashSaleProductsMap[fsp.flash_sale_id] = [];
       }
 
       const pid = fsp.products?.id;
       if (!pid) continue;
 
-      // Kalau produk belum ada, buat dulu
-      if (!flashSaleProductsMap[fsp.flash_sale_id][pid]) {
-        flashSaleProductsMap[fsp.flash_sale_id][pid] = {
-          ...fsp.products,
-          seller: fsp.sellers,
-          variants: [],
-        };
+      // Hitung rata-rata rating
+      let avgRating = null;
+      let totalRatings = 0;
+      if (fsp.products.ratings && fsp.products.ratings.length > 0) {
+        const sum = fsp.products.ratings.reduce((acc, r) => acc + r.rating, 0);
+        avgRating = Number((sum / fsp.products.ratings.length).toFixed(2));
+        totalRatings = fsp.products.ratings.length;
       }
 
-      // Masukkan variant (kalau ada)
+      // Jika ada varian, buat entri produk terpisah untuk setiap varian
       if (fsp.product_variants) {
-        flashSaleProductsMap[fsp.flash_sale_id][pid].variants.push(
-          fsp.product_variants,
-        );
+        const variant = fsp.product_variants;
+        flashSaleProductsMap[fsp.flash_sale_id].push({
+          id: `${pid}-${variant.id}`, // ID produk + ID varian
+          original_product_id: pid, // Simpan ID produk asli untuk diskon
+          product_name: `${fsp.products.product_name} (${variant.variant_name || 'Default Variant'})`,
+          product_image_url: variant.variant_image_url || fsp.products.product_image_url || [],
+          product_price: variant.variant_price || fsp.products.product_price || 0,
+          stock: variant.variant_stock || fsp.products.stock || 0,
+          terjual: fsp.products.terjual || 0,
+          avg_rating: avgRating,
+          total_ratings: totalRatings,
+          seller_name: fsp.sellers?.name || 'Unknown Seller',
+          seller_id: fsp.sellers?.id || null,
+          flash_sale_item_id: fsp.id,
+          variant_id: variant.id, // Simpan variant_id untuk keperluan diskon
+          is_delivery_available: fsp.sellers?.is_delivery_available || false,
+          ...(fsp.sellers?.is_delivery_available && { delivery_fee: fsp.sellers?.delivery_fee }),
+        });
+      } else {
+        // Jika tidak ada varian, gunakan produk utama
+        flashSaleProductsMap[fsp.flash_sale_id].push({
+          id: pid,
+          original_product_id: pid,
+          product_name: fsp.products.product_name,
+          product_image_url: fsp.products.product_image_url || [],
+          product_price: fsp.products.product_price || 0,
+          stock: fsp.products.stock || 0,
+          terjual: fsp.products.terjual || 0,
+          avg_rating: avgRating,
+          total_ratings: totalRatings,
+          seller_name: fsp.sellers?.name || 'Unknown Seller',
+          seller_id: fsp.sellers?.id || null,
+          flash_sale_item_id: fsp.id,
+          variant_id: null,
+          is_delivery_available: fsp.sellers?.is_delivery_available || false,
+          ...(fsp.sellers?.is_delivery_available && { delivery_fee: fsp.sellers?.delivery_fee }),
+        });
       }
-    }
-
-    // Convert hasil object jadi array per flash_sale_id
-    for (const fsId in flashSaleProductsMap) {
-      flashSaleProductsMap[fsId] = Object.values(flashSaleProductsMap[fsId]);
     }
 
     // Bagi ke dalam 3 sesi
@@ -322,16 +371,81 @@ router.get("/flash-sale-customer/list", async (req, res) => {
       }
 
       // Ambil produk & attach diskon
-      const products = flashSaleProductsMap[fs.id] || [];
-      const productsWithDiscount =
-        products.length > 0
-          ? await attachVariantsStockDiscountWithRealDiscount(products)
-          : [];
+      let products = flashSaleProductsMap[fs.id] || [];
+      const productsWithDiscount = products.length > 0
+        ? await attachVariantsStockDiscountWithRealDiscount(products.map(p => ({
+            ...p,
+            id: p.original_product_id, // Gunakan original_product_id untuk diskon
+            variants: [], // Kosongkan variants karena sudah dipisah
+          })))
+        : [];
+
+      // Map products to ensure frontend-compatible structure and correct discount
+      const formattedProducts = products.map(originalProduct => {
+        const discountedProduct = productsWithDiscount.find(
+          p => p.original_product_id === originalProduct.original_product_id
+        );
+        if (!discountedProduct) {
+          return {
+            id: originalProduct.id,
+            product_name: originalProduct.product_name,
+            product_image_url: Array.isArray(originalProduct.product_image_url)
+              ? originalProduct.product_image_url
+              : [originalProduct.product_image_url || ''],
+            product_price: originalProduct.product_price || 0,
+            finalPrice: originalProduct.product_price || 0,
+            discountPercentage: 0,
+            stock: Math.max(0, originalProduct.stock || 0),
+            terjual: originalProduct.terjual || 0,
+            avg_rating: originalProduct.avg_rating,
+            total_ratings: originalProduct.total_ratings,
+            seller_name: originalProduct.seller_name || 'Unknown Seller',
+            seller_id: originalProduct.seller_id,
+            is_delivery_available: originalProduct.is_delivery_available,
+            ...(originalProduct.is_delivery_available && { delivery_fee: originalProduct.delivery_fee }),
+            variants: [],
+          };
+        }
+
+        // Jika produk adalah varian, ambil diskon dari variants di discountedProduct
+        let discountPercentage = discountedProduct.discountPercentage || 0;
+        let finalPrice = discountedProduct.finalPrice || discountedProduct.product_price || 0;
+        let stock = Math.max(0, discountedProduct.finalStock || discountedProduct.stock || 0);
+
+        if (originalProduct.variant_id && discountedProduct.variants && discountedProduct.variants.length > 0) {
+          const variant = discountedProduct.variants.find(v => v.id === originalProduct.variant_id);
+          if (variant) {
+            discountPercentage = variant.applied_discount || 0;
+            finalPrice = variant.final_price || originalProduct.product_price || 0;
+            stock = Math.max(0, variant.variant_stock || originalProduct.stock || 0);
+          }
+        }
+
+        return {
+          id: originalProduct.id, // Gunakan ID asli (dengan varian)
+          product_name: originalProduct.product_name,
+          product_image_url: Array.isArray(originalProduct.product_image_url)
+            ? originalProduct.product_image_url
+            : [originalProduct.product_image_url || ''],
+          product_price: originalProduct.product_price || 0,
+          finalPrice: finalPrice,
+          discountPercentage: discountPercentage,
+          stock: stock,
+          terjual: originalProduct.terjual || 0,
+          avg_rating: originalProduct.avg_rating,
+          total_ratings: originalProduct.total_ratings,
+          seller_name: originalProduct.seller_name || 'Unknown Seller',
+          seller_id: originalProduct.seller_id,
+          is_delivery_available: originalProduct.is_delivery_available,
+          ...(originalProduct.is_delivery_available && { delivery_fee: originalProduct.delivery_fee }),
+          variants: [], // Kosong sesuai permintaan
+        };
+      });
 
       const flashSaleWithProducts = {
         ...fs,
         display_status: status,
-        products: productsWithDiscount,
+        products: formattedProducts,
       };
 
       // Tentukan sesi berdasarkan jam mulai
@@ -349,8 +463,7 @@ router.get("/flash-sale-customer/list", async (req, res) => {
     const currentHour = now.hour;
     let currentSession = null;
     if (currentHour >= 0 && currentHour < 12) currentSession = "morning";
-    else if (currentHour >= 12 && currentHour < 18)
-      currentSession = "afternoon";
+    else if (currentHour >= 12 && currentHour < 18) currentSession = "afternoon";
     else currentSession = "evening";
 
     return res.json({
@@ -368,11 +481,11 @@ router.get("/flash-sale-customer/list", async (req, res) => {
   }
 });
 
+// ===== GET FLASH SALE BY ID FOR CUSTOMER =====
 router.get("/flash-sale-customer/:id", async (req, res) => {
   try {
     const { id } = req.params;
-    const tz =
-      req.query.timezone || req.headers["x-timezone"] || "Asia/Jakarta";
+    const tz = req.query.timezone || req.headers["x-timezone"] || "Asia/Jakarta";
 
     // Ambil tanggal hari ini sesuai timezone (00:00 - 23:59)
     const now = DateTime.local().setZone(tz);
@@ -389,7 +502,7 @@ router.get("/flash-sale-customer/:id", async (req, res) => {
     if (error || !flashSale) {
       return res.status(404).json({
         message: "❌ Flash sale tidak ditemukan",
-        error,
+        error: error?.message || "Data flash sale tidak tersedia",
       });
     }
 
@@ -397,8 +510,7 @@ router.get("/flash-sale-customer/:id", async (req, res) => {
     const flashSaleEnd = DateTime.fromISO(flashSale.end_time).setZone(tz);
 
     // Pastikan flash sale ada overlap dengan hari ini (24 jam penuh)
-    const isValidForToday =
-      flashSaleStart < endDay && flashSaleEnd > startDay;
+    const isValidForToday = flashSaleStart < endDay && flashSaleEnd > startDay;
 
     if (!isValidForToday) {
       return res.status(404).json({
@@ -409,49 +521,100 @@ router.get("/flash-sale-customer/:id", async (req, res) => {
     // Ambil semua produk dalam flash sale ini
     const { data: flashSaleProducts, error: fspErr } = await supabase
       .from("flash_sale_products")
-      .select(
-        `
+      .select(`
         *,
-        products (*),
-        sellers (*),
-        product_variants (*)
-      `
-      )
+        products (
+          id,
+          product_name,
+          product_image_url,
+          product_price,
+          stock,
+          terjual,
+          ratings!left (
+            rating
+          )
+        ),
+        sellers (
+          id,
+          name,
+          is_delivery_available,
+          delivery_fee
+        ),
+        product_variants (
+          id,
+          variant_name,
+          variant_price,
+          variant_stock,
+          variant_image_url
+        )
+      `)
       .eq("flash_sale_id", flashSale.id);
 
-    if (fspErr) {
+    if (fspErr || !flashSaleProducts) {
       return res.status(500).json({
         message: "❌ Gagal mengambil produk flash sale",
-        error: fspErr,
+        error: fspErr?.message || "Data produk flash sale tidak tersedia",
       });
     }
 
-    // Group produk agar varian tidak terpisah
-    const groupedProducts = {};
+    // Group produk, pisahkan varian sebagai produk terpisah
+    const products = [];
     for (const fsp of flashSaleProducts) {
-      const pid = fsp.products?.id;
+      if (!fsp || !fsp.products) continue;
+
+      const pid = fsp.products.id;
       if (!pid) continue;
 
-      if (!groupedProducts[pid]) {
-        groupedProducts[pid] = {
-          ...fsp.products,
-          seller: fsp.sellers,
-          variants: [],
-          flash_sale_items: [],
-        };
+      // Hitung rata-rata rating
+      let avgRating = null;
+      let totalRatings = 0;
+      if (fsp.products.ratings && fsp.products.ratings.length > 0) {
+        const sum = fsp.products.ratings.reduce((acc, r) => acc + r.rating, 0);
+        avgRating = Number((sum / fsp.products.ratings.length).toFixed(2));
+        totalRatings = fsp.products.ratings.length;
       }
 
+      // Jika ada varian, buat entri produk terpisah untuk varian
       if (fsp.product_variants) {
-        groupedProducts[pid].variants.push({
-          ...fsp.product_variants,
-          flash_sale_item_id: fsp.id, // ikat ke baris flash_sale_products
+        const variant = fsp.product_variants;
+        products.push({
+          id: `${pid}-${variant.id}`, // ID produk + ID varian
+          original_product_id: pid, // Simpan ID produk asli untuk diskon
+          product_name: `${fsp.products.product_name} (${variant.variant_name || 'Default Variant'})`,
+          product_image_url: variant.variant_image_url || fsp.products.product_image_url || [],
+          product_price: variant.variant_price || fsp.products.product_price || 0,
+          stock: variant.variant_stock || fsp.products.stock || 0,
+          terjual: fsp.products.terjual || 0,
+          avg_rating: avgRating,
+          total_ratings: totalRatings,
+          seller_name: fsp.sellers?.name || 'Unknown Seller',
+          seller_id: fsp.sellers?.id || null,
+          flash_sale_item_id: fsp.id,
+          variant_id: variant.id, // Simpan variant_id untuk keperluan diskon
+          is_delivery_available: fsp.sellers?.is_delivery_available || false,
+          ...(fsp.sellers?.is_delivery_available && { delivery_fee: fsp.sellers?.delivery_fee }),
+        });
+      } else {
+        // Jika tidak ada varian, gunakan produk utama
+        products.push({
+          id: pid,
+          original_product_id: pid,
+          product_name: fsp.products.product_name,
+          product_image_url: fsp.products.product_image_url || [],
+          product_price: fsp.products.product_price || 0,
+          stock: fsp.products.stock || 0,
+          terjual: fsp.products.terjual || 0,
+          avg_rating: avgRating,
+          total_ratings: totalRatings,
+          seller_name: fsp.sellers?.name || 'Unknown Seller',
+          seller_id: fsp.sellers?.id || null,
+          flash_sale_item_id: fsp.id,
+          variant_id: null,
+          is_delivery_available: fsp.sellers?.is_delivery_available || false,
+          ...(fsp.sellers?.is_delivery_available && { delivery_fee: fsp.sellers?.delivery_fee }),
         });
       }
-
-      groupedProducts[pid].flash_sale_items.push(fsp.id);
     }
-
-    const products = Object.values(groupedProducts);
 
     // Tentukan status display
     let status = flashSale.status;
@@ -469,16 +632,81 @@ router.get("/flash-sale-customer/:id", async (req, res) => {
     else session = "evening";
 
     // Attach diskon ke produk
-    const productsWithDiscount =
-      products.length > 0
-        ? await attachVariantsStockDiscountWithRealDiscount(products)
-        : [];
+    const productsWithDiscount = products.length > 0
+      ? await attachVariantsStockDiscountWithRealDiscount(products.map(p => ({
+          ...p,
+          id: p.original_product_id, // Gunakan original_product_id untuk diskon
+          variants: [], // Kosongkan variants karena sudah dipisah
+        })))
+      : [];
+
+    // Map products to ensure frontend-compatible structure and correct discount
+    const formattedProducts = products.map(originalProduct => {
+      const discountedProduct = productsWithDiscount.find(
+        p => p.original_product_id === originalProduct.original_product_id
+      );
+      if (!discountedProduct) {
+        return {
+          id: originalProduct.id,
+          product_name: originalProduct.product_name,
+          product_image_url: Array.isArray(originalProduct.product_image_url)
+            ? originalProduct.product_image_url
+            : [originalProduct.product_image_url || ''],
+          product_price: originalProduct.product_price || 0,
+          finalPrice: originalProduct.product_price || 0,
+          discountPercentage: 0,
+          stock: Math.max(0, originalProduct.stock || 0),
+          terjual: originalProduct.terjual || 0,
+          avg_rating: originalProduct.avg_rating,
+          total_ratings: originalProduct.total_ratings,
+          seller_name: originalProduct.seller_name || 'Unknown Seller',
+          seller_id: originalProduct.seller_id,
+          is_delivery_available: originalProduct.is_delivery_available,
+          ...(originalProduct.is_delivery_available && { delivery_fee: originalProduct.delivery_fee }),
+          variants: [],
+        };
+      }
+
+      // Jika produk adalah varian, ambil diskon dari variants di discountedProduct
+      let discountPercentage = discountedProduct.discountPercentage || 0;
+      let finalPrice = discountedProduct.finalPrice || discountedProduct.product_price || 0;
+      let stock = Math.max(0, discountedProduct.finalStock || discountedProduct.stock || 0);
+
+      if (originalProduct.variant_id && discountedProduct.variants && discountedProduct.variants.length > 0) {
+        const variant = discountedProduct.variants.find(v => v.id === originalProduct.variant_id);
+        if (variant) {
+          discountPercentage = variant.applied_discount || 0;
+          finalPrice = variant.final_price || originalProduct.product_price || 0;
+          stock = Math.max(0, variant.variant_stock || originalProduct.stock || 0);
+        }
+      }
+
+      return {
+        id: originalProduct.id, // Gunakan ID asli (dengan varian)
+        product_name: originalProduct.product_name,
+        product_image_url: Array.isArray(originalProduct.product_image_url)
+          ? originalProduct.product_image_url
+          : [originalProduct.product_image_url || ''],
+        product_price: originalProduct.product_price || 0,
+        finalPrice: finalPrice,
+        discountPercentage: discountPercentage,
+        stock: stock,
+        terjual: originalProduct.terjual || 0,
+        avg_rating: originalProduct.avg_rating,
+        total_ratings: originalProduct.total_ratings,
+        seller_name: originalProduct.seller_name || 'Unknown Seller',
+        seller_id: originalProduct.seller_id,
+        is_delivery_available: originalProduct.is_delivery_available,
+        ...(originalProduct.is_delivery_available && { delivery_fee: originalProduct.delivery_fee }),
+        variants: [], // Kosong sesuai permintaan
+      };
+    });
 
     const response = {
       ...flashSale,
       display_status: status,
       session,
-      products: productsWithDiscount,
+      products: formattedProducts,
     };
 
     return res.json({
@@ -495,10 +723,18 @@ router.get("/flash-sale-customer/:id", async (req, res) => {
   }
 });
 
-/* ===== FLASH SALE GET BY ID ===== */
+// ===== FLASH SALE GET BY ID =====
 router.get("/flash-sale/:id", async (req, res) => {
-  const { id } = req.params;
   try {
+    const { id } = req.params;
+    const tz = req.query.timezone || req.headers["x-timezone"] || "Asia/Jakarta";
+
+    // Ambil tanggal hari ini sesuai timezone (00:00 - 23:59)
+    const now = DateTime.local().setZone(tz);
+    const startDay = now.startOf("day");
+    const endDay = now.endOf("day");
+
+    // Ambil detail flash sale berdasarkan ID
     const { data: flashSale, error } = await supabase
       .from("flash_sales")
       .select("*")
@@ -506,26 +742,214 @@ router.get("/flash-sale/:id", async (req, res) => {
       .single();
 
     if (error || !flashSale) {
-      return res.status(404).json({ message: "❌ Flash sale tidak ditemukan" });
+      return res.status(404).json({
+        message: "❌ Flash sale tidak ditemukan",
+        error: error?.message || "Data flash sale tidak tersedia",
+      });
     }
 
-    const { data: product } = await supabase
+    const flashSaleStart = DateTime.fromISO(flashSale.start_time).setZone(tz);
+    const flashSaleEnd = DateTime.fromISO(flashSale.end_time).setZone(tz);
+
+    // Pastikan flash sale ada overlap dengan hari ini (24 jam penuh)
+    const isValidForToday = flashSaleStart < endDay && flashSaleEnd > startDay;
+
+    if (!isValidForToday) {
+      return res.status(404).json({
+        message: "❌ Flash sale ini bukan untuk hari ini",
+      });
+    }
+
+    // Tentukan status display
+    let status = flashSale.status;
+    if (flashSale.status === "active") {
+      if (now < flashSaleStart) status = "upcoming";
+      else if (now >= flashSaleStart && now <= flashSaleEnd) status = "ongoing";
+      else status = "ended";
+    }
+
+    // Tentukan sesi berdasarkan jam mulai
+    let session = null;
+    const startHour = flashSaleStart.hour;
+    if (startHour >= 0 && startHour < 12) session = "morning";
+    else if (startHour >= 12 && startHour < 18) session = "afternoon";
+    else session = "evening";
+
+    // Ambil detail produk
+    const { data: product, error: productError } = await supabase
       .from("products")
-      .select("*")
+      .select(`
+        id,
+        product_name,
+        product_image_url,
+        product_price,
+        stock,
+        terjual,
+        ratings!left (
+          rating
+        ),
+        sellers (
+          id,
+          name,
+          is_delivery_available,
+          delivery_fee
+        ),
+        product_variants (
+          id,
+          variant_name,
+          variant_price,
+          variant_stock,
+          variant_image_url
+        )
+      `)
       .eq("id", flashSale.product_id)
       .single();
 
-    const productsWithDiscount = product
-      ? await attachVariantsStockDiscount([product])
+    if (productError || !product) {
+      return res.status(500).json({
+        message: "❌ Gagal mengambil produk flash sale",
+        error: productError?.message || "Data produk tidak tersedia",
+      });
+    }
+
+    // Hitung rata-rata rating
+    let avgRating = null;
+    let totalRatings = 0;
+    if (product.ratings && product.ratings.length > 0) {
+      const sum = product.ratings.reduce((acc, r) => acc + r.rating, 0);
+      avgRating = Number((sum / product.ratings.length).toFixed(2));
+      totalRatings = product.ratings.length;
+    }
+
+    // Pisahkan varian sebagai produk terpisah
+    const products = [];
+    if (product.product_variants && product.product_variants.length > 0) {
+      product.product_variants.forEach(variant => {
+        products.push({
+          id: `${product.id}-${variant.id}`, // ID produk + ID varian
+          original_product_id: product.id, // Simpan ID produk asli untuk diskon
+          product_name: `${product.product_name} (${variant.variant_name || 'Default Variant'})`,
+          product_image_url: variant.variant_image_url || product.product_image_url || [],
+          product_price: variant.variant_price || product.product_price || 0,
+          stock: variant.variant_stock || product.stock || 0,
+          terjual: product.terjual || 0,
+          avg_rating: avgRating,
+          total_ratings: totalRatings,
+          seller_name: product.sellers?.name || 'Unknown Seller',
+          seller_id: product.sellers?.id || null,
+          variant_id: variant.id, // Simpan variant_id untuk keperluan diskon
+          is_delivery_available: product.sellers?.is_delivery_available || false,
+          ...(product.sellers?.is_delivery_available && { delivery_fee: product.sellers?.delivery_fee }),
+        });
+      });
+    } else {
+      products.push({
+        id: product.id,
+        original_product_id: product.id,
+        product_name: product.product_name,
+        product_image_url: product.product_image_url || [],
+        product_price: product.product_price || 0,
+        stock: product.stock || 0,
+        terjual: product.terjual || 0,
+        avg_rating: avgRating,
+        total_ratings: totalRatings,
+        seller_name: product.sellers?.name || 'Unknown Seller',
+        seller_id: product.sellers?.id || null,
+        variant_id: null,
+        is_delivery_available: product.sellers?.is_delivery_available || false,
+        ...(product.sellers?.is_delivery_available && { delivery_fee: product.sellers?.delivery_fee }),
+      });
+    }
+
+    // Attach diskon ke produk
+    const productsWithDiscount = products.length > 0
+      ? await attachVariantsStockDiscountWithRealDiscount(products.map(p => ({
+          ...p,
+          id: p.original_product_id, // Gunakan original_product_id untuk diskon
+          variants: [], // Kosongkan variants karena sudah dipisah
+        })))
       : [];
+
+    // Map products to ensure frontend-compatible structure and correct discount
+    const formattedProduct = products.map(originalProduct => {
+      const discountedProduct = productsWithDiscount.find(
+        p => p.original_product_id === originalProduct.original_product_id
+      );
+      if (!discountedProduct) {
+        return {
+          id: originalProduct.id,
+          product_name: originalProduct.product_name,
+          product_image_url: Array.isArray(originalProduct.product_image_url)
+            ? originalProduct.product_image_url
+            : [originalProduct.product_image_url || ''],
+          product_price: originalProduct.product_price || 0,
+          finalPrice: originalProduct.product_price || 0,
+          discountPercentage: 0,
+          stock: Math.max(0, originalProduct.stock || 0),
+          terjual: originalProduct.terjual || 0,
+          avg_rating: originalProduct.avg_rating,
+          total_ratings: originalProduct.total_ratings,
+          seller_name: originalProduct.seller_name || 'Unknown Seller',
+          seller_id: originalProduct.seller_id,
+          is_delivery_available: originalProduct.is_delivery_available,
+          ...(originalProduct.is_delivery_available && { delivery_fee: originalProduct.delivery_fee }),
+          variants: [],
+        };
+      }
+
+      // Jika produk adalah varian, ambil diskon dari variants di discountedProduct
+      let discountPercentage = discountedProduct.discountPercentage || 0;
+      let finalPrice = discountedProduct.finalPrice || discountedProduct.product_price || 0;
+      let stock = Math.max(0, discountedProduct.finalStock || discountedProduct.stock || 0);
+
+      if (originalProduct.variant_id && discountedProduct.variants && discountedProduct.variants.length > 0) {
+        const variant = discountedProduct.variants.find(v => v.id === originalProduct.variant_id);
+        if (variant) {
+          discountPercentage = variant.applied_discount || 0;
+          finalPrice = variant.final_price || originalProduct.product_price || 0;
+          stock = Math.max(0, variant.variant_stock || originalProduct.stock || 0);
+        }
+      }
+
+      return {
+        id: originalProduct.id, // Gunakan ID asli (dengan varian)
+        product_name: originalProduct.product_name,
+        product_image_url: Array.isArray(originalProduct.product_image_url)
+          ? originalProduct.product_image_url
+          : [originalProduct.product_image_url || ''],
+        product_price: originalProduct.product_price || 0,
+        finalPrice: finalPrice,
+        discountPercentage: discountPercentage,
+        stock: stock,
+        terjual: originalProduct.terjual || 0,
+        avg_rating: originalProduct.avg_rating,
+        total_ratings: originalProduct.total_ratings,
+        seller_name: originalProduct.seller_name || 'Unknown Seller',
+        seller_id: originalProduct.seller_id,
+        is_delivery_available: originalProduct.is_delivery_available,
+        ...(originalProduct.is_delivery_available && { delivery_fee: originalProduct.delivery_fee }),
+        variants: [], // Kosong sesuai permintaan
+      };
+    })[0] || null;
+
+    const response = {
+      ...flashSale,
+      display_status: status,
+      session,
+      product: formattedProduct,
+    };
 
     return res.json({
       message: "✅ Detail flash sale",
-      flash_sale: flashSale,
-      product: productsWithDiscount[0] || null,
+      date: now.toISODate(),
+      flash_sale: response,
     });
   } catch (err) {
-    res.status(500).json({ message: "❌ Error server", error: err.message });
+    console.error(err);
+    return res.status(500).json({
+      message: "❌ Error server",
+      error: err.message,
+    });
   }
 });
 
