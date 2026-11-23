@@ -5,7 +5,6 @@ const sharp = require("sharp");
 const { v4: uuidv4 } = require("uuid");
 const { DateTime } = require("luxon");
 const {
-  attachVariantsStockDiscount,
   attachVariantsStockDiscountWithRealDiscount,
 } = require("../utils/applyDiscountAndVariants");
 

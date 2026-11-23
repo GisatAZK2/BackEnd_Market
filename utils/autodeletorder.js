@@ -3,8 +3,6 @@ const supabase = require("../config/supabase");
 
 // Cron job: jalan tiap jam
 cron.schedule("0 * * * *", async () => {
-  console.log("⏰ Cron running: auto delete orders after rating_deadline or canceled");
-
   try {
     const now = new Date();
 

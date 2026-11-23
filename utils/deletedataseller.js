@@ -3,8 +3,6 @@ const supabase = require('../config/supabase');
 
 // Schedule cron job to run every minute
 cron.schedule('* * * * *', async () => {
-  console.log('Running OTP cleanup job...');
-  
   try {
     // Cari user dengan OTP expired (> 5 menit) dan belum verifikasi
     const { data: expiredUsers, error: userError } = await supabase
@@ -19,7 +17,6 @@ cron.schedule('* * * * *', async () => {
     }
 
     if (!expiredUsers || expiredUsers.length === 0) {
-      console.log('No expired OTPs found.');
       return;
     }
 
@@ -65,5 +62,3 @@ cron.schedule('* * * * *', async () => {
     console.error('Error in OTP cleanup job:', error.message);
   }
 });
-
-console.log('OTP cleanup cron job started.');

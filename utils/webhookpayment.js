@@ -7,19 +7,8 @@ const crypto = require("crypto");
 
 // Environment variables
 const SEND_URL = process.env.SEND_SERVICE_URL;
-const XENDIT_SECRET_KEY = process.env.XENDIT_SECRET_KEY;
 const WITHDRAW_SECRET = process.env.WITHDRAW_SECRET || "please_set_a_real_withdraw_secret_in_env";
 const CRYPTO_SECRET_KEY = process.env.CRYPTO_SECRET_KEY || "please_set_a_real_secret_in_env";
-
-if (!XENDIT_SECRET_KEY) {
-  console.warn("⚠️ XENDIT_SECRET_KEY belum diset - invoice creation akan gagal jika dipanggil.");
-}
-if (!CRYPTO_SECRET_KEY) {
-  console.warn("⚠️ CRYPTO_SECRET_KEY belum diset - signatures tidak aman.");
-}
-if (!WITHDRAW_SECRET) {
-  console.warn("⚠️ WITHDRAW_SECRET belum diset - withdrawal signatures tidak aman.");
-}
 
 // ===== Utility: stable stringify =====
 function stableStringify(obj) {

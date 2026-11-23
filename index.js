@@ -51,6 +51,37 @@ const sticker = require("./routes/sticker.js");
 const app = express();
 const server = http.createServer(app);
 
+// === Request Logger ===
+app.use((req, res, next) => {
+  const start = process.hrtime.bigint();
+  let logged = false;
+
+  const logRequest = () => {
+    if (logged) return;
+    logged = true;
+    const duration = (Number(process.hrtime.bigint() - start) / 1e6).toFixed(2);
+    const status = res.statusCode;
+
+    let statusColor = "\x1b[32m"; // 2xx Green
+    if (status >= 500) statusColor = "\x1b[31m"; // 5xx Red
+    else if (status >= 400) statusColor = "\x1b[33m"; // 4xx Yellow
+    else if (status >= 300) statusColor = "\x1b[36m"; // 3xx Cyan
+
+    const reset = "\x1b[0m";
+    const methodColor = "\x1b[35m"; // Magenta
+    const gray = "\x1b[90m";
+
+    console.log(
+      `${methodColor}[${req.method}]${reset} ${req.originalUrl || req.url} ${statusColor}${status}${reset} - ${gray}${duration}ms${reset}`
+    );
+  };
+
+  res.on("finish", logRequest);
+  res.on("close", logRequest);
+
+  next();
+});
+
 // === Chat Proxy (skip semua middleware global) ===
 const chatProxy = require("./routes/chatRoutes.js");
 chatProxy(app, server); 
@@ -86,7 +117,15 @@ const corsOptions = {
   },
   credentials: true,
   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "x-api-key", "Authorization", "ngrok-skip-browser-warning",],
+  allowedHeaders: [
+    "Content-Type",
+    "x-api-key",
+    "Authorization",
+    "ngrok-skip-browser-warning",
+    "X-Requested-With",
+    "Accept",
+    "Origin",
+  ],
   optionsSuccessStatus: 200,
 };
 

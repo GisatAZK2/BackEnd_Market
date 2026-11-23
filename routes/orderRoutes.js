@@ -27,15 +27,6 @@ const BASE_URL = FRONTEND_URLS[0];
 const CRYPTO_SECRET_KEY =
   process.env.CRYPTO_SECRET_KEY || "please_set_a_real_secret_in_env";
 
-if (!XENDIT_SECRET_KEY) {
-  console.warn(
-    "⚠️ XENDIT_SECRET_KEY belum diset - invoice creation akan gagal jika dipanggil."
-  );
-}
-if (!CRYPTO_SECRET_KEY) {
-  console.warn("⚠️ CRYPTO_SECRET_KEY belum diset - signatures tidak aman.");
-}
-
 const XENDIT_BASE_URL = "https://api.xendit.co";
 
 // Cache setup

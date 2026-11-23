@@ -6,47 +6,46 @@ const cookieParser = require("cookie-parser");
 module.exports = (app, server) => {
   const GO_CHAT_SERVICE = process.env.GO_CHAT_SERVICE || "http://localhost:8080";
 
- app.use(
-  cors({
-    origin: (origin, callback) => {
-      console.log("Request Origin:", origin);
-      console.log("Allowed Origins:", process.env.CORS_ORIGIN);
-      if (!origin) return callback(null, true);
+  const chatPaths = ["/chats", "/messages", "/seller/v1/chats", "/seller/v1/messages"];
 
-      const allowedOrigins = process.env.CORS_ORIGIN
-        ? process.env.CORS_ORIGIN.split(",").map((o) => o.trim())
-        : [];
+  app.use(
+    chatPaths,
+    cors({
+      origin: (origin, callback) => {
+        if (!origin) return callback(null, true);
 
-      console.log("Parsed Allowed Origins:", allowedOrigins);
+        const cleanedOrigin = origin.replace(/\/$/, "");
 
-      if (
-        process.env.NODE_ENV !== "production" &&
-        origin.includes("localhost")
-      ) {
-        console.log("Allowing localhost in non-production");
-        return callback(null, true);
-      }
+        const allowedOrigins = process.env.CORS_ORIGIN
+          ? process.env.CORS_ORIGIN.split(",").map((o) => o.trim().replace(/\/$/, ""))
+          : [];
 
-      if (allowedOrigins.includes(origin)) {
-        console.log("Origin allowed:", origin);
-        return callback(null, true);
-      }
+        if (
+          process.env.NODE_ENV !== "production" &&
+          cleanedOrigin.includes("localhost")
+        ) {
+          return callback(null, true);
+        }
 
-      return callback(new Error("Not allowed by CORS (chat)"));
-    },
-    credentials: true,
-    allowedHeaders: [
-      "Content-Type",
-      "Authorization",
-      "X-Requested-With",
-      "Accept",
-      "Origin",
-      "x-api-key",
-      "ngrok-skip-browser-warning"
-    ],
-    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-  })
-);
+        if (allowedOrigins.includes(cleanedOrigin)) {
+          return callback(null, true);
+        }
+
+        return callback(new Error("Not allowed by CORS (chat)"));
+      },
+      credentials: true,
+      allowedHeaders: [
+        "Content-Type",
+        "Authorization",
+        "X-Requested-With",
+        "Accept",
+        "Origin",
+        "x-api-key",
+        "ngrok-skip-browser-warning",
+      ],
+      methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    })
+  );
   app.use(cookieParser());
 
   // === Proxy REST ke Go service ===

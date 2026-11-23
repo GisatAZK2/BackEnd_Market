@@ -3,7 +3,6 @@ const supabase = require("../config/supabase");
 
 // Cron tiap 10 menit
 cron.schedule("*/10 * * * *", async () => {
-  console.log("⏳ Jalankan auto confirm orders...");
   try {
     const { data: expiredOrders, error } = await supabase
       .from("orders")

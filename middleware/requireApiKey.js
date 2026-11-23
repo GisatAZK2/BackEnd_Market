@@ -14,7 +14,7 @@ module.exports = (req, res, next) => {
   try {
     const fileContent = fs.readFileSync(keysFilePath, 'utf-8');
     apiKeys = JSON.parse(fileContent);
-  } catch (err) {
+  } catch {
     return res.status(500).json({ message: 'Error loading API keys.' });
   }
 

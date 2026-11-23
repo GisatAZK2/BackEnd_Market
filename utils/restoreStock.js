@@ -60,10 +60,8 @@ function startCronJobs() {
   // Jalan setiap 1 menit
   cron.schedule("* * * * *", async () => {
     try {
-      console.log("[CRON] Restore stock job running...");
       await restoreEventStock();
       await restoreFlashSaleStock();
-      console.log("[CRON] Restore stock job done");
     } catch (err) {
       console.error("[CRON ERROR]", err.message);
     }

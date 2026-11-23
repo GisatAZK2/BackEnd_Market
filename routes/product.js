@@ -1,9 +1,5 @@
 const express = require("express");
-const multer = require("multer");
-const { v4: uuidv4 } = require("uuid");
-const sharp = require("sharp");
 const supabase = require("../config/supabase");
-const generateKeywords = require("../utils/keywordGenerator");
 const seedrandom = require("seedrandom");
 const {
   attachVariantsStockDiscountWithRealDiscount,
@@ -12,8 +8,6 @@ const NodeCache = require("node-cache");
 const cache = new NodeCache({ stdTTL: 10 });
 
 const router = express.Router();
-
-let uniqueKeywords = [];
 
 // === GET NEARBY ===
 const haversineDistance = (lat1, lon1, lat2, lon2) => {
@@ -322,13 +316,14 @@ router.get("/trending", async (req, res) => {
     // 2. Parse riwayat search dari cookie (personalization)
     let userSearchHistory = [];
     let mainCategoryFromHistory = null;
+    let uniqueKeywords = [];
     const searchHistoryCookie = req.cookies?.user_search_history;
     if (searchHistoryCookie) {
       try {
         userSearchHistory = JSON.parse(decodeURIComponent(searchHistoryCookie));
         userSearchHistory = Array.isArray(userSearchHistory) ? userSearchHistory : [];
         
-        const uniqueKeywords = [...new Set(
+        uniqueKeywords = [...new Set(
           userSearchHistory.flatMap(query => query.toLowerCase().split(/\s+/)).filter(k => k.length > 1)
         )].slice(0, 5);
 

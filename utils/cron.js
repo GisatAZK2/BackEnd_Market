@@ -4,7 +4,6 @@ const supabase = require("../config/supabase");
 
 /* ===== RESET STOK & NONAKTIFKAN FLASH SALE YANG HABIS ===== */
 cron.schedule("0 * * * *", async () => {
-  console.log("[CRON] Cek & nonaktifkan flash sale expired...");
   const now = DateTime.now().setZone("Asia/Jakarta").toISO();
 
   const { data: expiredSessions, error: expiredErr } = await supabase
@@ -19,7 +18,6 @@ cron.schedule("0 * * * *", async () => {
   }
 
   if (!expiredSessions?.length) {
-    console.log("ℹ️ Tidak ada sesi flash sale yang expired.");
     return;
   }
 
@@ -143,7 +141,6 @@ async function generateSessionsForDay(targetDay) {
 
 /* ===== INIT: CEK TERAKHIR GENERATE 1 BULAN ===== */
 (async () => {
-  console.log("[INIT] Cek apakah perlu generate sesi 1 bulan...");
   const { data: flag } = await supabase
     .from("system_flags")
     .select("*")
@@ -158,7 +155,6 @@ async function generateSessionsForDay(targetDay) {
     const diff = now.diff(lastGenerated, "days").toObject().days;
     if (diff < 30) {
       needGenerate = false;
-      console.log("⏩ Sudah generate dalam 30 hari terakhir, skip...");
     }
   }
 

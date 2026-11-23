@@ -523,7 +523,9 @@ cron.schedule("*/1 * * * *", async () => {
       "❌ Batal otomatis karena pembayaran kadaluarsa."
     );
 
-    console.log(`⚡ Auto-cancel total ${canceledCount} pesanan.`);
+    if (canceledCount > 0) {
+      console.log(`⚡ Auto-cancel total ${canceledCount} pesanan.`);
+    }
   } catch (err) {
     console.error("❌ Auto-cancel job error:", err.message);
   }
